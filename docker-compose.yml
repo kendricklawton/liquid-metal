@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-machinename}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-machinename}
+      POSTGRES_DB: ${POSTGRES_DB:-machinename}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"   # monitoring → http://localhost:8222
+    volumes:
+      - natsdata:/data
+
+volumes:
+  pgdata:
+  natsdata:
