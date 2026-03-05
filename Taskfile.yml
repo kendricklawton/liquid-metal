@@ -1,0 +1,84 @@
+version: "3"
+
+dotenv: [".env"]
+
+tasks:
+  # ── Dependencies ─────────────────────────────────────────────────────────
+  up:
+    desc: "Start local Postgres + NATS"
+    cmds:
+      - docker compose up -d
+
+  down:
+    desc: "Stop local dependencies"
+    cmds:
+      - docker compose down
+
+  # ── Build ─────────────────────────────────────────────────────────────────
+  build:
+    desc: "Build all crates (release)"
+    cmds:
+      - cargo build --release --workspace
+
+  check:
+    desc: "Type-check all crates without building"
+    cmds:
+      - cargo check --workspace
+
+  # ── Run individual services ───────────────────────────────────────────────
+  dev:api:
+    desc: "Run the API server locally"
+    env:
+      RUST_LOG: "api=debug"
+    cmds:
+      - cargo run -p api
+
+  dev:proxy:
+    desc: "Run the Pingora edge proxy locally"
+    env:
+      BIND_ADDR: "0.0.0.0:8080"
+      CLOUD_UPSTREAM: "127.0.0.1:3000"
+      RUST_LOG: "proxy=debug"
+    cmds:
+      - cargo run -p proxy
+
+  dev:daemon:
+    desc: "Run the daemon locally (requires NATS; TAP/Firecracker requires Linux)"
+    env:
+      NATS_URL: "nats://127.0.0.1:4222"
+      RUST_LOG: "daemon=debug"
+    cmds:
+      - cargo run -p daemon
+
+  dev:cli:
+    desc: "Run the plat CLI (usage: task dev:cli -- <args>)"
+    cmds:
+      - cargo run -p cli -- {{.CLI_ARGS}}
+
+  # ── T480 / Linux one-time setup ───────────────────────────────────────────
+  metal:setup:
+    desc: "One-time setup: br0 bridge, /run/firecracker, Firecracker binary"
+    cmds:
+      - mkdir -p /run/firecracker
+      - ip link add br0 type bridge 2>/dev/null || true
+      - ip link set br0 up
+      - ip addr add 172.20.0.1/24 dev br0 2>/dev/null || true
+      - |
+        if [ ! -f /usr/local/bin/firecracker ]; then
+          echo "Downloading Firecracker v1.9.0..."
+          curl -L -o /tmp/firecracker.tgz \
+            https://github.com/firecracker-microvm/firecracker/releases/download/v1.9.0/firecracker-v1.9.0-x86_64.tgz
+          tar -xzf /tmp/firecracker.tgz -C /tmp/
+          mv /tmp/release-v1.9.0-x86_64/firecracker-v1.9.0-x86_64 /usr/local/bin/firecracker
+          chmod +x /usr/local/bin/firecracker
+          echo "firecracker installed"
+        else
+          echo "firecracker already installed"
+        fi
+      - |
+        if [ ! -f /opt/firecracker/vmlinux ]; then
+          echo "WARNING: no kernel at /opt/firecracker/vmlinux"
+          echo "  See: https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md"
+        else
+          echo "guest kernel present"
+        fi
