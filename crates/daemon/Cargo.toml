@@ -3,6 +3,10 @@ name    = "daemon"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "machinename-daemon"
 path = "src/main.rs"
@@ -24,11 +28,23 @@ tracing-subscriber = { workspace = true }
 tokio-postgres     = { workspace = true }
 deadpool-postgres  = { workspace = true }
 sha2               = { workspace = true }
+hex                = { workspace = true }
+aws-sdk-s3           = { workspace = true }
+aws-config           = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-smithy-runtime-api = { workspace = true }
 # Wasm engine
 wasmtime      = "29"
 wasmtime-wasi = "29"
 
-# Linux-only: TAP/bridge management
+# Linux-only: TAP/bridge management + eBPF
 [target.'cfg(target_os = "linux")'.dependencies]
 rtnetlink = "0.14"
 libc      = "0.2"
+aya       = { version = "0.13", features = ["async_tokio"] }
+aya-log   = "0.2"
+
+[build-dependencies]
+# Used by build.rs to compile crates/ebpf-programs targeting bpfel-unknown-none
+# on Linux hosts. No-op on macOS (guarded by CARGO_CFG_TARGET_OS check).
+

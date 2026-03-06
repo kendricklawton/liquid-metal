@@ -1,0 +1,50 @@
+package pages
+
+import "github.com/kendricklawton/liquid-metal/web/internal/ui/components"
+
+templ SplashPage() {
+	@components.Layout("liquid-metal") {
+		@SplashContent()
+	}
+}
+
+templ SplashContent() {
+	<div class="max-w-3xl mx-auto px-6 py-24">
+		<h1 class="text-4xl font-bold tracking-tight text-zinc-100 mb-4">
+			bare metal. two engines.
+		</h1>
+		<p class="text-zinc-400 text-lg mb-12">
+			No Kubernetes. No managed cloud. Ship a binary, get a URL.
+		</p>
+		<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+			<a
+				href="/metal"
+				hx-get="/metal"
+				hx-target="#main-content"
+				hx-push-url="/metal"
+				class="border border-zinc-800 p-6 hover:border-zinc-600 transition-colors"
+			>
+				<div class="text-xs text-zinc-500 mb-2 uppercase tracking-widest">engine</div>
+				<div class="text-xl font-bold text-zinc-100 mb-2">Metal</div>
+				<div class="text-zinc-400 text-sm">
+					Firecracker microVMs. Hardware KVM isolation. ~100ms cold start. Ship any Linux binary.
+				</div>
+				<div class="mt-4 text-xs text-zinc-600">engine = "metal"</div>
+			</a>
+			<a
+				href="/liquid"
+				hx-get="/liquid"
+				hx-target="#main-content"
+				hx-push-url="/liquid"
+				class="border border-zinc-800 p-6 hover:border-zinc-600 transition-colors"
+			>
+				<div class="text-xs text-zinc-500 mb-2 uppercase tracking-widest">engine</div>
+				<div class="text-xl font-bold text-zinc-100 mb-2">Liquid</div>
+				<div class="text-zinc-400 text-sm">
+					Wasmtime/WASI. In-process execution. Sub-millisecond cold start. Ship a .wasm file.
+				</div>
+				<div class="mt-4 text-xs text-zinc-600">engine = "liquid"</div>
+			</a>
+		</div>
+	</div>
+}

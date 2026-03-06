@@ -1,0 +1,8 @@
+# Build eBPF programs for the little-endian BPF target.
+# Requires: rustup target add bpfel-unknown-none
+#           rustup component add rust-src
+[build]
+target = "bpfel-unknown-none"
+
+[unstable]
+build-std = ["core"]

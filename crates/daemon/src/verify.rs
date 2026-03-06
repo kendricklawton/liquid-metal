@@ -27,6 +27,7 @@ pub async fn artifact(path: &str, expected_hex: &str) -> Result<()> {
 }
 
 /// Compute the SHA-256 hex digest of `path`. Utility for the API upload path.
+#[allow(dead_code)]
 pub async fn compute(path: &str) -> Result<String> {
     let bytes = tokio::fs::read(path)
         .await
