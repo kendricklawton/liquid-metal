@@ -3,6 +3,10 @@ name    = "proxy"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "proxy"
+path = "src/lib.rs"
+
 [[bin]]
 name = "machinename-proxy"
 path = "src/main.rs"

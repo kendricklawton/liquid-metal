@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package liquidmetal.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/kendricklawton/liquid-metal/gen/go/liquidmetal/v1;liquidmetalv1";
+
+message User {
+  string id         = 1;
+  string email      = 2;
+  string name       = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message GetMeRequest {}
+
+message GetMeResponse {
+  User user = 1;
+}
+
+service UserService {
+  rpc GetMe(GetMeRequest) returns (GetMeResponse);
+}

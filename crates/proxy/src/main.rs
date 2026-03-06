@@ -1,7 +1,6 @@
-mod db;
-mod router;
-
 use anyhow::Result;
+use proxy::db;
+use proxy::router;
 use common::config::{env_or, require_env};
 use pingora::prelude::*;
 use std::sync::Arc;

@@ -1,3 +1,42 @@
+# ── Rust ──────────────────────────────────────────────────────────────────────
 /target
+Cargo.lock.bak
+
+# ── Go ────────────────────────────────────────────────────────────────────────
+# Compiled binaries
+web/web
+cli/flux
+cli/tmp/
+
+# air hot-reload temp dir
+web/tmp/
+
+# ── Proto / buf ───────────────────────────────────────────────────────────────
+# buf.lock is intentionally committed — do not add it here
+
+# ── Environment ───────────────────────────────────────────────────────────────
 .env
+.env.local
+.env.*.local
+
+# ── Secrets / credentials ─────────────────────────────────────────────────────
+*.pem
+*.key
+*.crt
+
+# ── Firecracker / runtime sockets ─────────────────────────────────────────────
 *.sock
+/run/
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Test artifacts ────────────────────────────────────────────────────────────
+*.test
+coverage.out

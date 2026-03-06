@@ -1,0 +1,22 @@
+[package]
+name    = "ebpf-programs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# This crate is NOT a member of the root workspace.
+# It compiles to BPF bytecode (bpfel-unknown-none target) and is built
+# by crates/daemon/build.rs, then embedded into the daemon binary via
+# include_bytes_aligned!. See crates/ebpf-programs/.cargo/config.toml.
+
+[[bin]]
+name = "tc-filter"
+path = "src/main.rs"
+
+[dependencies]
+aya-ebpf = { version = "0.1", features = ["macros"] }
+
+[profile.release]
+lto         = true
+opt-level   = "z"
+panic       = "abort"

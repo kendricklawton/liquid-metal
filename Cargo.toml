@@ -4,7 +4,6 @@ members = [
     "crates/api",
     "crates/proxy",
     "crates/daemon",
-    "crates/cli",
 ]
 resolver = "2"
 
@@ -27,7 +26,7 @@ toml         = "0.8"
 async-nats   = "0.33"
 futures      = "0.3"
 # Postgres
-tokio-postgres   = "0.7"
+tokio-postgres   = { version = "0.7", features = ["with-uuid-1"] }
 deadpool-postgres = { version = "0.14", features = ["rt_tokio_1"] }
 # HTTP primitives
 hyper          = { version = "1", features = ["client", "http1", "server"] }
@@ -44,8 +43,20 @@ async-trait    = "0.1"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Utilities
-uuid   = { version = "1", features = ["v4"] }
-clap   = { version = "4", features = ["derive"] }
+uuid     = { version = "1", features = ["v4", "v7", "serde"] }
+clap     = { version = "4", features = ["derive"] }
+refinery = { version = "0.8", features = ["tokio-postgres"] }
+sha2     = "0.10"
+hex      = "0.4"
+# Object Storage (S3-compatible — Vultr Object Storage)
+aws-sdk-s3           = { version = "1", features = ["behavior-version-latest"] }
+aws-config           = { version = "1", default-features = false, features = ["behavior-version-latest"] }
+aws-credential-types = "1"
+aws-smithy-runtime-api = "1"
+# ConnectRPC / gRPC
+tonic        = "0.14"
+prost        = "0.14"
+prost-types  = "0.14"
 
 # Linux-only (daemon crate)
 [workspace.metadata]

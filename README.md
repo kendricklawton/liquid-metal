@@ -1,30 +1,12 @@
 # liquid-metal
 
+> **Experimental** — work in progress. Built to learn by doing. Not production-ready.
+
 Bare-metal hosting platform. No Kubernetes. No managed cloud. Two products built on proven isolation primitives.
 
 ---
 
 ## Products
-
-
-
-### Liquid — WebAssembly
-Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, in-process execution, memory-only. No disk, no TAP, no VM overhead.
-
-- **Isolation**: Wasmtime Wasm sandbox
-- **Cold start**: <1ms
-- **Execution**: In-process, WASI VFS
-- **Build**: `GOOS=wasip1 go build -o main.wasm`
-
-```toml
-# machine.toml
-[service]
-name   = "my-function"
-engine = "flash"
-
-[flash]
-wasm = "main.wasm"
-```
 
 ### Metal — Firecracker MicroVMs
 Run any Linux binary in a hardware-isolated VM. KVM-backed, dedicated rootfs, TAP networking. Ship a Go binary, an HTMX app, anything that compiles.
@@ -46,6 +28,23 @@ vcpu      = 1
 memory_mb = 128
 ```
 
+### Liquid — WebAssembly
+Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, in-process execution, memory-only. No disk, no TAP, no VM overhead.
+
+- **Isolation**: Wasmtime Wasm sandbox
+- **Cold start**: <1ms
+- **Execution**: In-process, WASI VFS
+
+```toml
+# machine.toml
+[service]
+name   = "my-fn"
+engine = "liquid"
+
+[liquid]
+wasm = "main.wasm"
+```
+
 ---
 
 ## Architecture
@@ -55,11 +54,11 @@ Internet
     │
     ▼
 Pingora Edge Proxy  (:80/:443)
-*.machinename.dev → slug lookup
+*.machinename.dev → slug lookup → upstream_addr
     │
     ├──────────────────────────┐
     ▼                          ▼
-engine: metal             engine: flash
+engine: metal             engine: liquid
 Firecracker microVM       Wasmtime executor
 TAP → br0                 in-process, <1ms
 ~100–250ms cold start     no disk, no TAP
@@ -67,12 +66,13 @@ TAP → br0                 in-process, <1ms
 
 **Stack:**
 - **Proxy**: Pingora (Rust) — slug → upstream_addr routing
-- **API**: Axum + tonic (Rust) — service CRUD, ConnectRPC
+- **API**: Axum + tonic (Rust) — service CRUD, ConnectRPC over h2c
 - **Daemon**: NATS consumer (Rust) — provisions VMs and Wasm
-- **Web**: chi + Templ + HTMX (Go) — dashboard UI
-- **Event bus**: NATS JetStream
-- **State**: PostgreSQL (raw SQL, no ORM)
-- **Artifacts**: RustFS (S3-compatible) — rootfs images + wasm binaries
+- **Web**: chi + Templ + HTMX (Go) — dashboard UI on :3000
+- **CLI**: Cobra + Viper (Go) — `flux` developer tool
+- **Event bus**: NATS JetStream 3-node Raft
+- **State**: PostgreSQL — raw SQL, refinery migrations
+- **Artifacts**: Vultr Object Storage (S3-compatible) — rootfs images + wasm binaries
 
 ---
 
@@ -80,15 +80,30 @@ TAP → br0                 in-process, <1ms
 
 ```
 liquid-metal/
+├── go.work             Go workspace (web, cli, gen/go)
+├── Cargo.toml          Rust workspace
+│
 ├── crates/
-│   ├── common/     Shared Rust types (Engine, ProvisionEvent, config)
-│   ├── api/        Axum + tonic — REST + ConnectRPC, publishes to NATS
-│   ├── proxy/      Pingora edge router
-│   ├── daemon/     Firecracker + Wasmtime provision loop
-│   └── cli/        plat binary (init, deploy, status, logs)
-├── web/            Go dashboard (Templ + HTMX + ConnectRPC client)
-├── proto/          Protobuf definitions → buf generates Rust + Go stubs
-└── migrations/     PostgreSQL migrations (refinery)
+│   ├── common/         Shared types: Engine, ProvisionEvent, config helpers
+│   ├── api/            Axum + tonic — ConnectRPC server :7070, publishes to NATS
+│   ├── proxy/          Pingora edge router — slug → upstream_addr
+│   ├── daemon/         NATS consumer — Firecracker + Wasmtime provision loop
+│   └── ebpf-programs/  TC egress classifier — cross-tenant VM isolation (BPF)
+│
+├── web/                Go module — dashboard (chi + Templ + HTMX) on :3000
+│   ├── cmd/web/        Server entry point
+│   └── internal/
+│       ├── config/     Config loading from env vars
+│       ├── handler/    HTMX request handlers
+│       └── ui/         Templ components + pages
+│
+├── cli/                Go module — flux CLI (Cobra + Viper)
+│   ├── main.go         Entry point
+│   └── cmd/            Commands: login, whoami, deploy, status, logs
+│
+├── proto/              Protobuf definitions
+├── gen/go/             buf-generated Go stubs (ConnectRPC)
+└── migrations/         PostgreSQL migrations (refinery)
 ```
 
 ---
@@ -96,9 +111,9 @@ liquid-metal/
 ## Deploy in 3 Commands
 
 ```bash
-plat init       # create machine.toml
-plat deploy     # build + ship to node
-plat status     # check health
+flux login      # authenticate via browser (WorkOS)
+flux deploy     # reads machine.toml → ships to node
+flux status     # list your services
 # → live at <name>.machinename.dev
 ```
 
@@ -107,16 +122,18 @@ plat status     # check health
 ## Local Dev
 
 ```bash
-task up           # Postgres + NATS via docker compose
+task up           # Postgres + NATS + RustFS (docker compose)
 task dev:api      # Rust API on :7070
-task dev:web      # Go dashboard on :3000
+task dev:web      # Go dashboard on :3000 (air hot reload)
 task dev:proxy    # Pingora on :8080
 task dev:daemon   # NATS consumer (Firecracker skipped on macOS)
+task dev:cli -- status   # run flux CLI
 ```
 
 ### Linux (bare metal, one-time setup)
 ```bash
-task metal:setup  # br0 bridge, /run/firecracker, Firecracker binary
+task metal:setup     # br0 bridge, /run/firecracker, Firecracker binary
+task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
 ```
 
 ---
@@ -127,3 +144,4 @@ task metal:setup  # br0 bridge, /run/firecracker, Firecracker binary
 - No AWS, GCP, Azure, Vercel, or Heroku
 - No ORMs (raw SQL everywhere)
 - No SPA frameworks (HTMX + Templ only)
+- No container registry (Object Storage is the registry)

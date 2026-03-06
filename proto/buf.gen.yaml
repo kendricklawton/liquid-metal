@@ -1,11 +1,10 @@
-version: v2
+version: v1
 plugins:
-  # 1. Generate standard Protobuf structs
-  - local: protoc-gen-go
+  - plugin: buf.build/protocolbuffers/go
     out: ../gen/go
-    opt: paths=source_relative
-
-  # 2. Generate ConnectRPC handlers and clients
-  - local: protoc-gen-connect-go
+    opt:
+      - paths=source_relative
+  - plugin: buf.build/connectrpc/go
     out: ../gen/go
-    opt: paths=source_relative
+    opt:
+      - paths=source_relative

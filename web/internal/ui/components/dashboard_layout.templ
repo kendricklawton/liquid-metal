@@ -1,0 +1,233 @@
+package components
+
+templ DashboardLayout(title string, userName string, slug string, tier string, pageIcon string, pageTitle string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{ title }</title>
+			<script src="https://cdn.tailwindcss.com"></script>
+			<script>
+				tailwind.config = {
+					darkMode: 'class',
+					theme: {
+						extend: {
+							fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','Monaco','Consolas','monospace'] },
+							colors: {
+								atom: { bg: '#161616', surface: '#262626', border: '#393939', fg: '#f4f4f4', muted: '#a8a8a8' }
+							}
+						}
+					}
+				}
+			</script>
+			<style>[x-cloak] { display: none !important; }</style>
+			<script>
+				// Block-level theme init — prevents FOUC
+				if (localStorage.theme === 'light') {
+					document.documentElement.classList.remove('dark');
+				} else {
+					document.documentElement.classList.add('dark');
+				}
+				window.toggleTheme = function() {
+					var isDark = document.documentElement.classList.toggle('dark');
+					localStorage.theme = isDark ? 'dark' : 'light';
+				}
+			</script>
+			<script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5ViYgSibmK" crossorigin="anonymous"></script>
+			<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+			<script src="https://unpkg.com/lucide@latest"></script>
+			<script>
+				document.addEventListener('DOMContentLoaded', () => lucide.createIcons());
+				document.addEventListener('htmx:afterSwap', () => lucide.createIcons());
+			</script>
+			<script>
+				// Sync header title + icon on HTMX partial swaps
+				document.addEventListener('htmx:afterSwap', function() {
+					var el = document.querySelector('#app-content > [data-page-title]');
+					if (!el) return;
+					var t = document.getElementById('header-page-title');
+					var i = document.getElementById('header-page-icon');
+					if (t) t.textContent = el.dataset.pageTitle;
+					if (i) i.setAttribute('data-lucide', el.dataset.pageIcon || 'layers');
+					lucide.createIcons();
+				});
+			</script>
+			<script>
+				// Active nav highlight
+				function updateNav() {
+					var p = window.location.pathname;
+					document.querySelectorAll('[data-nav-href]').forEach(function(a) {
+						var active = a.dataset.navHref === p;
+						a.classList.toggle('font-bold', active);
+						a.classList.toggle('text-zinc-100', active);
+						a.classList.toggle('dark:text-white', active);
+						a.classList.toggle('bg-zinc-800', active);
+						a.classList.toggle('dark:bg-atom-surface', active);
+						a.classList.toggle('border-zinc-100', active);
+						a.classList.toggle('dark:border-white', active);
+						a.classList.toggle('text-zinc-500', !active);
+						a.classList.toggle('dark:text-atom-muted', !active);
+						a.classList.toggle('border-transparent', !active);
+					});
+				}
+				document.addEventListener('DOMContentLoaded', updateNav);
+				document.addEventListener('htmx:pushedIntoHistory', updateNav);
+				document.addEventListener('htmx:replacedInHistory', updateNav);
+			</script>
+		</head>
+		<body
+			class="bg-zinc-50 dark:bg-atom-bg text-zinc-900 dark:text-atom-fg font-mono"
+			style="height: 100dvh; display: flex; overflow: hidden;"
+			x-data="{ sidebarOpen: window.innerWidth >= 1024, userOpen: false }"
+			x-init="window.addEventListener('resize', () => { sidebarOpen = window.innerWidth >= 1024 })"
+		>
+			// ── Mobile backdrop ──────────────────────────────────────────────────
+			<div
+				x-show="sidebarOpen"
+				x-cloak
+				class="fixed inset-0 z-30 bg-black/60 lg:hidden"
+				@click="sidebarOpen = false"
+			></div>
+
+			// ── Sidebar ───────────────────────────────────────────────────────────
+			<aside
+				class="flex flex-col border-r border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg fixed inset-y-0 left-0 z-40 w-64 lg:relative lg:z-auto"
+				:class="sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'"
+				style="transition: transform 0.15s;"
+			>
+				// Workspace header
+				<div class="h-14 flex items-center shrink-0 border-b border-zinc-200 dark:border-atom-border px-4 gap-3">
+					<div class="w-7 h-7 bg-zinc-900 dark:bg-white flex items-center justify-center shrink-0">
+						if len(slug) > 0 {
+							<span class="text-[10px] font-bold text-white dark:text-zinc-900 uppercase leading-none">{ string([]rune(slug)[0:1]) }</span>
+						}
+					</div>
+					<div class="flex-1 min-w-0">
+						<div class="text-xs font-bold text-zinc-900 dark:text-white truncate">{ slug }</div>
+						<div class="text-[10px] text-zinc-500 dark:text-atom-muted uppercase tracking-widest">{ tier }</div>
+					</div>
+					<button
+						@click="sidebarOpen = false"
+						class="lg:hidden text-zinc-400 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg shrink-0"
+						aria-label="Close sidebar"
+					>
+						<i data-lucide="x" width="15" height="15"></i>
+					</button>
+				</div>
+
+				// Nav
+				<nav class="flex flex-col gap-0.5 flex-1 overflow-y-auto p-3">
+					<div class="px-2 pb-1 pt-2">
+						<span class="text-[9px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest">services</span>
+					</div>
+					@DashNavItem("layers", "All Services", "/"+slug)
+					<div class="px-2 pb-1 pt-4">
+						<span class="text-[9px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest">workspace</span>
+					</div>
+					@DashNavItem("credit-card", "Billing", "/"+slug+"/billing")
+					@DashNavItem("settings", "Settings", "/"+slug+"/settings")
+				</nav>
+
+				// Bottom
+				<div class="flex flex-col gap-0.5 border-t border-zinc-200 dark:border-atom-border p-3 shrink-0">
+					@DashNavItem("user", "Account", "/account")
+				</div>
+			</aside>
+
+			// ── Main ─────────────────────────────────────────────────────────────
+			<div class="flex-1 min-w-0 flex flex-col">
+				// Header
+				<header class="h-14 shrink-0 flex items-center border-b border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg">
+					// Mobile menu toggle
+					<button
+						@click="sidebarOpen = true"
+						class="flex items-center justify-center w-12 h-full border-r border-zinc-200 dark:border-atom-border text-zinc-400 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg lg:hidden shrink-0"
+						aria-label="Open sidebar"
+					>
+						<i data-lucide="menu" width="16" height="16"></i>
+					</button>
+					// Page title
+					<div class="flex items-center gap-2 px-4 h-full border-r border-zinc-200 dark:border-atom-border shrink-0">
+						<i id="header-page-icon" data-lucide={ pageIcon } width="14" height="14" class="text-zinc-500 dark:text-atom-muted shrink-0"></i>
+						<span id="header-page-title" class="text-xs font-medium text-zinc-900 dark:text-white whitespace-nowrap hidden sm:inline">{ pageTitle }</span>
+					</div>
+					<div class="flex-1"></div>
+					// User dropdown
+					<div class="relative h-full shrink-0 border-l border-zinc-200 dark:border-atom-border" @click.outside="userOpen = false">
+						<button
+							@click="userOpen = !userOpen"
+							class="h-full aspect-square flex items-center justify-center bg-zinc-900 dark:bg-white hover:opacity-80 transition-opacity"
+						>
+							if len(userName) > 0 {
+								<span class="text-[10px] font-bold text-white dark:text-zinc-900 uppercase leading-none">{ string([]rune(userName)[0:1]) }</span>
+							}
+						</button>
+						<div
+							x-show="userOpen"
+							x-cloak
+							class="absolute right-0 top-full w-52 z-50 border border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg shadow-xl"
+						>
+							<div class="px-4 py-3 border-b border-zinc-200 dark:border-atom-border">
+								<span class="block text-[11px] font-bold text-zinc-900 dark:text-white truncate">{ userName }</span>
+							</div>
+							<div class="py-1">
+								<button
+									onclick="toggleTheme()"
+									class="flex items-center gap-3 w-full px-4 py-2.5 text-xs text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+									@click="userOpen = false"
+								>
+									<i data-lucide="sun" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0 dark:hidden"></i>
+									<i data-lucide="moon" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0 hidden dark:block"></i>
+									Toggle Theme
+								</button>
+								<a
+									href="/account"
+									hx-get="/account"
+									hx-target="#app-content"
+									hx-push-url="/account"
+									class="flex items-center gap-3 px-4 py-2.5 text-xs text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+									@click="userOpen = false"
+								>
+									<i data-lucide="user" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+									Account
+								</a>
+							</div>
+							<div class="border-t border-zinc-200 dark:border-atom-border py-1">
+								<form method="POST" action="/auth/logout">
+									<button
+										type="submit"
+										class="flex items-center gap-3 w-full px-4 py-2.5 text-xs text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+									>
+										<i data-lucide="log-out" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+										Sign Out
+									</button>
+								</form>
+							</div>
+						</div>
+					</div>
+				</header>
+
+				// Scrollable content
+				<div id="app-content" class="flex-1 min-w-0 overflow-y-auto">
+					{ children... }
+				</div>
+			</div>
+		</body>
+	</html>
+}
+
+templ DashNavItem(icon string, label string, href string) {
+	<a
+		href={ templ.SafeURL(href) }
+		data-nav-href={ href }
+		hx-get={ href }
+		hx-target="#app-content"
+		hx-push-url={ href }
+		class="flex items-center gap-3 px-3 py-2 text-xs text-zinc-500 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg hover:bg-zinc-100 dark:hover:bg-atom-surface border-l-2 border-transparent transition-colors"
+		@click="if (window.innerWidth < 1024) sidebarOpen = false"
+	>
+		<i data-lucide={ icon } width="14" height="14" class="shrink-0"></i>
+		<span>{ label }</span>
+	</a>
+}

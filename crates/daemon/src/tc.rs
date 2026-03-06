@@ -4,9 +4,8 @@
 //! device to cap egress bandwidth. Ingress is shaped on the TAP by mirroring
 //! through an IFB (Intermediate Functional Block) device.
 //!
-//! This is the tc layer. Cilium eBPF layers on top when installed on the host:
-//! Cilium reads the same TAP interface and can enforce per-flow network policy,
-//! L7 visibility, and observability without replacing the tc qdiscs here.
+//! Bandwidth shaping (this module) and tenant isolation (ebpf.rs) are
+//! independent — both attach to tap{n} and coexist without conflict.
 //!
 //! Requires: iproute2 (`tc` binary) installed on the host.
 //! On Debian/Ubuntu: `apt install iproute2`

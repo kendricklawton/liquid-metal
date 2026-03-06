@@ -1,0 +1,201 @@
+package pages
+
+import (
+	"fmt"
+	v1 "github.com/kendricklawton/liquid-metal/gen/go/liquidmetal/v1"
+	"github.com/kendricklawton/liquid-metal/web/internal/ui/components"
+)
+
+// ── Services ──────────────────────────────────────────────────────────────────
+
+templ ServicesPage(userName string, slug string, tier string, services []*v1.Service) {
+	@components.DashboardLayout("Services | liquid-metal", userName, slug, tier, "layers", "Services") {
+		@ServicesContent(slug, services)
+	}
+}
+
+templ ServicesContent(slug string, services []*v1.Service) {
+	<div data-page-title="Services" data-page-icon="layers" class="p-5 flex flex-col gap-5">
+		// Action bar
+		<div class="flex items-center justify-between">
+			<div class="text-[10px] text-zinc-500 dark:text-atom-muted uppercase tracking-widest">
+				{ fmt.Sprintf("%d service", len(services)) }
+				if len(services) != 1 {
+					s
+				}
+			</div>
+		</div>
+
+		if len(services) == 0 {
+			// Empty state
+			<div class="border border-dashed border-zinc-800 dark:border-atom-border flex flex-col items-center justify-center gap-4 py-20 text-center">
+				<i data-lucide="layers" width="32" height="32" class="text-zinc-700 dark:text-atom-muted"></i>
+				<div>
+					<div class="text-sm font-bold text-zinc-900 dark:text-white mb-1">No services yet</div>
+					<div class="text-xs text-zinc-500 dark:text-atom-muted">Deploy your first service with the flux CLI</div>
+				</div>
+				<div class="border border-zinc-800 dark:border-atom-border px-4 py-3 text-left text-[11px] font-mono text-zinc-400 dark:text-atom-muted bg-zinc-900 dark:bg-atom-surface">
+					<div class="text-zinc-600 dark:text-atom-muted mb-1"># metal (Firecracker microVM)</div>
+					<div>flux deploy --engine metal --name my-app</div>
+					<br/>
+					<div class="text-zinc-600 dark:text-atom-muted mb-1"># liquid (Wasmtime)</div>
+					<div>flux deploy --engine liquid --name my-fn</div>
+				</div>
+			</div>
+		} else {
+			// Services table
+			<div class="border border-zinc-200 dark:border-atom-border">
+				<div class="grid grid-cols-[1fr_auto_auto_auto] border-b border-zinc-200 dark:border-atom-border bg-zinc-100 dark:bg-atom-surface px-4 py-2 gap-4">
+					<span class="text-[10px] font-bold text-zinc-500 dark:text-atom-muted uppercase tracking-widest">Name</span>
+					<span class="text-[10px] font-bold text-zinc-500 dark:text-atom-muted uppercase tracking-widest w-16 text-center">Engine</span>
+					<span class="text-[10px] font-bold text-zinc-500 dark:text-atom-muted uppercase tracking-widest w-24 text-center">Status</span>
+					<span class="text-[10px] font-bold text-zinc-500 dark:text-atom-muted uppercase tracking-widest w-8"></span>
+				</div>
+				for _, svc := range services {
+					@serviceRow(svc)
+				}
+			</div>
+		}
+	</div>
+}
+
+templ serviceRow(svc *v1.Service) {
+	<div class="grid grid-cols-[1fr_auto_auto_auto] items-center px-4 py-3 gap-4 border-b border-zinc-100 dark:border-atom-border hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors">
+		// Name + slug + upstream
+		<div class="min-w-0">
+			<div class="text-sm font-bold text-zinc-900 dark:text-white truncate">{ svc.Name }</div>
+			<div class="text-[10px] text-zinc-400 dark:text-atom-muted font-mono truncate">{ svc.Slug }</div>
+			if svc.UpstreamAddr != "" {
+				<div class="text-[10px] text-zinc-400 dark:text-atom-muted font-mono truncate mt-0.5">{ svc.UpstreamAddr }</div>
+			}
+		</div>
+		// Engine badge
+		<div class="w-16 flex justify-center">
+			if svc.Engine == v1.Engine_ENGINE_METAL {
+				<span class="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-zinc-300 dark:border-atom-border text-zinc-600 dark:text-atom-muted">metal</span>
+			} else {
+				<span class="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-zinc-300 dark:border-atom-border text-zinc-600 dark:text-atom-muted">liquid</span>
+			}
+		</div>
+		// Status dot + label
+		<div class="w-24 flex items-center justify-center gap-1.5">
+			@statusBadge(svc.Status)
+		</div>
+		// Delete action
+		<div class="w-8 flex justify-center">
+			<button
+				class="text-zinc-300 dark:text-atom-muted hover:text-red-500 dark:hover:text-red-400 transition-colors"
+				hx-delete={ "/app/services/" + svc.Id }
+				hx-confirm={ "Delete " + svc.Name + "?" }
+				hx-target="closest div.grid"
+				hx-swap="outerHTML"
+				title="Delete service"
+			>
+				<i data-lucide="trash-2" width="13" height="13"></i>
+			</button>
+		</div>
+	</div>
+}
+
+templ statusBadge(status v1.ServiceStatus) {
+	switch status {
+		case v1.ServiceStatus_SERVICE_STATUS_RUNNING:
+			<div class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0"></div>
+			<span class="text-[10px] font-mono text-green-500">running</span>
+		case v1.ServiceStatus_SERVICE_STATUS_PROVISIONING:
+			<div class="w-1.5 h-1.5 rounded-full bg-yellow-500 shrink-0 animate-pulse"></div>
+			<span class="text-[10px] font-mono text-yellow-500">provisioning</span>
+		case v1.ServiceStatus_SERVICE_STATUS_FAILED:
+			<div class="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0"></div>
+			<span class="text-[10px] font-mono text-red-500">failed</span>
+		case v1.ServiceStatus_SERVICE_STATUS_STOPPED:
+			<div class="w-1.5 h-1.5 rounded-full bg-zinc-500 shrink-0"></div>
+			<span class="text-[10px] font-mono text-zinc-500">stopped</span>
+		default:
+			<div class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></div>
+			<span class="text-[10px] font-mono text-zinc-500">unknown</span>
+	}
+}
+
+// ── Billing ───────────────────────────────────────────────────────────────────
+
+templ BillingPage(userName string, slug string, tier string) {
+	@components.DashboardLayout("Billing | liquid-metal", userName, slug, tier, "credit-card", "Billing") {
+		@BillingContent()
+	}
+}
+
+templ BillingContent() {
+	<div data-page-title="Billing" data-page-icon="credit-card" class="p-5">
+		@appPlaceholder("credit-card", "Billing", "Usage and billing will appear here once you have running services.")
+	</div>
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+templ SettingsPage(userName string, slug string, tier string) {
+	@components.DashboardLayout("Settings | liquid-metal", userName, slug, tier, "settings", "Settings") {
+		@SettingsContent()
+	}
+}
+
+templ SettingsContent() {
+	<div data-page-title="Settings" data-page-icon="settings" class="p-5">
+		@appPlaceholder("settings", "Workspace Settings", "Workspace configuration coming soon.")
+	</div>
+}
+
+// ── Account ───────────────────────────────────────────────────────────────────
+
+templ AccountPage(userName string, slug string, tier string, email string) {
+	@components.DashboardLayout("Account | liquid-metal", userName, slug, tier, "user", "Account") {
+		@AccountContent(userName, email)
+	}
+}
+
+templ AccountContent(userName string, email string) {
+	<div data-page-title="Account" data-page-icon="user" class="p-5 flex flex-col gap-6 max-w-lg">
+		<div class="border border-zinc-200 dark:border-atom-border">
+			<div class="px-4 py-3 border-b border-zinc-200 dark:border-atom-border">
+				<span class="text-[10px] font-bold text-zinc-500 dark:text-atom-muted uppercase tracking-widest">Profile</span>
+			</div>
+			<div class="px-4 py-4 flex flex-col gap-3">
+				<div>
+					<div class="text-[10px] text-zinc-500 dark:text-atom-muted uppercase tracking-widest mb-1">Name</div>
+					<div class="text-sm text-zinc-900 dark:text-white font-mono">{ userName }</div>
+				</div>
+				<div>
+					<div class="text-[10px] text-zinc-500 dark:text-atom-muted uppercase tracking-widest mb-1">Email</div>
+					<div class="text-sm text-zinc-900 dark:text-white font-mono">{ email }</div>
+				</div>
+			</div>
+		</div>
+		// Sign out
+		<div class="border border-zinc-200 dark:border-atom-border">
+			<div class="px-4 py-3 border-b border-zinc-200 dark:border-atom-border">
+				<span class="text-[10px] font-bold text-zinc-500 dark:text-atom-muted uppercase tracking-widest">Session</span>
+			</div>
+			<div class="px-4 py-4">
+				<form method="POST" action="/auth/logout">
+					<button
+						type="submit"
+						class="flex items-center gap-2 text-xs text-zinc-600 dark:text-atom-fg hover:text-red-500 dark:hover:text-red-400 transition-colors"
+					>
+						<i data-lucide="log-out" width="13" height="13"></i>
+						Sign out
+					</button>
+				</form>
+			</div>
+		</div>
+	</div>
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+templ appPlaceholder(icon string, label string, description string) {
+	<div class="flex flex-col items-center justify-center gap-3 py-20 text-center">
+		<i data-lucide={ icon } width="28" height="28" class="text-zinc-700 dark:text-atom-muted"></i>
+		<div class="text-sm font-bold text-zinc-900 dark:text-white">{ label }</div>
+		<div class="text-xs text-zinc-500 dark:text-atom-muted max-w-xs">{ description }</div>
+	</div>
+}

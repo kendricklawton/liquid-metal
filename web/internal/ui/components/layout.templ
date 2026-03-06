@@ -1,0 +1,57 @@
+package components
+
+templ Layout(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{ title }</title>
+			<script src="https://cdn.tailwindcss.com"></script>
+			<script>
+				tailwind.config = {
+					theme: { extend: { fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','Monaco','Consolas','monospace'] } } }
+				}
+			</script>
+			<script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5ViYgSibmK" crossorigin="anonymous"></script>
+			<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+		</head>
+		<body class="bg-zinc-950 text-zinc-100 min-h-screen font-mono">
+			<nav class="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
+				<a
+					href="/"
+					hx-get="/"
+					hx-target="#main-content"
+					hx-push-url="/"
+					class="text-zinc-100 font-bold tracking-tight"
+				>
+					liquid-metal
+				</a>
+				<div class="flex items-center gap-6 text-sm text-zinc-400">
+					<a
+						href="/metal"
+						hx-get="/metal"
+						hx-target="#main-content"
+						hx-push-url="/metal"
+						class="hover:text-zinc-100 transition-colors"
+					>
+						metal
+					</a>
+					<a
+						href="/liquid"
+						hx-get="/liquid"
+						hx-target="#main-content"
+						hx-push-url="/liquid"
+						class="hover:text-zinc-100 transition-colors"
+					>
+						liquid
+					</a>
+					<a href="/auth/login" class="hover:text-zinc-100 transition-colors">login</a>
+				</div>
+			</nav>
+			<main id="main-content">
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
