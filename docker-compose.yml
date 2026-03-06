@@ -19,6 +19,22 @@ services:
     volumes:
       - natsdata:/data
 
+  rustfs:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: "0.0.0.0:9000"
+      RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-rustfsadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001" # console → http://localhost:9001
+    volumes:
+      - rustfsdata:/data
+
 volumes:
   pgdata:
   natsdata:
+  rustfsdata:

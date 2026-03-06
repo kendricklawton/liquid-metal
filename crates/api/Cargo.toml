@@ -3,6 +3,10 @@ name    = "api"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "api"
+path = "src/lib.rs"
+
 [[bin]]
 name = "machinename-api"
 path = "src/main.rs"
@@ -22,3 +26,23 @@ deadpool-postgres = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 refinery           = { workspace = true }
+sha2               = { workspace = true }
+hex                = { workspace = true }
+aws-sdk-s3           = { workspace = true }
+aws-config           = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-smithy-runtime-api = { workspace = true }
+tonic              = { workspace = true }
+tonic-prost        = "0.14"
+prost              = { workspace = true }
+prost-types        = { workspace = true }
+
+[dev-dependencies]
+tower          = { workspace = true }
+http-body-util = { workspace = true }
+serde_json     = { workspace = true }
+uuid           = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+protoc-bin-vendored = "3"

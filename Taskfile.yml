@@ -5,7 +5,7 @@ dotenv: [".env"]
 tasks:
   # ── Dependencies ─────────────────────────────────────────────────────────
   up:
-    desc: "Start local Postgres + NATS"
+    desc: "Start local Postgres + NATS + RustFS (S3)"
     cmds:
       - docker compose up -d
 
@@ -37,7 +37,7 @@ tasks:
     desc: "Run the Pingora edge proxy locally"
     env:
       BIND_ADDR: "0.0.0.0:8080"
-      CLOUD_UPSTREAM: "127.0.0.1:3000"
+      CLOUD_UPSTREAM: "127.0.0.1:7070"
       RUST_LOG: "proxy=debug"
     cmds:
       - cargo run -p proxy
@@ -52,9 +52,19 @@ tasks:
       - cargo run -p daemon
 
   dev:cli:
-    desc: "Run the plat CLI (usage: task dev:cli -- <args>)"
+    desc: "Run the flux CLI (usage: task dev:cli -- <args>)"
+    dir: cli
     cmds:
-      - cargo run -p cli -- {{.CLI_ARGS}}
+      - go run . -- {{.CLI_ARGS}}
+
+  dev:web:
+    desc: "Run the Go web dashboard locally (:3000) with hot reload (requires: go install github.com/air-verse/air@latest)"
+    dir: web
+    env:
+      API_URL: "http://localhost:7070"
+      BIND_ADDR: "0.0.0.0:3000"
+    cmds:
+      - air
 
   # ── T480 / Linux one-time setup ───────────────────────────────────────────
   security:setup:

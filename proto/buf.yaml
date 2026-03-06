@@ -1,7 +1,10 @@
 version: v1
-breaking:
-  use:
-    - FILE
+name: buf.build/liquidmetal/api
+deps:
+  - buf.build/protocolbuffers/wellknowntypes
 lint:
   use:
     - STANDARD
+breaking:
+  use:
+    - FILE

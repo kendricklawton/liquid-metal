@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package liquidmetal.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/kendricklawton/liquid-metal/gen/go/liquidmetal/v1;liquidmetalv1";
+
+enum Engine {
+  ENGINE_UNSPECIFIED = 0;
+  ENGINE_METAL       = 1;
+  ENGINE_LIQUID      = 2;
+}
+
+enum ServiceStatus {
+  SERVICE_STATUS_UNSPECIFIED  = 0;
+  SERVICE_STATUS_PROVISIONING = 1;
+  SERVICE_STATUS_RUNNING      = 2;
+  SERVICE_STATUS_FAILED       = 3;
+  SERVICE_STATUS_STOPPED      = 4;
+}
+
+message Service {
+  string        id            = 1;
+  string        name          = 2;
+  string        slug          = 3;
+  Engine        engine        = 4;
+  ServiceStatus status        = 5;
+  string        upstream_addr = 6;
+  string        project_id    = 7;
+  string        commit_sha    = 8;
+  string        commit_message = 9;
+  google.protobuf.Timestamp created_at     = 10;
+  google.protobuf.Timestamp provisioned_at = 11;
+}
+
+// ListServices
+message ListServicesRequest {
+  string project_id = 1;
+}
+message ListServicesResponse {
+  repeated Service services = 1;
+}
+
+// GetService
+message GetServiceRequest {
+  string id = 1;
+}
+message GetServiceResponse {
+  Service service = 1;
+}
+
+// CreateService
+message CreateServiceRequest {
+  string name       = 1;
+  Engine engine     = 2;
+  string project_id = 3;
+  int32  port       = 4;  // metal only
+  int32  vcpu       = 5;  // metal only
+  int32  memory_mb  = 6;  // metal only
+}
+message CreateServiceResponse {
+  Service service = 1;
+}
+
+// DeleteService
+message DeleteServiceRequest {
+  string id = 1;
+}
+message DeleteServiceResponse {}
+
+// GetServiceLogs
+message GetServiceLogsRequest {
+  string service_id = 1;
+  int32  limit      = 2;
+}
+message LogLine {
+  string message = 1;
+  google.protobuf.Timestamp ts = 2;
+}
+message GetServiceLogsResponse {
+  repeated LogLine lines = 1;
+}
+
+service ServiceService {
+  rpc ListServices(ListServicesRequest)       returns (ListServicesResponse);
+  rpc GetService(GetServiceRequest)           returns (GetServiceResponse);
+  rpc CreateService(CreateServiceRequest)     returns (CreateServiceResponse);
+  rpc DeleteService(DeleteServiceRequest)     returns (DeleteServiceResponse);
+  rpc GetServiceLogs(GetServiceLogsRequest)   returns (GetServiceLogsResponse);
+}
