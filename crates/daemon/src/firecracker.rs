@@ -1,3 +1,5 @@
+// Used only inside #[cfg(target_os = "linux")] blocks in provision.rs
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 /// Firecracker REST API client over a Unix Domain Socket.
 use anyhow::{Context, Result};
 use http_body_util::{BodyExt, Full};

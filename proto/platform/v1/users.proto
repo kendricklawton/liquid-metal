@@ -1,0 +1,22 @@
+syntax = "proto3";
+package platform.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/kendricklawton/project-platform/gen/go/platform/v1;platformv1";
+
+service UserService {
+  rpc GetMe(GetMeRequest) returns (GetMeResponse) {}
+}
+
+message User {
+  string id = 1;
+  string email = 2;
+  string name = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message GetMeRequest {}
+message GetMeResponse {
+  User user = 1;
+}
