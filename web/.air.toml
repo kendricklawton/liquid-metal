@@ -2,10 +2,11 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-cmd = "templ generate ./... && go build -o ./tmp/web ./cmd/web"
+cmd = "templ generate ./... && go build -o ./tmp/web ./cmd"
 bin = "./tmp/web"
 delay = 500
 exclude_dir = ["tmp", "gen"]
+exclude_regex = ["_templ\\.go$"]
 include_ext = ["go", "templ"]
 kill_delay = "1s"
 rerun_delay = 500

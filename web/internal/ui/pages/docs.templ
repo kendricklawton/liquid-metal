@@ -1,0 +1,78 @@
+package pages
+
+import "github.com/kendricklawton/liquid-metal/web/internal/ui/components"
+
+templ DocsPage(slug, title, content string, userName string) {
+	@components.Layout(title+" | Liquid Metal", userName) {
+		@DocsContent(slug, title, content)
+	}
+}
+
+templ DocsContent(slug, title, content string) {
+	<title>{ title } | Liquid Metal</title>
+	// ── WELCOME HEADER ────────────────────────────────────────────────────────
+	<div class="border-b border-zinc-200 dark:border-atom-border pb-8 mb-0">
+		<div class="flex flex-col gap-3 mb-4">
+			<p class="text-[10px] font-mono uppercase tracking-widest text-zinc-400 dark:text-atom-muted">{ "// documentation" }</p>
+			<h1 class="text-3xl sm:text-4xl font-black tracking-tighter text-zinc-900 dark:text-white">{ title }</h1>
+		</div>
+		// <p class="text-sm text-zinc-500 dark:text-atom-muted">
+		// 	Deploy compiled binaries and Wasm modules to Firecracker and Wasmtime. Use
+		// 	<span class="font-mono text-zinc-700 dark:text-atom-fg">flux</span>
+		// 	to ship from any terminal.
+		// </p>
+	</div>
+	// ── SIDEBAR + CONTENT ─────────────────────────────────────────────────────
+	<div class="flex gap-0 -mx-4 sm:-mx-6">
+		// Sidebar
+		<aside class="hidden md:flex flex-col w-56 shrink-0 border-r border-zinc-200 dark:border-atom-border pt-8">
+			<nav class="sticky top-20 px-4 py-6 flex flex-col gap-6 overflow-y-auto">
+				@docsSidebarSection("Getting Started", slug, []docNavEntry{
+					{Slug: "getting-started/quickstart", Label: "Quickstart"},
+					{Slug: "getting-started/installation", Label: "Installation"},
+				})
+				@docsSidebarSection("Languages", slug, []docNavEntry{
+					{Slug: "languages/go", Label: "Go"},
+					{Slug: "languages/rust", Label: "Rust"},
+					{Slug: "languages/zig", Label: "Zig"},
+				})
+				@docsSidebarSection("Platform", slug, []docNavEntry{
+					{Slug: "deployments", Label: "Deployments"},
+					{Slug: "secrets", Label: "Secrets"},
+					{Slug: "cli", Label: "CLI Reference"},
+				})
+			</nav>
+		</aside>
+		// Content
+		<article class="flex-1 min-w-0 px-6 sm:px-10 pt-8 pb-16 docs-prose">
+			@templ.Raw(content)
+		</article>
+	</div>
+}
+
+type docNavEntry struct {
+	Slug  string
+	Label string
+}
+
+templ docsSidebarSection(label, currentSlug string, entries []docNavEntry) {
+	<div>
+		<p class="text-[10px] uppercase tracking-widest text-zinc-400 dark:text-atom-muted mb-2">{ label }</p>
+		for _, e := range entries {
+			if e.Slug == currentSlug {
+				<a
+					href={ templ.SafeURL("/docs/" + e.Slug) }
+					class="block text-xs py-1.5 px-2 text-zinc-900 dark:text-white bg-zinc-100 dark:bg-atom-surface uppercase tracking-widest border-l-2 border-zinc-900 dark:border-white font-bold"
+				>{ e.Label }</a>
+			} else {
+				<a
+					href={ templ.SafeURL("/docs/" + e.Slug) }
+					hx-get={ "/docs/" + e.Slug }
+					hx-target="#main-content"
+					hx-push-url={ "/docs/" + e.Slug }
+					class="block text-xs py-1.5 px-2 text-zinc-400 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg uppercase tracking-widest transition-colors border-l-2 border-transparent"
+				>{ e.Label }</a>
+			}
+		}
+	</div>
+}

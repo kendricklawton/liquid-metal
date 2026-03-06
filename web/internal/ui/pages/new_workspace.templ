@@ -1,0 +1,179 @@
+package pages
+
+import "github.com/kendricklawton/liquid-metal/web/internal/ui/components"
+
+templ NewWorkspacePage(userName string, slug string, gated bool) {
+	@components.DashboardLayout("New Workspace | Liquid Metal", userName, slug, "plus-circle", "New Workspace") {
+		@NewWorkspaceContent(slug, gated, "")
+	}
+}
+
+templ NewWorkspaceContent(slug string, gated bool, errMsg string) {
+	<div
+		data-page-title="New Workspace"
+		data-page-icon="plus-circle"
+		class="p-6 lg:p-8 max-w-2xl"
+	>
+		if gated {
+			@newWorkspaceGate(slug)
+		} else {
+			@newWorkspaceForm(slug, errMsg)
+		}
+	</div>
+}
+
+templ newWorkspaceGate(slug string) {
+	<div class="mb-8">
+		<div class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">{ "// workspace-limit" }</div>
+		<h2 class="text-xl font-black text-zinc-900 dark:text-white uppercase tracking-tight">Workspace Limit Reached</h2>
+		<p class="mt-2 text-sm text-zinc-500 dark:text-atom-muted">
+			Your Free plan allows <span class="font-semibold text-zinc-700 dark:text-atom-fg">1 owned workspace</span>. Upgrade to Pro to create multiple workspaces.
+		</p>
+	</div>
+	<div class="grid grid-cols-1 sm:grid-cols-2 gap-px bg-zinc-200 dark:bg-atom-border border border-zinc-200 dark:border-atom-border mb-8">
+		<div class="bg-white dark:bg-atom-bg p-6 flex flex-col gap-4">
+			<div class="flex items-center justify-between">
+				<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">Current</span>
+				<span class="text-[9px] font-bold px-1.5 py-0.5 border border-zinc-200 dark:border-atom-border text-zinc-500 dark:text-atom-muted uppercase tracking-wider">Free</span>
+			</div>
+			<div class="text-2xl font-black text-zinc-900 dark:text-white">$0<span class="text-xs font-mono text-zinc-400 dark:text-atom-muted">/ mo</span></div>
+			<ul class="flex flex-col gap-2 text-xs text-zinc-500 dark:text-atom-muted">
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-400 shrink-0"></i>
+					1 owned workspace
+				</li>
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-400 shrink-0"></i>
+					Up to 3 services
+				</li>
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-400 shrink-0"></i>
+					10 GB egress / mo
+				</li>
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-400 shrink-0"></i>
+					200 build min / mo
+				</li>
+				<li class="flex items-center gap-2 opacity-40">
+					<i data-lucide="x" width="11" height="11" class="shrink-0"></i>
+					Multiple workspaces
+				</li>
+				<li class="flex items-center gap-2 opacity-40">
+					<i data-lucide="x" width="11" height="11" class="shrink-0"></i>
+					Workspace collaboration
+				</li>
+			</ul>
+		</div>
+		<div class="bg-zinc-900 dark:bg-atom-surface p-6 flex flex-col gap-4 relative overflow-hidden">
+			<div class="absolute inset-0 opacity-[0.04] pointer-events-none" style="background-image: linear-gradient(white 1px, transparent 1px), linear-gradient(90deg, white 1px, transparent 1px); background-size: 24px 24px;"></div>
+			<div class="relative flex items-center justify-between">
+				<span class="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Upgrade</span>
+				<span class="text-[9px] font-bold px-1.5 py-0.5 border border-zinc-700 text-zinc-400 uppercase tracking-wider">Pro</span>
+			</div>
+			<div class="relative text-2xl font-black text-white">$20<span class="text-xs font-mono text-zinc-500">/ member / mo</span></div>
+			<ul class="relative flex flex-col gap-2 text-xs text-zinc-400">
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-500 shrink-0"></i>
+					Unlimited owned workspaces
+				</li>
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-500 shrink-0"></i>
+					Up to 10 services / project
+				</li>
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-500 shrink-0"></i>
+					100 GB egress / mo
+				</li>
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-500 shrink-0"></i>
+					2,000 build min / mo
+				</li>
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-500 shrink-0"></i>
+					Workspace collaboration
+				</li>
+				<li class="flex items-center gap-2">
+					<i data-lucide="check" width="11" height="11" class="text-zinc-500 shrink-0"></i>
+					No cold starts
+				</li>
+			</ul>
+			<a
+				href="/plans"
+				class="relative mt-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-zinc-900 text-[10px] font-bold uppercase tracking-widest hover:bg-zinc-100 transition-colors"
+			>
+				<i data-lucide="zap" width="11" height="11"></i>
+				Upgrade to Pro
+			</a>
+		</div>
+	</div>
+	<p class="text-xs text-zinc-400 dark:text-atom-muted">
+		Already on Pro?
+		<a href={ templ.SafeURL("/" + slug) } class="text-zinc-600 dark:text-atom-fg underline underline-offset-2">Return to dashboard.</a>
+	</p>
+}
+
+templ newWorkspaceForm(slug string, errMsg string) {
+	<div class="mb-8">
+		<div class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">{ "// new-workspace" }</div>
+		<h2 class="text-xl font-black text-zinc-900 dark:text-white uppercase tracking-tight">Create a New Workspace</h2>
+		<p class="mt-2 text-sm text-zinc-500 dark:text-atom-muted">Your current workspace will remain accessible after creation.</p>
+	</div>
+	<form
+		hx-post="/new-workspace"
+		hx-target="#dashboard-content"
+		hx-push-url="true"
+		class="flex flex-col gap-6"
+		x-data="{ name: '', slug: '' }"
+		x-init="$watch('name', v => { slug = v.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + (v ? '-workspace' : '') })"
+	>
+		if errMsg != "" {
+			<div class="flex items-center gap-2 px-4 py-3 border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-900/10 text-xs text-red-600 dark:text-red-400">
+				<i data-lucide="alert-circle" width="13" height="13" class="shrink-0"></i>
+				{ errMsg }
+			</div>
+		}
+		<div>
+			<label class="block text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">Workspace Name</label>
+			<input
+				type="text"
+				name="name"
+				x-model="name"
+				placeholder="Acme Corp"
+				required
+				class="w-full px-3 py-2.5 border border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg text-sm text-zinc-900 dark:text-atom-fg placeholder-zinc-400 dark:placeholder-atom-muted outline-none focus:border-zinc-400 dark:focus:border-atom-fg transition-colors"
+			/>
+		</div>
+		<div>
+			<label class="block text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">Workspace URL</label>
+			<div class="flex items-stretch border border-zinc-200 dark:border-atom-border focus-within:border-zinc-400 dark:focus-within:border-atom-fg transition-colors">
+				<span class="flex items-center px-3 bg-zinc-50 dark:bg-atom-surface border-r border-zinc-200 dark:border-atom-border text-xs font-mono text-zinc-400 dark:text-atom-muted whitespace-nowrap shrink-0">machinename.dev/</span>
+				<input
+					type="text"
+					name="slug"
+					x-model="slug"
+					placeholder="acme-corp-workspace"
+					required
+					pattern="[a-z0-9][a-z0-9-]{1,48}[a-z0-9]"
+					title="Lowercase letters, numbers, and hyphens only. 3-50 characters."
+					class="flex-1 min-w-0 px-3 py-2.5 bg-white dark:bg-atom-bg text-sm font-mono text-zinc-900 dark:text-atom-fg placeholder-zinc-400 dark:placeholder-atom-muted outline-none"
+				/>
+			</div>
+			<p class="mt-1.5 text-[10px] text-zinc-400 dark:text-atom-muted">Lowercase letters, numbers, hyphens. Cannot be changed later.</p>
+		</div>
+		<div class="flex items-center gap-4 pt-2">
+			<button
+				type="submit"
+				class="flex items-center gap-2 px-5 py-2.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-[10px] font-bold uppercase tracking-widest hover:bg-zinc-700 dark:hover:bg-zinc-100 transition-colors"
+			>
+				<i data-lucide="plus" width="11" height="11"></i>
+				Create Workspace
+			</button>
+			<a
+				href={ templ.SafeURL("/" + slug) }
+				class="text-xs text-zinc-400 dark:text-atom-muted hover:text-zinc-600 dark:hover:text-atom-fg transition-colors"
+			>
+				Cancel
+			</a>
+		</div>
+	</form>
+}

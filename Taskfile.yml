@@ -2,6 +2,7 @@ version: "3"
 
 dotenv: [".env"]
 
+
 tasks:
   # ── Dependencies ─────────────────────────────────────────────────────────
   up:
@@ -58,13 +59,29 @@ tasks:
       - go run . -- {{.CLI_ARGS}}
 
   dev:web:
-    desc: "Run the Go web dashboard locally (:3000) with hot reload (requires: go install github.com/air-verse/air@latest)"
+    desc: "Run the Go web dashboard locally (:3000) with hot reload"
     dir: web
     env:
       API_URL: "http://localhost:7070"
       BIND_ADDR: "0.0.0.0:3000"
     cmds:
-      - air
+      - go run github.com/air-verse/air@latest -c .air.toml
+
+  dev:
+    desc: "Start API + web together; Ctrl+C kills both"
+    deps: []
+    cmds:
+      - |
+        bash <<'BASH'
+        trap 'kill $API_PID $WEB_PID 2>/dev/null; wait $API_PID $WEB_PID 2>/dev/null' INT TERM
+        RUST_LOG=api=debug cargo run -p api &
+        API_PID=$!
+        until curl -sf http://localhost:7070/healthz > /dev/null 2>&1; do sleep 0.2; done
+        cd web && API_URL=http://localhost:7070 BIND_ADDR=0.0.0.0:3000 \
+          go run github.com/air-verse/air@latest -c .air.toml &
+        WEB_PID=$!
+        wait $API_PID $WEB_PID
+        BASH
 
   # ── T480 / Linux one-time setup ───────────────────────────────────────────
   security:setup:

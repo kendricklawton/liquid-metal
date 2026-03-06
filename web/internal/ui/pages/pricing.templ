@@ -1,0 +1,198 @@
+package pages
+
+import "github.com/kendricklawton/liquid-metal/web/internal/ui/components"
+
+templ PricingPage(userName string) {
+	@components.Layout("Plans | Liquid Metal", userName) {
+		@PricingContent(userName)
+	}
+}
+
+templ PricingContent(userName string) {
+	<title>Plans | Liquid Metal</title>
+	<div class="flex flex-col gap-16 py-12">
+		// ── HERO ──────────────────────────────────────────────────────────────
+		<section class="flex flex-col gap-3">
+			<p class="text-[10px] font-mono uppercase tracking-widest text-zinc-400 dark:text-atom-muted">{ "// plans" }</p>
+			<h1 class="text-3xl sm:text-4xl font-black tracking-tighter text-zinc-900 dark:text-white">Find a plan that fits.</h1>
+			<p class="text-sm text-zinc-500 dark:text-atom-muted max-w-md leading-relaxed">
+				Deploy compiled binaries and Wasm modules. Top up credits when you need more — no overages, no surprise bills, ever.
+			</p>
+		</section>
+		// ── PLAN CARDS ────────────────────────────────────────────────────────
+		<section class="grid md:grid-cols-3 gap-px bg-zinc-200 dark:bg-atom-border border border-zinc-200 dark:border-atom-border">
+			// ── Hobby ───────────────────────────────────────────────────────
+			<div class="bg-white dark:bg-atom-bg p-8 flex flex-col gap-8">
+				<div class="flex flex-col gap-3">
+					<h2 class="text-xl font-bold text-zinc-900 dark:text-white">Hobby</h2>
+					<div>
+						<span class="text-3xl font-black text-zinc-900 dark:text-white">$0</span>
+						<span class="text-xs text-zinc-400 dark:text-atom-muted font-mono ml-1">/ month</span>
+					</div>
+					<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed">
+						Experiments, side projects, and learning.
+						<br/>
+						<strong class="text-zinc-700 dark:text-atom-fg">Free forever. No credit card.</strong>
+					</p>
+				</div>
+				<ul class="flex flex-col gap-3">
+					@planBullet("2 services")
+					@planBullet("10 Metal compute hours / month")
+					@planBullet("100k Wasm invocations / month")
+					@planBullet("1 GB transfer")
+					@planBullet("Encrypted secrets")
+					@planBullet("Serverless only — sleeps after 5 min idle")
+					@planBullet("Deploy history + rollback")
+					@planBullet("flux logs + flux status")
+					@planBullet("1 custom domain + auto TLS")
+					@planBullet("Community support")
+				</ul>
+				<div class="mt-auto">
+					if userName != "" {
+						<a href="/dashboard" class="inline-flex w-full items-center justify-center px-5 py-2.5 border border-zinc-300 dark:border-atom-border text-zinc-700 dark:text-atom-fg font-bold text-xs tracking-widest uppercase hover:border-zinc-900 dark:hover:border-atom-fg hover:text-zinc-900 dark:hover:text-atom-fg transition-colors">
+							Go to Dashboard
+						</a>
+					} else {
+						<a href="/auth/login" class="inline-flex w-full items-center justify-center px-5 py-2.5 border border-zinc-300 dark:border-atom-border text-zinc-700 dark:text-atom-fg font-bold text-xs tracking-widest uppercase hover:border-zinc-900 dark:hover:border-atom-fg hover:text-zinc-900 dark:hover:text-atom-fg transition-colors">
+							Start Free
+						</a>
+					}
+				</div>
+			</div>
+			// ── Pro ─────────────────────────────────────────────────────────
+			<div class="bg-zinc-900 dark:bg-atom-surface p-8 flex flex-col gap-8 relative">
+				<div class="flex flex-col gap-3">
+					<div class="flex items-center gap-2">
+						<h2 class="text-xl font-bold text-white">Pro</h2>
+						<span class="text-[9px] font-bold px-1.5 py-0.5 border border-green-500/40 text-green-400 uppercase tracking-widest">Popular</span>
+					</div>
+					<div>
+						<span class="text-3xl font-black text-white">$10</span>
+						<span class="text-xs text-zinc-400 font-mono ml-1">/ month</span>
+					</div>
+					<p class="text-xs text-zinc-400 leading-relaxed">
+						Production workloads with full platform access.
+						<br/>
+						<strong class="text-green-400">$10 compute credit included / month.</strong>
+					</p>
+				</div>
+				<ul class="flex flex-col gap-3">
+					@planBulletDark("10 services")
+					@planBulletDark("$10 compute credit / month (+ top up anytime)")
+					@planBulletDark("Serverless or always-on — your choice")
+					@planBulletDark("100 GB transfer")
+					@planBulletDark("5 custom domains + auto TLS")
+					@planBulletDark("Encrypted secrets")
+					@planBulletDark("Cron jobs (schedule in machine.toml)")
+					@planBulletDark("Deploy history + rollback")
+					@planBulletDark("IP blocking (up to 100 IPs)")
+					@planBulletDark("Rate limiting per service")
+					@planBulletDark("Custom firewall rules (up to 40)")
+					@planBulletDark("Auto-recharge (opt-in)")
+					@planBulletDark("Email support")
+				</ul>
+				<div class="mt-auto">
+					<button disabled class="inline-flex w-full items-center justify-center px-5 py-2.5 border border-zinc-700 text-zinc-500 font-bold text-xs tracking-widest uppercase cursor-not-allowed">
+						Coming Soon
+					</button>
+				</div>
+			</div>
+			// ── Team ────────────────────────────────────────────────────────
+			<div class="bg-white dark:bg-atom-bg p-8 flex flex-col gap-8">
+				<div class="flex flex-col gap-3">
+					<h2 class="text-xl font-bold text-zinc-900 dark:text-white">Team</h2>
+					<div>
+						<span class="text-3xl font-black text-zinc-900 dark:text-white">$20</span>
+						<span class="text-xs text-zinc-400 dark:text-atom-muted font-mono ml-1">/ seat / month</span>
+					</div>
+					<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed">
+						Collaborative workspaces with shared credits and access controls.
+						<br/>
+						<strong class="text-zinc-700 dark:text-atom-fg">$20 compute credit per seat. Viewer roles free.</strong>
+					</p>
+				</div>
+				<ul class="flex flex-col gap-3">
+					@planBullet("25 services")
+					@planBullet("$20 compute credit per seat / month")
+					@planBullet("Shared credit pool across workspace")
+					@planBullet("Serverless or always-on — your choice")
+					@planBullet("500 GB transfer")
+					@planBullet("Unlimited custom domains + auto TLS")
+					@planBullet("Encrypted secrets")
+					@planBullet("Cron jobs (schedule in machine.toml)")
+					@planBullet("Deploy history + rollback")
+					@planBullet("IP blocking + rate limiting + firewall rules")
+					@planBullet("Allowlist / IP bypass rules")
+					@planBullet("Workspace roles: owner, member, viewer")
+					@planBullet("Invite by email")
+					@planBullet("Audit log")
+					@planBullet("Priority support (Slack)")
+				</ul>
+				<div class="mt-auto">
+					<button disabled class="inline-flex w-full items-center justify-center px-5 py-2.5 border border-zinc-300 dark:border-atom-border text-zinc-400 dark:text-atom-muted font-bold text-xs tracking-widest uppercase cursor-not-allowed">
+						Coming Soon
+					</button>
+				</div>
+			</div>
+		</section>
+		// ── FAQ ───────────────────────────────────────────────────────────────
+		<section class="max-w-2xl">
+			<div class="mb-8">
+				<p class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">{ "// faq" }</p>
+				<h2 class="text-xl font-black text-zinc-900 dark:text-white tracking-tighter mt-1">Common questions.</h2>
+			</div>
+			<div class="flex flex-col gap-px bg-zinc-200 dark:bg-atom-border border border-zinc-200 dark:border-atom-border">
+				@planFaqRow("What's the difference between serverless and always-on?", "Serverless: your Metal VM boots on request (~100-250ms cold start) and sleeps after 5 minutes idle — you only pay for active runtime. Always-on: the VM stays running permanently, zero cold start, credits drain continuously at the hourly rate. Liquid (Wasm) is always serverless — sub-millisecond startup means it never needs to stay warm.")
+				@planFaqRow("How does the top-up system work?", "There are no surprise charges. Ever. Your plan includes a compute credit balance — when it runs out, services pause cleanly. You can top up manually from the dashboard at any time, or enable auto-recharge (Pro + Team): set a threshold and a recharge amount, and we'll refill your balance automatically. Auto-recharge is opt-in and can be disabled anytime. Hobby tier: hard limits only, no payment method required.")
+				@planFaqRow("What counts as a compute hour?", "Metal compute hours measure active VM runtime — Serverless Metal only burns hours while handling requests and during the 5-minute warm window. A Hobby service that gets light traffic might use 2-5 hours/month. At 10 hours/month free, that covers a side project comfortably. Always-on burns ~720 hours/month (Pro + Team only).")
+				@planFaqRow("What are Wasm invocations?", "Each time Wasmtime executes your .wasm module is one invocation. Liquid is billed per invocation at a very low rate — 100k free invocations on Hobby covers a personal API with room to spare. Invocations are near-instant (<1ms), so cost scales with actual usage, not idle time.")
+				@planFaqRow("What runtimes are supported?", "Both Metal (Firecracker microVM) and Liquid (Wasm/Wasmtime) are available on all tiers. Metal runs static linux/amd64 binaries. Liquid runs any WASI-compatible .wasm module — Go, Rust, Zig, C.")
+				@planFaqRow("How does Team seat pricing work?", "Every owner and member is $20/seat/month — no base fee, no minimum seats. Each seat includes $20 of compute credit that pools into a shared workspace balance. A 5-person team starts with $100/month in compute credit. Viewer roles are always free and don't count toward seat billing.")
+				@planFaqRow("Will prices change?", "60 days notice before any change affecting paid subscribers. Hobby will always be free. Existing subscribers will be grandfathered for a minimum of 6 months.")
+			</div>
+		</section>
+		// ── CTA ───────────────────────────────────────────────────────────────
+		<section class="border-t border-zinc-200 dark:border-atom-border pt-12 flex flex-col sm:flex-row items-start sm:items-end justify-between gap-8">
+			<div class="flex flex-col gap-3">
+				<p class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">{ "// get started" }</p>
+				<h2 class="text-2xl font-black text-zinc-900 dark:text-white tracking-tighter">Start free.<br/>Upgrade when you're ready.</h2>
+				<p class="text-xs text-zinc-500 dark:text-atom-muted">No credit card. No hidden fees.</p>
+			</div>
+			<div class="flex flex-col sm:flex-row gap-3 shrink-0">
+				if userName != "" {
+					<a href="/dashboard" class="inline-flex items-center justify-center px-8 py-3 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 font-bold text-xs tracking-widest uppercase hover:opacity-90 transition-opacity">
+						Enter Workspace
+					</a>
+				} else {
+					<a href="/auth/login" class="inline-flex items-center justify-center px-8 py-3 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 font-bold text-xs tracking-widest uppercase hover:opacity-90 transition-opacity">
+						Start for Free
+					</a>
+				}
+				<a href="/docs/getting-started/quickstart" hx-get="/docs/getting-started/quickstart" hx-target="#main-content" hx-push-url="/docs/getting-started/quickstart" class="inline-flex items-center justify-center px-8 py-3 border border-zinc-300 dark:border-atom-border text-zinc-600 dark:text-atom-muted font-bold text-xs tracking-widest uppercase hover:border-zinc-900 dark:hover:border-atom-fg hover:text-zinc-900 dark:hover:text-atom-fg transition-colors">
+					Read the Docs
+				</a>
+			</div>
+		</section>
+	</div>
+}
+
+templ planBullet(label string) {
+	<li class="flex items-center gap-2 text-xs text-zinc-700 dark:text-atom-fg">
+		<i data-lucide="check" width="12" height="12" class="shrink-0 text-green-500 dark:text-atom-green"></i>
+		{ label }
+	</li>
+}
+
+templ planBulletDark(label string) {
+	<li class="flex items-center gap-2 text-xs text-zinc-300">
+		<i data-lucide="check" width="12" height="12" class="shrink-0 text-green-400"></i>
+		{ label }
+	</li>
+}
+
+templ planFaqRow(question string, answer string) {
+	<div class="bg-white dark:bg-atom-bg p-6 flex flex-col gap-2">
+		<h3 class="text-xs font-bold text-zinc-900 dark:text-white">{ question }</h3>
+		<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed">{ answer }</p>
+	</div>
+}

@@ -1,5 +1,33 @@
 # liquid-metal — Agent Protocol
 
+## Product Positioning
+
+**Liquid Metal is a PaaS — not IaaS.** Users never manage servers, kernels, or networks. They ship a binary or `.wasm` file and pay for what they use: compute time, Wasm invocations, and bandwidth. We handle everything below the application.
+
+**The differentiator vs Vercel/Render**: those platforms hide compute entirely — no vCPU count, no RAM spec, no engine type. Liquid Metal exposes it as a first-class concept. Developers choose their engine (Metal or Liquid), set their vCPU and memory, and see exactly what they're getting. Transparency and predictability that abstracted platforms cannot offer.
+
+**What we sell**:
+- **Compute time** — Firecracker VM-hours (Metal) and Wasm invocations (Liquid)
+- **Network** — egress bandwidth, custom domains, Pingora edge routing
+- **Predictable specs** — developers declare vCPU/RAM in `machine.toml`; no mystery resource pools
+
+**Billing model — top-up credits, no surprise charges**:
+Liquid Metal uses a prepaid credit system (like Anthropic's API). Each plan includes a compute credit balance; when exhausted, services pause cleanly. Two recharge options:
+- **Manual top-up**: user adds credits from the dashboard on demand.
+- **Auto-recharge** (opt-in): user sets a low-balance threshold and a recharge amount. When the balance drops below the threshold, we automatically charge the saved payment method for the configured amount. Disabled by default. Can be turned off anytime. Hobby tier: no payment method, no auto-recharge — hard free limits only.
+
+**Service modes (Metal only — Liquid is always serverless)**:
+- **Serverless**: VM boots on request (~100-250ms cold start), sleeps after 5 minutes idle. Credits only burn during active runtime + warm window. Available on all tiers.
+- **Always-on**: VM stays running permanently, zero cold start. Credits drain at the hourly rate continuously. Pro and Team only.
+- **Liquid (Wasm)**: always serverless — in-process execution, sub-millisecond startup, no warm window needed. Pay per invocation.
+
+**Credit rates (approximate)**:
+- Metal serverless: billed per active second at declared spec rate
+- Metal always-on: billed per hour at declared spec rate (~$0.01-0.04/hr depending on vCPU/RAM)
+- Liquid: billed per invocation (very low cost, high density)
+
+---
+
 ## Mission: Two Products, No Kubernetes, Ever
 
 ### Product 1 — Metal (Firecracker)

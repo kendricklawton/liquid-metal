@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &[
                 "../../proto/liquidmetal/v1/service.proto",
                 "../../proto/liquidmetal/v1/user.proto",
+                "../../proto/liquidmetal/v1/workspace.proto",
             ],
             &["../../proto"],
         )?;

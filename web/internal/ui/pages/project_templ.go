@@ -10,7 +10,7 @@ import templruntime "github.com/a-h/templ/runtime"
 
 import "github.com/kendricklawton/liquid-metal/web/internal/ui/components"
 
-func MetalPage() templ.Component {
+func ProjectPage(userName string, workspaceSlug string, projectID string, projectName string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -43,13 +43,13 @@ func MetalPage() templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = MetalContent().Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = ProjectContent(workspaceSlug, projectID, projectName).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			return nil
 		})
-		templ_7745c5c3_Err = components.Layout("Metal — liquid-metal").Render(templ.WithChildren(ctx, templ_7745c5c3_Var2), templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = components.ProjectLayout(projectName+" | Liquid Metal", userName, workspaceSlug, projectID, projectName).Render(templ.WithChildren(ctx, templ_7745c5c3_Var2), templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -57,7 +57,7 @@ func MetalPage() templ.Component {
 	})
 }
 
-func MetalContent() templ.Component {
+func ProjectContent(workspaceSlug string, projectID string, projectName string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -78,34 +78,38 @@ func MetalContent() templ.Component {
 			templ_7745c5c3_Var3 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"max-w-3xl mx-auto px-6 py-24\"><div class=\"text-xs text-zinc-500 uppercase tracking-widest mb-4\">engine: metal</div><h1 class=\"text-4xl font-bold tracking-tight text-zinc-100 mb-4\">Firecracker MicroVMs</h1><p class=\"text-zinc-400 text-lg mb-12\">Hardware-isolated VMs via AWS Firecracker + KVM. Ship any Linux binary. ~100ms cold start.</p><div class=\"border border-zinc-800 p-6 mb-6\"><div class=\"text-xs text-zinc-500 mb-3 uppercase tracking-widest\">machine.toml</div><pre class=\"text-sm text-zinc-300\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div data-page-title=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var4 string
-		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(metalToml)
+		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(projectName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/pages/metal.templ`, Line: 22, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/pages/project.templ`, Line: 13, Col: 31}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</pre></div><div class=\"grid grid-cols-2 gap-4 text-sm\"><div class=\"border border-zinc-800 p-4\"><div class=\"text-zinc-500 mb-1\">Isolation</div><div class=\"text-zinc-100\">Hardware KVM</div></div><div class=\"border border-zinc-800 p-4\"><div class=\"text-zinc-500 mb-1\">Cold start</div><div class=\"text-zinc-100\">~100–250ms</div></div><div class=\"border border-zinc-800 p-4\"><div class=\"text-zinc-500 mb-1\">Filesystem</div><div class=\"text-zinc-100\">Dedicated ext4 rootfs</div></div><div class=\"border border-zinc-800 p-4\"><div class=\"text-zinc-500 mb-1\">Networking</div><div class=\"text-zinc-100\">TAP → br0 bridge</div></div></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "\" data-page-icon=\"folder\"><div class=\"border-b border-zinc-200 dark:border-atom-border\"><div class=\"px-5 py-3 border-b border-zinc-200 dark:border-atom-border bg-zinc-50 dark:bg-atom-surface flex items-center justify-between\"><span class=\"text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest\">Services</span> <span class=\"text-[10px] font-mono text-zinc-400 dark:text-atom-muted\">0 active</span></div><div class=\"flex flex-col items-center justify-center py-24 gap-4\"><i data-lucide=\"box\" width=\"20\" height=\"20\" class=\"text-zinc-300 dark:text-atom-border\"></i><p class=\"text-xs text-zinc-500 dark:text-atom-muted font-mono\">No services yet.</p><a href=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var5 templ.SafeURL
+		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/" + workspaceSlug + "/projects/" + projectID + "/new"))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/pages/project.templ`, Line: 27, Col: 82}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "\" class=\"flex items-center gap-2 px-4 py-2 border border-zinc-200 dark:border-atom-border text-[10px] font-bold text-zinc-600 dark:text-atom-fg uppercase tracking-widest hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors\"><i data-lucide=\"plus\" width=\"11\" height=\"11\"></i> Deploy a Service</a></div></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		return nil
 	})
 }
-
-const metalToml = `[service]
-name   = "my-app"
-engine = "metal"
-port   = 8080
-
-[metal]
-vcpu      = 1
-memory_mb = 128`
 
 var _ = templruntime.GeneratedTemplate
