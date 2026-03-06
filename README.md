@@ -6,6 +6,26 @@ Bare-metal hosting platform. No Kubernetes. No managed cloud. Two products built
 
 ## Products
 
+
+
+### Liquid — WebAssembly
+Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, in-process execution, memory-only. No disk, no TAP, no VM overhead.
+
+- **Isolation**: Wasmtime Wasm sandbox
+- **Cold start**: <1ms
+- **Execution**: In-process, WASI VFS
+- **Build**: `GOOS=wasip1 go build -o main.wasm`
+
+```toml
+# machine.toml
+[service]
+name   = "my-function"
+engine = "flash"
+
+[flash]
+wasm = "main.wasm"
+```
+
 ### Metal — Firecracker MicroVMs
 Run any Linux binary in a hardware-isolated VM. KVM-backed, dedicated rootfs, TAP networking. Ship a Go binary, an HTMX app, anything that compiles.
 
@@ -24,24 +44,6 @@ port   = 8080
 [metal]
 vcpu      = 1
 memory_mb = 128
-```
-
-### Flash — WebAssembly
-Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, in-process execution, memory-only. No disk, no TAP, no VM overhead.
-
-- **Isolation**: Wasmtime Wasm sandbox
-- **Cold start**: <1ms
-- **Execution**: In-process, WASI VFS
-- **Build**: `GOOS=wasip1 go build -o main.wasm`
-
-```toml
-# machine.toml
-[service]
-name   = "my-function"
-engine = "flash"
-
-[flash]
-wasm = "main.wasm"
 ```
 
 ---
