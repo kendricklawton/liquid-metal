@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package liquidmetal.v1;
+
+option go_package = "github.com/kendricklawton/liquid-metal/gen/go/liquidmetal/v1;liquidmetalv1";
+
+message CreateWorkspaceRequest {
+  string name = 1;
+  string slug = 2;
+}
+
+message CreateWorkspaceResponse {
+  string id   = 1;
+  string name = 2;
+  string slug = 3;
+}
+
+service WorkspaceService {
+  rpc CreateWorkspace(CreateWorkspaceRequest) returns (CreateWorkspaceResponse);
+}

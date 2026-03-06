@@ -1,0 +1,194 @@
+package pages
+
+import "github.com/kendricklawton/liquid-metal/web/internal/ui/components"
+
+templ TemplateDetailPage(userName string, slug string) {
+	@components.Layout("Go Portfolio | Templates | Liquid Metal", userName) {
+		@TemplateDetailContent(userName, slug)
+	}
+}
+
+templ TemplateDetailContent(userName string, slug string) {
+	<div class="flex flex-col gap-12 py-12">
+		// ── BACK ──────────────────────────────────────────────────────────────
+		<a
+			href="/templates"
+			hx-get="/templates"
+			hx-target="#main-content"
+			hx-push-url="/templates"
+			class="inline-flex items-center gap-2 text-xs text-zinc-500 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-white transition-colors w-fit"
+		>
+			<i data-lucide="arrow-left" width="13" height="13"></i>
+			Back to Templates
+		</a>
+		// ── HEADER ────────────────────────────────────────────────────────────
+		<section class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-6">
+			<div class="flex flex-col gap-3">
+				<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">{ "// template · 01" }</span>
+				<h1 class="text-3xl sm:text-4xl font-black text-zinc-900 dark:text-white uppercase tracking-tight">Go Portfolio</h1>
+				<p class="text-sm text-zinc-500 dark:text-atom-muted max-w-lg leading-relaxed">Terminal-style personal portfolio for Go developers. Bio, projects, and contact form. Ships as a single static binary — deploy in one command.</p>
+				<div class="flex items-center gap-2 mt-1">
+					<span class="text-[9px] font-mono font-bold px-2 py-0.5 border border-zinc-300 dark:border-atom-border text-zinc-500 dark:text-atom-muted uppercase tracking-widest">Go</span>
+					<span class="text-[9px] font-mono font-bold px-2 py-0.5 border border-zinc-300 dark:border-atom-border text-zinc-500 dark:text-atom-muted uppercase tracking-widest">Templ</span>
+					<span class="text-[9px] font-mono font-bold px-2 py-0.5 border border-zinc-300 dark:border-atom-border text-zinc-500 dark:text-atom-muted uppercase tracking-widest">HTMX</span>
+					<span class="text-[9px] font-mono font-bold px-2 py-0.5 border border-zinc-300 dark:border-atom-border text-zinc-500 dark:text-atom-muted uppercase tracking-widest">Tailwind</span>
+				</div>
+			</div>
+			<div class="flex items-center gap-3 shrink-0">
+				<a
+					href="https://github.com/kendricklawton/go-portfolio"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="inline-flex items-center gap-2 px-5 py-2.5 border border-zinc-300 dark:border-atom-border text-zinc-700 dark:text-atom-fg text-xs font-bold tracking-widest uppercase hover:border-zinc-900 dark:hover:border-atom-fg hover:text-zinc-900 dark:hover:text-white transition-colors"
+				>
+					<i data-lucide="github" width="13" height="13"></i>
+					View Repo
+				</a>
+				if userName != "" {
+					<a
+						href="/dashboard"
+						class="inline-flex items-center gap-2 px-5 py-2.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-bold tracking-widest uppercase hover:opacity-90 transition-opacity"
+					>
+						<i data-lucide="rocket" width="13" height="13"></i>
+						Deploy
+					</a>
+				} else {
+					<a
+						href="/auth/login"
+						class="inline-flex items-center gap-2 px-5 py-2.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-bold tracking-widest uppercase hover:opacity-90 transition-opacity"
+					>
+						<i data-lucide="rocket" width="13" height="13"></i>
+						Deploy
+					</a>
+				}
+			</div>
+		</section>
+		// ── PREVIEW ───────────────────────────────────────────────────────────
+		<section class="border border-zinc-200 dark:border-atom-border overflow-hidden">
+			// Browser chrome
+			<div class="flex items-center gap-2 px-4 py-2.5 bg-zinc-100 dark:bg-atom-surface border-b border-zinc-200 dark:border-atom-border">
+				<div class="w-2.5 h-2.5 bg-red-400 opacity-70"></div>
+				<div class="w-2.5 h-2.5 bg-yellow-400 opacity-70"></div>
+				<div class="w-2.5 h-2.5 bg-green-400 opacity-70"></div>
+				<div class="ml-3 flex-1 bg-white dark:bg-atom-bg border border-zinc-200 dark:border-atom-border px-3 py-1 text-[10px] font-mono text-zinc-400 dark:text-atom-muted">
+					https://yourname.projectplatform.dev
+				</div>
+			</div>
+			// Portfolio preview
+			<div class="bg-zinc-950 min-h-[420px] flex flex-col">
+				// Portfolio nav
+				<nav class="flex items-center justify-between px-8 py-4 border-b border-zinc-800">
+					<span class="text-sm font-black text-white uppercase tracking-widest font-mono">dev.name</span>
+					<div class="flex items-center gap-6">
+						<span class="text-[11px] text-zinc-400 font-mono uppercase tracking-widest">About</span>
+						<span class="text-[11px] text-zinc-400 font-mono uppercase tracking-widest">Projects</span>
+						<span class="text-[11px] text-zinc-400 font-mono uppercase tracking-widest">Contact</span>
+					</div>
+				</nav>
+				// Hero
+				<div class="flex flex-col gap-5 px-8 py-12 border-b border-zinc-800">
+					<span class="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">{ "// hello" }</span>
+					<h2 class="text-4xl font-black text-white uppercase tracking-tight leading-tight">
+						Go Developer.
+						<br/>
+						<span class="text-zinc-500">Systems Thinker.</span>
+					</h2>
+					<p class="text-sm text-zinc-400 font-mono max-w-md leading-relaxed">Building fast, reliable systems with Go. Open source contributor. Infrastructure nerd.</p>
+					<div class="flex items-center gap-3 mt-2">
+						<span class="inline-flex items-center gap-2 px-4 py-2 bg-white text-black text-xs font-bold tracking-widest uppercase">View Projects</span>
+						<span class="inline-flex items-center gap-2 px-4 py-2 border border-zinc-700 text-zinc-300 text-xs font-bold tracking-widest uppercase">GitHub</span>
+					</div>
+				</div>
+				// Projects row
+				<div class="grid grid-cols-3 divide-x divide-zinc-800 border-b border-zinc-800">
+					<div class="p-6 flex flex-col gap-2">
+						<span class="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">01_</span>
+						<span class="text-xs font-bold text-white uppercase tracking-widest">api-gateway</span>
+						<span class="text-[10px] text-zinc-500 font-mono">Go · REST · eBPF</span>
+					</div>
+					<div class="p-6 flex flex-col gap-2">
+						<span class="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">02_</span>
+						<span class="text-xs font-bold text-white uppercase tracking-widest">worker-pool</span>
+						<span class="text-[10px] text-zinc-500 font-mono">Go · concurrency</span>
+					</div>
+					<div class="p-6 flex flex-col gap-2">
+						<span class="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">03_</span>
+						<span class="text-xs font-bold text-white uppercase tracking-widest">cli-toolkit</span>
+						<span class="text-[10px] text-zinc-500 font-mono">Go · Cobra · TUI</span>
+					</div>
+				</div>
+			</div>
+		</section>
+		// ── DETAILS ───────────────────────────────────────────────────────────
+		<section class="grid md:grid-cols-3 gap-12">
+			<div class="md:col-span-2 flex flex-col gap-8">
+				<div class="flex flex-col gap-4">
+					<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">{ "// about" }</span>
+					<p class="text-sm text-zinc-600 dark:text-atom-muted leading-relaxed">A production-ready personal portfolio built for Go developers who want full control. No JavaScript frameworks — just Go, Templ, HTMX, and Tailwind. The entire site compiles to a single static binary under 10 MB.</p>
+					<p class="text-sm text-zinc-600 dark:text-atom-muted leading-relaxed">Includes a contact form with server-side validation, project cards pulled from a simple Go slice, dark mode, and responsive layout. Swap in your own content and deploy.</p>
+				</div>
+				// Getting Started
+				<div class="flex flex-col gap-4">
+					<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">{ "// getting-started" }</span>
+					<div class="flex flex-col gap-px border border-zinc-200 dark:border-atom-border">
+						@templateStep("01", "Clone the repo", "git clone https://github.com/kendricklawton/go-portfolio")
+						@templateStep("02", "Install dependencies", "go mod download")
+						@templateStep("03", "Build the binary", "go build -o portfolio ./cmd/portfolio")
+						@templateStep("04", "Deploy to Platform", "plat deploy")
+					</div>
+				</div>
+			</div>
+			// Sidebar
+			<div class="flex flex-col gap-6">
+				<div class="border border-zinc-200 dark:border-atom-border p-5 flex flex-col gap-4">
+					<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">{ "// repository" }</span>
+					<a
+						href="https://github.com/kendricklawton/go-portfolio"
+						target="_blank"
+						rel="noopener noreferrer"
+						class="flex items-center gap-2 text-xs text-zinc-700 dark:text-atom-fg hover:text-zinc-900 dark:hover:text-white transition-colors"
+					>
+						<i data-lucide="github" width="14" height="14"></i>
+						kendricklawton/go-portfolio
+					</a>
+				</div>
+				<div class="border border-zinc-200 dark:border-atom-border p-5 flex flex-col gap-4">
+					<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">{ "// stack" }</span>
+					<ul class="flex flex-col gap-2.5">
+						@templateStackItem("Go 1.23+", "Runtime")
+						@templateStackItem("Templ", "HTML templating")
+						@templateStackItem("HTMX", "Partial swaps")
+						@templateStackItem("Tailwind CSS v4", "Styling")
+						@templateStackItem("Air", "Hot reload (dev)")
+					</ul>
+				</div>
+				<div class="border border-zinc-200 dark:border-atom-border p-5 flex flex-col gap-4">
+					<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest">{ "// plan" }</span>
+					<div class="flex items-center gap-2">
+						<span class="text-[9px] font-mono font-bold px-2 py-0.5 border border-atom-green/40 text-atom-green uppercase tracking-widest">Free</span>
+						<span class="text-xs text-zinc-500 dark:text-atom-muted">Available on all plans</span>
+					</div>
+				</div>
+			</div>
+		</section>
+	</div>
+}
+
+templ templateStep(num string, title string, cmd string) {
+	<div class="bg-white dark:bg-atom-bg p-4 flex flex-col gap-2 border-b border-zinc-200 dark:border-atom-border last:border-b-0">
+		<div class="flex items-center gap-3">
+			<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted uppercase tracking-widest shrink-0">{ num }</span>
+			<span class="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-widest">{ title }</span>
+		</div>
+		<div class="ml-8 bg-zinc-950 dark:bg-atom-border px-3 py-2">
+			<code class="text-[11px] font-mono text-atom-green">{ cmd }</code>
+		</div>
+	</div>
+}
+
+templ templateStackItem(name string, role string) {
+	<li class="flex items-center justify-between">
+		<span class="text-xs font-bold text-zinc-900 dark:text-white">{ name }</span>
+		<span class="text-[11px] text-zinc-400 dark:text-atom-muted font-mono">{ role }</span>
+	</li>
+}

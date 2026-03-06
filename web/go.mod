@@ -8,12 +8,11 @@ require (
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/kendricklawton/liquid-metal/gen/go v0.0.0
 	github.com/workos/workos-go/v6 v6.4.0
-	golang.org/x/net v0.42.0
+	github.com/yuin/goldmark v1.7.16
 )
 
 require (
 	github.com/google/go-querystring v1.0.0 // indirect
-	golang.org/x/text v0.27.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 

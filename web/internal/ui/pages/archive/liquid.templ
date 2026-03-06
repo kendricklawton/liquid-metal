@@ -1,0 +1,282 @@
+package archive
+
+import "github.com/kendricklawton/liquid-metal/web/internal/ui/components"
+
+templ LiquidComputePage(userName string) {
+	@components.Layout("Liquid | Liquid Metal", userName) {
+		@LiquidComputeContent(userName)
+	}
+}
+
+templ LiquidComputeContent(userName string) {
+	<title>Liquid | Liquid Metal</title>
+	// ── HERO ──────────────────────────────────────────────────────────────────
+	<div class="relative mt-8">
+		<section id="liquid-hero" class="relative flex items-center justify-center overflow-hidden" style="min-height:85vh;">
+			// Particle canvas — wave + cursor interactive
+			<canvas id="liquid-particles" class="absolute inset-0 w-full h-full" style="pointer-events:none;"></canvas>
+			// Content
+			<div class="relative z-10 flex flex-col items-center text-center gap-8 px-6 max-w-3xl mx-auto">
+				// Badge row
+				<div class="inline-flex items-center gap-3">
+					<span class="px-2 py-0.5 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 text-[10px] font-bold font-mono uppercase tracking-widest">WebAssembly</span>
+					<span class="text-xs text-zinc-500 dark:text-zinc-400">In-process execution via Wasmtime/WASI</span>
+				</div>
+				// Heading
+				<h1 class="text-5xl sm:text-6xl lg:text-7xl font-black tracking-tighter leading-[0.88] text-zinc-900 dark:text-white">
+					Ship a .wasm.
+					<br/>
+					<span class="text-zinc-400 dark:text-zinc-600">We run it instantly.</span>
+				</h1>
+				// Description
+				<p class="text-base sm:text-lg text-zinc-500 dark:text-zinc-400 max-w-xl leading-relaxed">
+					Compile any language to WebAssembly. We execute it in-process via Wasmtime. Sub-millisecond cold starts — no VM boot, no disk, no TAP networking.
+				</p>
+				// CTAs
+				<div class="flex flex-wrap items-center justify-center gap-4">
+					<a
+						href="/auth/login"
+						class="inline-flex items-center px-8 py-3.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-bold uppercase tracking-widest hover:bg-zinc-700 dark:hover:bg-zinc-100 transition-colors"
+					>
+						Deploy Now
+					</a>
+					<a
+						href="/docs/getting-started/quickstart"
+						hx-get="/docs/getting-started/quickstart"
+						hx-target="#main-content"
+						hx-push-url="/docs/getting-started/quickstart"
+						class="inline-flex items-center px-8 py-3.5 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs font-bold uppercase tracking-widest hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
+					>
+						View Docs
+					</a>
+				</div>
+			</div>
+		</section>
+	</div>
+	// ── CAPABILITIES ──────────────────────────────────────────────────────────
+	<section class="py-20 border-b border-zinc-200 dark:border-atom-border">
+		<p class="text-[10px] font-mono uppercase tracking-widest text-zinc-400 dark:text-atom-muted mb-2">{ "// capabilities" }</p>
+		<h2 class="text-2xl font-black tracking-tight mb-12 text-zinc-900 dark:text-white">In-process. Memory-only. Instant.</h2>
+		<div class="grid grid-cols-1 md:grid-cols-3 gap-px bg-zinc-200 dark:bg-atom-border border border-zinc-200 dark:border-atom-border">
+			<div class="bg-zinc-50 dark:bg-atom-bg p-8 flex flex-col gap-4">
+				<div class="w-8 h-8 border border-zinc-200 dark:border-atom-border flex items-center justify-center shrink-0">
+					<i data-lucide="zap" width="14" height="14" class="text-blue-500"></i>
+				</div>
+				<h3 class="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-widest">Sub-Millisecond Cold Starts</h3>
+				<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed">Wasmtime loads and executes your module in-process — no VM to boot, no kernel to initialize, no TAP interface to configure. From upload to running: under 1ms.</p>
+			</div>
+			<div class="bg-zinc-50 dark:bg-atom-bg p-8 flex flex-col gap-4">
+				<div class="w-8 h-8 border border-zinc-200 dark:border-atom-border flex items-center justify-center shrink-0">
+					<i data-lucide="cpu" width="14" height="14" class="text-blue-500"></i>
+				</div>
+				<h3 class="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-widest">Any Language → Wasm</h3>
+				<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed">Go, Rust, C, C++, AssemblyScript — any toolchain that targets WebAssembly works. Compile to .wasm, deploy with flux. No platform-specific SDK required.</p>
+			</div>
+			<div class="bg-zinc-50 dark:bg-atom-bg p-8 flex flex-col gap-4">
+				<div class="w-8 h-8 border border-zinc-200 dark:border-atom-border flex items-center justify-center shrink-0">
+					<i data-lucide="shield" width="14" height="14" class="text-blue-500"></i>
+				</div>
+				<h3 class="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-widest">WASI Sandboxed</h3>
+				<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed">Your module runs inside the Wasmtime sandbox via WASI. No disk access, no network syscalls — only the capabilities you explicitly grant. Secure by default.</p>
+			</div>
+		</div>
+	</section>
+	// ── HOW IT WORKS ──────────────────────────────────────────────────────────
+	<section class="py-20 border-b border-zinc-200 dark:border-atom-border">
+		<p class="text-[10px] font-mono uppercase tracking-widest text-zinc-400 dark:text-atom-muted mb-2">{ "// how it works" }</p>
+		<h2 class="text-2xl font-black tracking-tight mb-12 text-zinc-900 dark:text-white">Compile. Upload. Execute.</h2>
+		<div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+			<div class="flex flex-col gap-4">
+				<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted">01 /</span>
+				<h3 class="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-widest">Compile to .wasm</h3>
+				<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed font-mono border-l-2 border-zinc-200 dark:border-atom-border pl-3">
+					EXEC :: GOOS=wasip1 GOARCH=wasm go build -o main.wasm .
+					<br/>
+					EXEC :: cargo build --target wasm32-wasip1 --release
+					<br/>
+					Any WASI-compatible toolchain works.
+				</p>
+			</div>
+			<div class="flex flex-col gap-4">
+				<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted">02 /</span>
+				<h3 class="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-widest">Deploy with flux</h3>
+				<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed font-mono border-l-2 border-zinc-200 dark:border-atom-border pl-3">
+					EXEC :: flux deploy
+					<br/>
+					flux uploads your .wasm to object storage and registers the service. No rootfs to build. No VM image to create.
+				</p>
+			</div>
+			<div class="flex flex-col gap-4">
+				<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted">03 /</span>
+				<h3 class="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-widest">Wasmtime executes</h3>
+				<p class="text-xs text-zinc-500 dark:text-atom-muted leading-relaxed font-mono border-l-2 border-zinc-200 dark:border-atom-border pl-3">The daemon downloads your .wasm and calls wasmtime::execute(_start). In-process, memory-only, no disk, no TAP. Traffic is routed through Pingora instantly.</p>
+			</div>
+		</div>
+	</section>
+	// ── CTA ───────────────────────────────────────────────────────────────────
+	<section class="py-24 flex flex-col items-center text-center gap-6">
+		<p class="text-[10px] font-mono uppercase tracking-widest text-zinc-400 dark:text-atom-muted">{ "// get started" }</p>
+		<h2 class="text-3xl font-black tracking-tight text-zinc-900 dark:text-white">
+			Your first Wasm service is free.
+			<br/>
+			Deploy in minutes.
+		</h2>
+		<div class="flex flex-wrap items-center justify-center gap-4">
+			<a
+				href="/auth/login"
+				class="inline-flex items-center px-10 py-4 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-bold uppercase tracking-widest hover:bg-zinc-700 dark:hover:bg-zinc-200 transition-colors"
+			>
+				[ GET STARTED FREE ]
+			</a>
+			<a
+				href="/pricing"
+				hx-get="/pricing"
+				hx-target="#main-content"
+				hx-push-url="/pricing"
+				class="inline-flex items-center px-10 py-4 border border-zinc-300 dark:border-atom-border text-zinc-600 dark:text-atom-muted text-xs font-bold uppercase tracking-widest hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+			>
+				View Pricing
+			</a>
+		</div>
+	</section>
+	// ── TRIPLE VORTEX ANIMATION (liquid blue) ─────────────────────────────────
+	<script>
+	(function(){
+		var c=document.getElementById('liquid-particles');
+		if(!c)return;
+		var ctx=c.getContext('2d'),raf,pts=[],bursts=[],W,H,CX,CY,MR,t=0,frame=0;
+		var exTimer=80+Math.floor(Math.random()*120);
+		// Three blue shades: deep blue, sky blue, cyan
+		var COLS=[[97,175,254],[229,192,123],[247,164,29]];
+		var SQUISH=0.13;
+		var mx=-9999,my=-9999,CR=0;
+
+		var hero=document.getElementById('liquid-hero');
+		function onMove(e){var r=c.getBoundingClientRect();mx=e.clientX-r.left;my=e.clientY-r.top;}
+		function onLeave(){mx=-9999;my=-9999;}
+		if(hero){hero.addEventListener('mousemove',onMove);hero.addEventListener('mouseleave',onLeave);}
+
+		function rs(){
+			var b=c.getBoundingClientRect();
+			W=b.width;H=b.height;
+			c.width=Math.round(W*devicePixelRatio);
+			c.height=Math.round(H*devicePixelRatio);
+			ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+			CX=W*0.5;CY=H*0.46;
+			MR=Math.min(W,H)*0.92;
+		}
+
+		function mk(ci){
+			var band=Math.pow(Math.random(),1.6);
+			var r=MR*(0.54+band*0.44);
+			var omega=3.2/Math.pow(r,0.68);
+			return{
+				ci:ci,
+				r:r,
+				angle:(ci*2.094)+Math.random()*6.2832,
+				omega:omega,
+				dr:-(0.03+Math.random()*0.04),
+				sz:0.6+Math.random()*1.8,
+				baseA:0.30+Math.random()*0.55,
+				dz:(Math.random()-0.5)*0.015,
+				pvx:0,pvy:0,
+			};
+		}
+
+		function reset(p){
+			p.r=MR*(0.84+Math.random()*0.13);
+			p.angle=(p.ci*2.094)+Math.random()*6.2832;
+			p.omega=3.2/Math.pow(p.r,0.68);
+			p.dr=-(0.03+Math.random()*0.04);
+			p.pvx=0;p.pvy=0;
+		}
+
+		function init(){
+			rs();pts=[];bursts=[];frame=0;exTimer=80+Math.floor(Math.random()*120);
+			for(var i=0;i<6600;i++) pts.push(mk(i%3));
+		}
+
+		function tick(){
+			if(!document.getElementById('liquid-particles')){
+				cancelAnimationFrame(raf);
+				if(hero){hero.removeEventListener('mousemove',onMove);hero.removeEventListener('mouseleave',onLeave);}
+				return;
+			}
+			frame++;t+=0.004;
+			ctx.clearRect(0,0,W,H);
+			CR=Math.min(W,H)*0.10;
+
+			// Central ambient glow
+			var cg=ctx.createRadialGradient(CX,CY,MR*0.04,CX,CY,MR*0.75);
+			cg.addColorStop(0,'rgba(59,130,246,0.10)');
+			cg.addColorStop(0.4,'rgba(0,0,0,0)');
+			cg.addColorStop(1,'rgba(0,0,0,0)');
+			ctx.fillStyle=cg;ctx.fillRect(0,0,W,H);
+			// Random mini explosions
+			exTimer--;
+			if(exTimer<=0){
+				var ne=1+Math.floor(Math.random()*3);
+				for(var e=0;e<ne;e++){
+					var ea=Math.random()*6.2832;
+					var er=MR*(0.62+Math.random()*0.28);
+					var ex2=CX+Math.cos(ea)*er;
+					var ey2=CY+Math.sin(ea)*er*SQUISH;
+					var blastR=MR*0.18;
+					for(var j=0;j<pts.length;j++){
+						var pj=pts[j];
+						var pjx=CX+Math.cos(pj.angle)*pj.r+pj.pvx;
+						var pjy=CY+(Math.sin(pj.angle)+pj.dz)*pj.r*SQUISH+pj.pvy;
+						var ddx=pjx-ex2,ddy=pjy-ey2;
+						var dd=Math.sqrt(ddx*ddx+ddy*ddy);
+						if(dd<blastR&&dd>0){
+							var bf=(1-dd/blastR);bf=bf*bf;
+							pj.pvx+=(ddx/dd)*blastR*0.5*bf;
+							pj.pvy+=(ddy/dd)*blastR*0.5*bf;
+						}
+					}
+				}
+				exTimer=120+Math.floor(Math.random()*180);
+			}
+			for(var pass=0;pass<2;pass++){
+				for(var i=0;i<pts.length;i++){
+					var p=pts[i];
+					if(pass===0){
+						p.angle+=p.omega*0.005;
+						p.r+=p.dr*0.012;
+						p.pvx*=0.96;p.pvy*=0.96;
+						if(p.r<MR*0.52){reset(p);}
+					}
+					var cosA=Math.cos(p.angle),sinA=Math.sin(p.angle);
+					var isFront=sinA>0;
+					if(pass===0&&isFront) continue;
+					if(pass===1&&!isFront) continue;
+					var px=CX+cosA*p.r+p.pvx;
+					var py=CY+(sinA+p.dz)*p.r*SQUISH+p.pvy;
+					var cdx=px-mx,cdy=py-my;
+					var cd=Math.sqrt(cdx*cdx+cdy*cdy);
+					if(cd<CR&&cd>0){
+						var cf=(1-cd/CR);cf=cf*cf*cf;
+						px+=(cdx/cd)*CR*0.6*cf;
+						py+=(cdy/cd)*CR*0.6*cf;
+					}
+					var ex=px-CX,ey=(py-CY)/SQUISH;
+					if(Math.sqrt(ex*ex+ey*ey)<MR*0.50) continue;
+					var rNorm=Math.min((p.r-MR*0.52)/(MR*0.46),1.0);
+					var beam=isFront?(0.60+0.40*Math.abs(cosA)):0.32;
+					var alpha=p.baseA*(1.0-rNorm*0.68)*beam;
+					if(cd<CR&&cd>0) alpha=Math.min(alpha*2.0,0.95);
+					var col=COLS[p.ci];
+					ctx.beginPath();
+					ctx.arc(px,py,p.sz,0,6.2832);
+					ctx.fillStyle='rgba('+col[0]+','+col[1]+','+col[2]+','+alpha.toFixed(3)+')';
+					ctx.fill();
+				}
+			}
+			raf=requestAnimationFrame(tick);
+		}
+
+		init();tick();
+		window.addEventListener('resize',init);
+	})();
+	</script>
+}

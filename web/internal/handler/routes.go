@@ -5,46 +5,70 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
+	"github.com/kendricklawton/liquid-metal/web/internal/mw"
 )
 
-// Routes builds and returns the full HTTP handler for the web server.
-func (h *Handler) Routes() http.Handler {
-	r := chi.NewRouter()
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+// Routes builds and returns the chi router for the web BFF.
+func (h *Handler) Routes() chi.Router {
+	router := chi.NewRouter()
 
-	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir("internal/ui/static"))))
+	router.Use(middleware.Logger)
+	router.Use(middleware.Recoverer)
+
+	router.Use(mw.HTMX)
+
+	// Static assets
+	fileServer := http.FileServer(http.Dir("internal/ui/static"))
+	router.Handle("/static/*", http.StripPrefix("/static/", fileServer))
 
 	// Public routes
-	r.Get("/", h.Splash)
-	r.Get("/metal", h.Metal)
-	r.Get("/liquid", h.Liquid)
+	router.Get("/", h.Splash)
+	router.Get("/about", h.About)
+	router.Get("/templates", h.Templates)
+	router.Get("/templates/{slug}", h.TemplateDetail)
+	router.Get("/changelog", h.Changelog)
+	router.Get("/plans", h.Pricing)
+	router.Get("/healthz", h.Healthz)
+	router.Get("/docs", h.Docs)
+	router.Get("/docs/*", h.Docs)
 
-	// Auth — full page navigations only, never HTMX partial swaps
-	r.Route("/auth", func(auth chi.Router) {
-		auth.Get("/login", h.AuthLogin)
-		auth.Get("/callback", h.AuthCallback)
-		auth.Get("/logout", h.AuthLogout)
-		auth.Post("/logout", h.AuthLogout)
-		auth.Get("/cli/login", h.AuthCLILogin)
-		auth.Get("/cli/callback", h.AuthCLICallback)
+	// Authentication flow — must be full page navigations, never HTMX
+	router.Route("/auth", func(r chi.Router) {
+		r.Get("/login", h.AuthLogin)
+		r.Get("/callback", h.AuthCallback)
+		r.Get("/logout", h.AuthLogout)
+		r.Post("/logout", h.AuthLogout)
+		r.Get("/cli/login", h.AuthCLILogin)
+		r.Get("/cli/callback", h.AuthCLICallback)
 	})
 
-	// Protected app routes — require valid lm_session cookie
-	r.Group(func(app chi.Router) {
-		app.Use(h.RequireAuth)
+	// /dashboard → redirect to /{slug} using the slug cookie
+	router.Get("/dashboard", h.DashboardRedirect)
 
-		// /account — user profile
-		app.Get("/account", h.AccountPage)
-
-		// /{slug} — workspace root: services list
-		// /{slug}/billing, /{slug}/settings
-		app.Get("/{slug}", h.ServicesPage)
-		app.Get("/{slug}/billing", h.BillingPage)
-		app.Get("/{slug}/settings", h.SettingsPage)
+	// Protected routes — all behind RequireAuth middleware
+	router.Group(func(protected chi.Router) {
+		protected.Use(h.RequireAuth)
+		protected.Get("/{slug}", h.Dashboard)
+		protected.Get("/{slug}/projects/{projectID}", h.Project)
+		protected.Get("/{slug}/services", h.DashboardServices)
+		protected.Get("/{slug}/deployments", h.DashboardDeployments)
+		protected.Get("/{slug}/logs", h.DashboardLogs)
+		protected.Get("/{slug}/secrets", h.DashboardSecrets)
+		protected.Get("/{slug}/domains", h.DashboardDomains)
+		protected.Get("/{slug}/webhooks", h.DashboardWebhooks)
+		protected.Get("/{slug}/billing", h.DashboardBilling)
+		protected.Get("/{slug}/blueprints", h.DashboardBlueprints)
+		protected.Get("/{slug}/env-groups", h.DashboardEnvGroups)
+		protected.Get("/{slug}/observability", h.DashboardObservability)
+		protected.Get("/{slug}/notifications", h.DashboardNotifications)
+		protected.Get("/{slug}/private-links", h.DashboardPrivateLinks)
+		protected.Get("/{slug}/settings", h.DashboardSettings)
+		protected.Get("/settings", h.Settings)
+		protected.Get("/account", h.Account)
+		protected.Post("/account/delete", h.AccountDelete)
+		protected.Get("/new-workspace", h.NewWorkspace)
+		protected.Post("/new-workspace", h.NewWorkspacePost)
 	})
 
-	return h2c.NewHandler(r, &http2.Server{})
+	return router
 }

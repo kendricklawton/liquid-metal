@@ -15,8 +15,10 @@ pub mod proto {
 use axum::{Router, middleware, routing::get};
 use grpc::service::ServiceServiceImpl;
 use grpc::user::UserServiceImpl;
+use grpc::workspace::WorkspaceServiceImpl;
 use proto::liquidmetal::v1::service_service_server::ServiceServiceServer;
 use proto::liquidmetal::v1::user_service_server::UserServiceServer;
+use proto::liquidmetal::v1::workspace_service_server::WorkspaceServiceServer;
 use std::sync::Arc;
 use tonic::service::Routes as TonicRoutes;
 use tower_http::trace::TraceLayer;
@@ -61,6 +63,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         state: state.clone(),
     }))
     .add_service(UserServiceServer::new(UserServiceImpl {
+        state: state.clone(),
+    }))
+    .add_service(WorkspaceServiceServer::new(WorkspaceServiceImpl {
         state: state.clone(),
     }))
     .into_axum_router();

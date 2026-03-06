@@ -1,0 +1,236 @@
+package pages
+
+import "github.com/kendricklawton/liquid-metal/web/internal/ui/components"
+
+templ DashboardBillingPage(userName string, slug string) {
+	@components.DashboardLayout("Billing | Liquid Metal", userName, slug, "credit-card", "Billing") {
+		@DashboardBillingContent(slug)
+	}
+}
+
+templ DashboardBillingContent(slug string) {
+	<div
+		data-page-title="Billing"
+		data-page-icon="credit-card"
+		class="p-4 flex flex-col gap-4"
+		x-data="{ activeSection: 'plan' }"
+		x-init="$nextTick(function() {
+			var root = document.getElementById('dashboard-content');
+			var obs = new IntersectionObserver(function(entries) {
+				entries.forEach(function(e) { if (e.isIntersecting) activeSection = e.target.id; });
+			}, { root: root, threshold: 0, rootMargin: '0px 0px -80% 0px' });
+			['plan','payment-method','billing-info','included-usage','unbilled-charges','credit-balance','invoice-history'].forEach(function(id) {
+				var el = document.getElementById(id); if (el) obs.observe(el);
+			});
+		})"
+	>
+		// Two-column: main content left, sticky TOC right (xl+)
+		<div class="flex gap-10 xl:flex-row-reverse">
+			// ── TOC sidebar ──────────────────────────────────────────────────
+			<div class="hidden xl:block shrink-0">
+				<div class="sticky top-6">
+					<nav
+						class="relative border-l border-zinc-200 dark:border-atom-border"
+						x-data="{ sections: ['plan','payment-method','billing-info','included-usage','unbilled-charges','credit-balance','invoice-history'] }"
+					>
+						// Active indicator
+						<div
+							class="absolute -left-px w-px h-9 bg-zinc-900 dark:bg-white transition-transform duration-200 ease-out"
+							:style="`transform: translateY(${sections.indexOf(activeSection) * 2.25}rem)`"
+						></div>
+						@billingTocItem("plan", "Plan")
+						@billingTocItem("payment-method", "Payment Method")
+						@billingTocItem("billing-info", "Billing Information")
+						@billingTocItem("included-usage", "Included Usage")
+						@billingTocItem("unbilled-charges", "Unbilled Charges")
+						@billingTocItem("credit-balance", "Credit Balance")
+						@billingTocItem("invoice-history", "Invoice History")
+					</nav>
+				</div>
+			</div>
+			// ── Main content ─────────────────────────────────────────────────
+			<div class="flex-1 min-w-0 flex flex-col gap-6">
+				// ── Plan ─────────────────────────────────────────────────────
+				<div id="plan" class="scroll-mt-6">
+					<div class="border border-zinc-200 dark:border-atom-border p-6 lg:p-8">
+						<h4 class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-8">Plan</h4>
+						<div class="grid grid-cols-1 xl:grid-cols-3 gap-4 xl:gap-8">
+							<div class="text-xs font-bold text-zinc-900 dark:text-white uppercase tracking-widest">Current Plan</div>
+							<div class="border border-zinc-200 dark:border-atom-border p-5 xl:col-span-2">
+								<div class="flex items-start justify-between gap-4">
+									<div>
+										<div class="text-sm font-bold text-zinc-900 dark:text-white mb-1">Free</div>
+										<div class="text-xs text-zinc-500 dark:text-atom-muted">Shared resources for development and side projects.</div>
+									</div>
+									<a
+										href="/plans"
+										class="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 dark:border-atom-border text-[10px] font-bold text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface uppercase tracking-widest transition-colors shrink-0"
+									>
+										<i data-lucide="zap" width="11" height="11"></i>
+										Upgrade
+									</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				// ── Payment Method ────────────────────────────────────────────
+				<div id="payment-method" class="scroll-mt-6">
+					<div class="border border-zinc-200 dark:border-atom-border p-6 lg:p-8">
+						<h4 class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-8">Payment Method</h4>
+						<div class="grid grid-cols-1 xl:grid-cols-3 gap-4 xl:gap-8">
+							<div></div>
+							<div class="border border-zinc-200 dark:border-atom-border p-5 xl:col-span-2">
+								<div class="flex items-center justify-between gap-4">
+									<span class="text-xs text-zinc-500 dark:text-atom-muted">No card on file.</span>
+									<button
+										class="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 dark:border-atom-border text-[10px] font-bold text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface uppercase tracking-widest transition-colors shrink-0"
+									>
+										<i data-lucide="plus" width="11" height="11"></i>
+										Add Card
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				// ── Billing Information ───────────────────────────────────────
+				<div id="billing-info" class="scroll-mt-6">
+					<div class="border border-zinc-200 dark:border-atom-border p-6 lg:p-8">
+						<h4 class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-8">Billing Information</h4>
+						<div class="grid grid-cols-1 xl:grid-cols-3 gap-4 xl:gap-8">
+							<div>
+								<div class="text-xs font-bold text-zinc-900 dark:text-white mb-2">Additional Information</div>
+								<div class="text-xs text-zinc-500 dark:text-atom-muted">Company name, billing address, or VAT number for invoices.</div>
+							</div>
+							<div class="xl:col-span-2">
+								<div class="flex items-center justify-between gap-4">
+									<span class="text-xs text-zinc-500 dark:text-atom-muted">No info provided.</span>
+									<button
+										class="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 dark:border-atom-border text-[10px] font-bold text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface uppercase tracking-widest transition-colors shrink-0"
+									>
+										<i data-lucide="pencil" width="11" height="11"></i>
+										Edit
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				// ── Included Usage ────────────────────────────────────────────
+				<div id="included-usage" class="scroll-mt-6">
+					<div class="border border-zinc-200 dark:border-atom-border p-6 lg:p-8">
+						<h4 class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">Monthly Included Usage</h4>
+						<p class="text-xs text-zinc-500 dark:text-atom-muted mb-8">
+							Applies to the entire workspace. Usage beyond included limits will be charged.
+							<a href="/plans" class="text-zinc-700 dark:text-atom-fg underline">View plans.</a>
+						</p>
+						<div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+							@billingUsageCard("Services", "0", "3")
+							@billingUsageCard("Egress", "0 B", "10 GB")
+							@billingUsageCard("Build Minutes", "0 min", "200 min")
+						</div>
+					</div>
+				</div>
+				// ── Unbilled Charges ──────────────────────────────────────────
+				<div id="unbilled-charges" class="scroll-mt-6">
+					<div class="border border-zinc-200 dark:border-atom-border p-6 lg:p-8">
+						<h4 class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">Unbilled Charges</h4>
+						<p class="text-xs text-zinc-500 dark:text-atom-muted mb-6">Amounts accrued within the current month to date.</p>
+						<span class="text-xs font-mono text-zinc-500 dark:text-atom-muted">No pending charges.</span>
+					</div>
+				</div>
+				// ── Credit Balance ────────────────────────────────────────────
+				<div id="credit-balance" class="scroll-mt-6">
+					<div class="border border-zinc-200 dark:border-atom-border p-6 lg:p-8">
+						<h4 class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">Credit Balance</h4>
+						<p class="text-xs text-zinc-500 dark:text-atom-muted mb-8">Applied to the amount due on your next invoice.</p>
+						<div class="grid grid-cols-1 xl:grid-cols-3 gap-6 xl:gap-8">
+							<div class="xl:col-span-2">
+								<div class="text-[10px] font-mono font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">Total Balance</div>
+								<div class="text-3xl font-mono font-bold text-zinc-900 dark:text-white">$0.00</div>
+							</div>
+							<div>
+								<label class="block text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">Promo Code</label>
+								<div class="flex gap-2">
+									<input
+										type="text"
+										placeholder="Enter promo code"
+										class="flex-1 min-w-0 px-3 py-1.5 border border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg text-xs font-mono text-zinc-900 dark:text-atom-fg placeholder-zinc-400 dark:placeholder-atom-muted outline-none focus:border-zinc-400 dark:focus:border-atom-fg"
+									/>
+									<button
+										class="px-3 py-1.5 text-[10px] font-bold text-zinc-300 dark:text-atom-border border border-zinc-200 dark:border-atom-border uppercase tracking-widest cursor-not-allowed"
+										disabled
+									>Apply</button>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				// ── Invoice History ───────────────────────────────────────────
+				<div id="invoice-history" class="scroll-mt-6">
+					<div class="border border-zinc-200 dark:border-atom-border p-6 lg:p-8">
+						<h4 class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-2">Invoice History</h4>
+						<p class="text-xs text-zinc-500 dark:text-atom-muted mb-6">View or download past invoices.</p>
+						<div class="border border-zinc-200 dark:border-atom-border overflow-x-auto">
+							<table class="w-full border-collapse">
+								<thead>
+									<tr class="border-b border-zinc-200 dark:border-atom-border bg-zinc-100 dark:bg-atom-surface">
+										<th class="text-left px-4 py-2.5 text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest whitespace-nowrap">Date</th>
+										<th class="text-left px-4 py-2.5 text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest">Status</th>
+										<th class="text-right px-4 py-2.5 text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest">Total</th>
+										<th class="text-right px-4 py-2.5 text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest whitespace-nowrap">Credits</th>
+										<th class="text-right px-4 py-2.5 text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest whitespace-nowrap">Billed</th>
+										<th class="w-8"></th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr class="border-b border-zinc-200 dark:border-atom-border hover:bg-zinc-50 dark:hover:bg-atom-surface">
+										<td class="px-4 py-3 text-xs font-mono text-zinc-900 dark:text-atom-fg whitespace-nowrap">March, 2026</td>
+										<td class="px-4 py-3">
+											<span class="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 dark:text-atom-green uppercase tracking-widest">
+												<i data-lucide="check" width="11" height="11"></i>
+												Paid
+											</span>
+										</td>
+										<td class="px-4 py-3 text-xs font-mono text-zinc-500 dark:text-atom-muted text-right">$0.00</td>
+										<td class="px-4 py-3 text-xs font-mono text-zinc-500 dark:text-atom-muted text-right">$0.00</td>
+										<td class="px-4 py-3 text-xs font-mono font-bold text-zinc-900 dark:text-atom-fg text-right">$0.00</td>
+										<td class="px-4 py-3 w-8">
+											<button class="flex items-center justify-center w-6 h-6 text-zinc-400 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors">
+												<i data-lucide="more-horizontal" width="13" height="13"></i>
+											</button>
+										</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+templ billingTocItem(id string, label string) {
+	<a
+		href={ templ.SafeURL("#" + id) }
+		data-section={ id }
+		@click.prevent="activeSection = $el.dataset.section; document.getElementById($el.dataset.section)?.scrollIntoView({ behavior: 'smooth' })"
+		class="flex items-center h-9 py-2 pl-4 pr-8 text-xs font-semibold transition-colors whitespace-nowrap"
+		:class="$el.dataset.section === activeSection ? 'text-zinc-900 dark:text-white' : 'text-zinc-500 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg'"
+	>{ label }</a>
+}
+
+templ billingUsageCard(label string, value string, limit string) {
+	<div class="border border-zinc-200 dark:border-atom-border p-4">
+		<div class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest mb-4">{ label }</div>
+		<div class="flex items-baseline gap-2 mb-4">
+			<span class="text-sm font-mono font-bold text-zinc-900 dark:text-white">{ value }</span>
+			<span class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted">/ { limit }</span>
+		</div>
+		<div class="relative h-0.5 w-full bg-zinc-200 dark:bg-atom-border overflow-hidden">
+			<div class="absolute top-0 left-0 h-full bg-zinc-900 dark:bg-atom-fg" style="width: 0%"></div>
+		</div>
+	</div>
+}
