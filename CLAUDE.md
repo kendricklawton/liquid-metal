@@ -1,5 +1,17 @@
 # Machine Name — System Protocol
 
+## Focus: Two Products
+
+### Product 1 — Metal (Firecracker)
+Run any binary (Go APIs, HTMX apps, etc.) in hardware-isolated Firecracker microVMs. Fast, secure, KVM-backed. Users ship a binary, we boot it in a VM.
+
+### Product 2 — Flash (WebAssembly)
+Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, memory-only execution, no disk, no TAP. Users ship a `.wasm` file, we execute it in-process.
+
+**No Kubernetes. No K3s. No managed cloud. Ever.**
+
+---
+
 ## Architecture: Single-Node, Two Engines
 
 No Kubernetes. One bare-metal node. Two micro-runtimes. Everything is Rust.
@@ -96,14 +108,35 @@ wasm = "main.wasm"
 - **Object storage**: RustFS (S3-compat) for rootfs and wasm artifact staging
 - **No K3s. No Kubernetes. No managed cloud.**
 
+## Dashboard (Go + HTMX)
+
+The platform dashboard is a Go service — **not** Rust. It follows the project-platform pattern:
+
+```
+Browser
+   ↓ HTMX (HTML fragments)
+Go Dashboard (Templ + chi + ConnectRPC client)  :3000
+   ↓ ConnectRPC (protobuf over h2c)
+Rust API (tonic + Axum)                         :7070
+   ↓ raw SQL (tokio-postgres)
+Postgres
+```
+
+- Go dashboard has **zero direct DB access** — all data flows through the Rust API via ConnectRPC
+- Proto definitions in `proto/` at workspace root → `buf` generates Rust (tonic) + Go (connect-go) stubs
+- Templ for server-side HTML templates, HTMX for partial swaps, chi for routing
+- Alpine.js for lightweight reactivity only where needed
+- No SPA frameworks
+
 ## Constraints
 
+- No Kubernetes. No K3s. No managed cloud (AWS/GCP/Azure/Vercel/Heroku). Ever.
 - No rounded corners in UI (`rounded-none` everywhere)
-- No AWS/GCP/Azure/Vercel/Heroku suggestions
-- No GORM/ORMs — raw SQL via tokio-postgres
+- No GORM/ORMs — raw SQL via tokio-postgres (Rust) and sqlc + pgx (Go)
 - All env config via env vars, no hardcoded addresses
 - Firecracker and TAP/netlink are Linux-only — gated with `#[cfg(target_os = "linux")]`
 - `wasmtime` runs on all platforms (good for local dev on macOS)
+- Go dashboard only talks to Rust API — never directly to Postgres or NATS
 
 ## Dev Workflow
 
