@@ -43,9 +43,10 @@ tasks:
       - cargo run -p proxy
 
   dev:daemon:
-    desc: "Run the daemon locally (requires NATS; TAP/Firecracker requires Linux)"
+    desc: "Run the daemon locally (requires NATS; TAP/Firecracker/cgroup requires Linux)"
     env:
       NATS_URL: "nats://127.0.0.1:4222"
+      ROOTFS_DEVICE: "8:0"   # override in .env for your node
       RUST_LOG: "daemon=debug"
     cmds:
       - cargo run -p daemon
@@ -56,6 +57,80 @@ tasks:
       - cargo run -p cli -- {{.CLI_ARGS}}
 
   # ── T480 / Linux one-time setup ───────────────────────────────────────────
+  security:setup:
+    desc: "Full security setup: jailer user, cpuset, IFB, Cilium policy (run as root, after metal:setup)"
+    cmds:
+      # Create the unprivileged user/group Firecracker runs as inside the jailer
+      - |
+        if ! id liquid-metal-vm &>/dev/null; then
+          useradd --system --no-create-home --uid 10000 --gid 10000 liquid-metal-vm 2>/dev/null || \
+          useradd --system --no-create-home --uid 10000 liquid-metal-vm
+          echo "created user liquid-metal-vm (uid=10000)"
+        else
+          echo "liquid-metal-vm user already exists"
+        fi
+      # Jailer chroot base directory
+      - mkdir -p /srv/jailer
+      # Enable cpuset controller in the liquid-metal cgroup subtree
+      - mkdir -p /sys/fs/cgroup/liquid-metal
+      - |
+        for ctrl in io cpuset; do
+          if ! grep -q "$ctrl" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
+            echo "+$ctrl" | tee /sys/fs/cgroup/cgroup.subtree_control
+          fi
+        done
+        echo "cgroup v2 controllers: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
+      # IFB module for ingress bandwidth shaping
+      - modprobe ifb numifbs=256 2>/dev/null || true
+      # Apply Cilium network isolation policy
+      - |
+        if command -v cilium &>/dev/null; then
+          cilium policy import deploy/cilium/vm-isolation.yaml && echo "Cilium policy applied"
+        else
+          echo "WARNING: cilium CLI not found — skipping network policy"
+          echo "  Install Cilium and run: cilium policy import deploy/cilium/vm-isolation.yaml"
+        fi
+      - |
+        echo ""
+        echo "Security setup complete. Add to .env:"
+        echo "  USE_JAILER=true"
+        echo "  JAILER_BIN=/usr/local/bin/jailer"
+        echo "  JAILER_CHROOT_BASE=/srv/jailer"
+        echo "  JAILER_UID=10000"
+        echo "  JAILER_GID=10000"
+        echo "  PHYSICAL_CORES=4          # physical cores on your node"
+        echo "  ROOTFS_DEVICE=8:0         # from: lsblk -o NAME,MAJ:MIN"
+
+  metal:quota-setup:
+    desc: "One-time Triple-Lock setup: cgroup v2 io controller + IFB module (run as root)"
+    cmds:
+      # Layer 2: verify cgroup v2 unified hierarchy
+      - |
+        if ! grep -q "^cgroup2" /proc/mounts 2>/dev/null; then
+          echo "ERROR: cgroup v2 not mounted."
+          echo "  Add 'systemd.unified_cgroup_hierarchy=1' to kernel cmdline and reboot."
+          exit 1
+        fi
+        echo "cgroup v2 OK"
+      # Create the liquid-metal subtree and enable the io controller
+      - mkdir -p /sys/fs/cgroup/liquid-metal
+      - |
+        if ! grep -q "\bio\b" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
+          echo "+io" | tee /sys/fs/cgroup/cgroup.subtree_control
+          echo "io controller enabled"
+        else
+          echo "io controller already enabled"
+        fi
+      # Layer 3: IFB module for ingress shaping (tap0 → ifb0, etc.)
+      - modprobe ifb numifbs=256 2>/dev/null || true
+      - echo "ifb" >> /etc/modules-load.d/liquid-metal.conf 2>/dev/null || true
+      - |
+        echo ""
+        echo "Triple-Lock setup complete."
+        echo "Set ROOTFS_DEVICE in .env to the block device of your rootfs images:"
+        echo "  lsblk -o NAME,MAJ:MIN   # find major:minor (e.g. 8:0 for /dev/sda)"
+        echo "  echo 'ROOTFS_DEVICE=8:0' >> .env"
+
   metal:setup:
     desc: "One-time setup: br0 bridge, /run/firecracker, Firecracker binary"
     cmds:

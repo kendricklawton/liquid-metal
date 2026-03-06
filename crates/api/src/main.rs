@@ -1,3 +1,4 @@
+mod migrations;
 mod nats;
 mod routes;
 
@@ -32,6 +33,10 @@ async fn main() -> Result<()> {
         .max_size(16)
         .build()
         .context("building postgres pool")?;
+
+    // Run migrations before accepting traffic
+    migrations::run(&pool).await.context("running migrations")?;
+    tracing::info!("migrations applied");
 
     // NATS JetStream
     let nc = async_nats::connect(&nats_url)

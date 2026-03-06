@@ -21,6 +21,9 @@ hyper-util     = { workspace = true }
 http-body-util = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+tokio-postgres     = { workspace = true }
+deadpool-postgres  = { workspace = true }
+sha2               = { workspace = true }
 # Wasm engine
 wasmtime      = "29"
 wasmtime-wasi = "29"
