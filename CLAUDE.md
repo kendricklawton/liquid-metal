@@ -1,87 +1,102 @@
-# Machine Name — System Protocol
+# liquid-metal — Agent Protocol
 
-## Focus: Two Products
+## Mission: Two Products, No Kubernetes, Ever
 
 ### Product 1 — Metal (Firecracker)
-Run any binary (Go APIs, HTMX apps, etc.) in hardware-isolated Firecracker microVMs. Fast, secure, KVM-backed. Users ship a binary, we boot it in a VM.
+Hardware-isolated microVMs via AWS Firecracker + KVM. Users ship a Linux binary, we boot it in a VM with a dedicated ext4 rootfs and TAP networking. ~100–250ms cold start.
 
 ### Product 2 — Flash (WebAssembly)
-Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, memory-only execution, no disk, no TAP. Users ship a `.wasm` file, we execute it in-process.
+In-process Wasm execution via Wasmtime/WASI. Users ship a `.wasm` file, we execute it directly. Sub-millisecond cold starts, memory-only, no disk, no TAP.
 
-**No Kubernetes. No K3s. No managed cloud. Ever.**
+**No Kubernetes. No K3s. No managed cloud. No exceptions.**
 
 ---
 
-## Architecture: Single-Node, Two Engines
-
-No Kubernetes. One bare-metal node. Two micro-runtimes. Everything is Rust.
+## Architecture
 
 ```
 Internet
     │
     ▼
-┌─────────────────────────────────────┐
-│  Pingora Edge Proxy  (proxy crate)  │  ← binds to public IP :80/:443
-│  *.machinename.dev → slug lookup    │
-└──────────────┬──────────────────────┘
-               │
-    ┌──────────┴──────────┐
-    │                     │
-    ▼                     ▼
-engine: metal        engine: flash
-Firecracker VM       Wasmtime executor
-TAP → br0            in-process, <1ms
-~100ms cold start    no disk, no TAP
+Pingora Edge Proxy  (proxy crate, :80/:443)
+*.machinename.dev → slug → upstream_addr
+    │
+    ├─────────────────────────┐
+    ▼                         ▼
+engine: metal            engine: flash
+Firecracker microVM      Wasmtime executor
+TAP → br0                in-process, <1ms
+~100–250ms cold start    no disk, no TAP
 ```
 
-## The Two Engines
+---
 
-| Feature       | Metal (Firecracker)              | Flash (Wasmtime/WASI)          |
-|---------------|----------------------------------|--------------------------------|
-| Isolation     | Hardware KVM                     | Wasm sandbox                   |
-| Cold start    | ~100–250ms                       | <1ms                           |
-| Filesystem    | Dedicated ext4 rootfs            | Memory-only (WASI VFS)         |
-| Networking    | TAP device → br0 bridge          | Host port via proxy            |
-| Best for      | Go APIs, HTMX apps, any binary   | Functions, fast middleware     |
-| User builds   | `go build -o main` → ext4 image  | `GOOS=wasip1 go build -o main.wasm` |
-
-## Crate Map
+## Crate Map (Rust)
 
 ```
 crates/
-├── common/     Shared types: ProvisionEvent, Engine enum, config helpers
-├── api/        Axum REST API — service CRUD, publishes to NATS
-├── proxy/      Pingora edge router — slug → upstream_addr DB lookup
-├── daemon/     Provision loop — Firecracker + Wasmtime execution
-└── cli/        `plat` binary — init, deploy, status, logs
+├── common/   Engine enum, EngineSpec, ProvisionEvent, config helpers
+├── api/      Axum + tonic — ConnectRPC server, publishes ProvisionEvent to NATS
+├── proxy/    Pingora — slug → upstream_addr DB lookup → route
+├── daemon/   NATS consumer — Firecracker provisioner + Wasmtime executor
+└── cli/      plat binary — init, deploy, status, logs
 ```
 
-## Key Data Flow
+## Web (Go)
+
+```
+web/
+├── cmd/web/          chi server, ConnectRPC client, :3000
+└── internal/
+    ├── handler/      HTMX request handlers (HX-Request/HX-Target detection)
+    └── ui/           Templ components + pages
+```
+
+---
+
+## Data Flow
 
 ```
 plat deploy
-  → POST /services  (api crate, Axum)
-  → publish platform.provision  (NATS JetStream)
-  → daemon consumes event
-      engine=metal → spawn firecracker → configure VM → boot
-      engine=flash → wasmtime::execute(_start)
-  → upstream_addr written to Postgres services table
-  → proxy routes *.machinename.dev/slug → upstream_addr
+  → POST /services          (api crate — Axum)
+  → publish ProvisionEvent  (NATS JetStream)
+  → daemon consumes
+      metal → spawn Firecracker → boot VM → write upstream_addr
+      flash → wasmtime::execute(_start) → write upstream_addr
+  → proxy routes slug → upstream_addr
 ```
 
-## User Workflow (3 commands)
+## Web Data Flow
 
-```bash
-plat init               # creates machine.toml
-plat deploy             # builds + ships to the node
-# → your app is live at <name>.machinename.dev
-plat status             # check health
+```
+Browser (HTMX)
+  → Go web handler (chi)
+  → ConnectRPC call (protobuf/h2c)
+  → Rust API (tonic + Axum)
+  → tokio-postgres
+  → Postgres
 ```
 
-### machine.toml (Metal — Go API, HTMX, anything)
+Go web has **zero direct DB or NATS access**. All data flows through the Rust API via ConnectRPC.
+
+---
+
+## Proto / ConnectRPC
+
+- Definitions live in `proto/` at workspace root
+- `buf` generates:
+  - Rust stubs → consumed by `crates/api` (tonic)
+  - Go stubs → consumed by `web/` (connectrpc/connect-go)
+- The proto contract is the boundary between Go and Rust
+
+---
+
+## machine.toml (user config)
+
 ```toml
+# Metal
 [service]
-name   = "my-go-api"
+name   = "my-app"
 engine = "metal"
 port   = 8080
 
@@ -90,65 +105,54 @@ vcpu      = 1
 memory_mb = 128
 ```
 
-### machine.toml (Flash — Wasm function)
 ```toml
+# Flash
 [service]
-name   = "my-handler"
+name   = "my-fn"
 engine = "flash"
 
 [flash]
 wasm = "main.wasm"
 ```
 
+---
+
 ## Infrastructure
 
-- **Node**: Hivelocity bare metal, Dallas hub
+- **Node**: Hivelocity bare metal, Dallas
 - **Network**: Floating IP → Pingora → TAP/br0 (metal) or in-process (flash)
-- **Persistence**: NATS JetStream (event bus) + PostgreSQL (state)
-- **Object storage**: RustFS (S3-compat) for rootfs and wasm artifact staging
-- **No K3s. No Kubernetes. No managed cloud.**
+- **Event bus**: NATS JetStream
+- **State**: PostgreSQL — raw SQL, refinery migrations in `migrations/`
+- **Artifacts**: RustFS (S3-compat) — rootfs images + wasm binaries
 
-## Dashboard (Go + HTMX)
+---
 
-The platform dashboard is a Go service — **not** Rust. It follows the project-platform pattern:
+## Hard Constraints
 
-```
-Browser
-   ↓ HTMX (HTML fragments)
-Go Dashboard (Templ + chi + ConnectRPC client)  :3000
-   ↓ ConnectRPC (protobuf over h2c)
-Rust API (tonic + Axum)                         :7070
-   ↓ raw SQL (tokio-postgres)
-Postgres
-```
+- **No Kubernetes, K3s, or any orchestrator**
+- **No AWS/GCP/Azure/Vercel/Heroku** — bare metal only
+- **No ORMs** — tokio-postgres (Rust), sqlc + pgx (Go)
+- **No SPA frameworks** — HTMX + Templ only, Alpine.js sparingly
+- **No rounded corners** — `rounded-none` everywhere in UI
+- **No hardcoded addresses** — all config via env vars (`DATABASE_URL`, `NATS_URL`, `BIND_ADDR`, `API_URL`)
+- **Firecracker + TAP are Linux-only** — gate with `#[cfg(target_os = "linux")]`
+- **wasmtime runs on all platforms** — safe for local macOS dev
+- **Go web never touches Postgres or NATS directly**
 
-- Go dashboard has **zero direct DB access** — all data flows through the Rust API via ConnectRPC
-- Proto definitions in `proto/` at workspace root → `buf` generates Rust (tonic) + Go (connect-go) stubs
-- Templ for server-side HTML templates, HTMX for partial swaps, chi for routing
-- Alpine.js for lightweight reactivity only where needed
-- No SPA frameworks
-
-## Constraints
-
-- No Kubernetes. No K3s. No managed cloud (AWS/GCP/Azure/Vercel/Heroku). Ever.
-- No rounded corners in UI (`rounded-none` everywhere)
-- No GORM/ORMs — raw SQL via tokio-postgres (Rust) and sqlc + pgx (Go)
-- All env config via env vars, no hardcoded addresses
-- Firecracker and TAP/netlink are Linux-only — gated with `#[cfg(target_os = "linux")]`
-- `wasmtime` runs on all platforms (good for local dev on macOS)
-- Go dashboard only talks to Rust API — never directly to Postgres or NATS
+---
 
 ## Dev Workflow
 
 ```bash
-task up           # start Postgres + NATS via docker compose
-task dev:api      # Axum API on :3000
-task dev:proxy    # Pingora on :8080
-task dev:daemon   # NATS consumer (TAP/FC skipped on macOS)
+task up           # Postgres + NATS (docker compose)
+task dev:api      # Rust API :7070
+task dev:web      # Go web :3000
+task dev:proxy    # Pingora :8080
+task dev:daemon   # NATS consumer (Firecracker skipped on macOS)
 task dev:cli -- deploy
 ```
 
-### T480 Linux Setup (once, as root)
+### Linux bare-metal setup (once, as root)
 ```bash
 task metal:setup  # br0, /run/firecracker, Firecracker binary
 ```
