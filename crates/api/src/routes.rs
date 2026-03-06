@@ -142,8 +142,8 @@ pub async fn upload_url(
 pub fn services_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/",    post(create_service))
-        .route("/:id", get(get_service))
-        .route("/:id", delete(delete_service))
+        .route("/{id}", get(get_service))
+        .route("/{id}", delete(delete_service))
 }
 
 #[derive(Debug, Deserialize)]

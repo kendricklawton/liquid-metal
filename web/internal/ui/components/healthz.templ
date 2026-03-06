@@ -1,0 +1,12 @@
+package components
+
+templ HealthzStatus(actionURL string, buttonText string) {
+	<div id="status-container" class="absolute w-full animate-fade-in flex flex-col items-center">
+		<p class="text-xs text-black dark:text-green-500 font-bold tracking-widest uppercase mb-6">
+			[ SYSTEM ONLINE_ ]
+		</p>
+		<a href={ templ.SafeURL(actionURL) } class="px-6 py-2 border border-black dark:border-zinc-700 bg-transparent text-black dark:text-white text-xs font-bold tracking-[0.2em] uppercase hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black transition-all backdrop-blur-sm">
+			{ buttonText }
+		</a>
+	</div>
+}

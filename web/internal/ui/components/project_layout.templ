@@ -1,0 +1,434 @@
+package components
+
+templ ProjectLayout(title string, userName string, workspaceSlug string, projectID string, projectName string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{ title }</title>
+			<link rel="preconnect" href="https://fonts.googleapis.com"/>
+			<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+			<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+			<link rel="stylesheet" href="/static/styles.css"/>
+			<style>
+				[x-cloak] { display: none !important; }
+				.scroll-container > div { content-visibility: auto; contain-intrinsic-size: auto 44px; }
+				.no-transitions *, .no-transitions *::before, .no-transitions *::after { transition: none !important; }
+			</style>
+			// Theme — blocking script prevents FOUC
+			<script>
+				if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+					document.documentElement.classList.add('dark');
+				} else {
+					document.documentElement.classList.remove('dark');
+				}
+				window.toggleTheme = function() {
+					document.documentElement.classList.add('no-transitions');
+					if (document.documentElement.classList.contains('dark')) {
+						document.documentElement.classList.remove('dark');
+						localStorage.theme = 'light';
+					} else {
+						document.documentElement.classList.add('dark');
+						localStorage.theme = 'dark';
+					}
+					requestAnimationFrame(function() { requestAnimationFrame(function() { document.documentElement.classList.remove('no-transitions'); }); });
+				}
+			</script>
+			<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+			<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+			<script src="https://unpkg.com/lucide@latest"></script>
+			<script>
+				document.addEventListener("DOMContentLoaded", () => { lucide.createIcons(); });
+				document.addEventListener('htmx:afterSwap', () => { lucide.createIcons(); });
+			</script>
+			<script>
+				// Sync header page title + icon on HTMX partial swaps
+				document.addEventListener('htmx:afterSwap', function() {
+					var content = document.getElementById('dashboard-content');
+					if (!content || !content.firstElementChild) return;
+					var el = content.firstElementChild;
+					var newTitle = el.dataset.pageTitle;
+					var newIcon = el.dataset.pageIcon;
+					var titleEl = document.getElementById('header-page-title');
+					var iconEl = document.getElementById('header-page-icon');
+					if (titleEl && newTitle) titleEl.textContent = newTitle;
+					if (iconEl && newIcon) {
+						var fresh = document.createElement('i');
+						fresh.setAttribute('data-lucide', newIcon);
+						fresh.setAttribute('width', '14');
+						fresh.setAttribute('height', '14');
+						fresh.id = 'header-page-icon';
+						fresh.className = 'text-zinc-500 dark:text-atom-muted shrink-0';
+						iconEl.replaceWith(fresh);
+						lucide.createIcons();
+					}
+				});
+			</script>
+			<script>
+				// Active nav — toggle state classes without overwriting layout classes.
+				var NAV_ACTIVE_ADD    = ['font-bold','text-zinc-900','dark:text-white','bg-zinc-100','dark:bg-atom-surface','border-zinc-900','dark:border-white'];
+				var NAV_ACTIVE_REMOVE = ['text-zinc-500','dark:text-atom-muted','hover:text-zinc-900','dark:hover:text-atom-fg','hover:bg-zinc-50','dark:hover:bg-atom-surface','border-transparent'];
+				function updateDashNav() {
+					var p = window.location.pathname;
+					document.querySelectorAll('[data-dash-href]').forEach(function(a) {
+						var active = a.dataset.dashHref === p;
+						NAV_ACTIVE_ADD.forEach(function(c) { a.classList.toggle(c, active); });
+						NAV_ACTIVE_REMOVE.forEach(function(c) { a.classList.toggle(c, !active); });
+					});
+				}
+				document.addEventListener('DOMContentLoaded', updateDashNav);
+				document.addEventListener('htmx:pushedIntoHistory', updateDashNav);
+				document.addEventListener('htmx:replacedInHistory', updateDashNav);
+			</script>
+		</head>
+		<body
+			class="bg-zinc-50 dark:bg-atom-bg text-zinc-900 dark:text-atom-fg font-sans selection:bg-atom-blue/30"
+			style="height: 100dvh; display: flex; overflow: hidden;"
+			x-data="{ sidebarOpen: window.innerWidth >= 1024, paletteOpen: false }"
+			x-init="window.addEventListener('resize', () => { sidebarOpen = window.innerWidth >= 1024 }); $watch('sidebarOpen', () => $nextTick(() => lucide.createIcons()))"
+			@keydown.window="if (($event.metaKey || $event.ctrlKey) &amp;&amp; $event.key === 'k') { $event.preventDefault(); paletteOpen = !paletteOpen; }"
+		>
+			// ── SIDEBAR BACKDROP (mobile only) ──────────────────────────────────
+			<div
+				x-show="sidebarOpen"
+				x-cloak
+				class="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm lg:hidden"
+				@click="sidebarOpen = false"
+			></div>
+			// ── SIDEBAR ──────────────────────────────────────────────────────────
+			<aside
+				class="flex flex-col border-r border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg fixed inset-y-0 left-0 z-40 w-72 lg:relative lg:z-auto lg:transition-[width] lg:duration-150"
+				:class="sidebarOpen ? 'translate-x-0 lg:w-72' : '-translate-x-full lg:translate-x-0 lg:w-12'"
+				style="transition: transform 0.15s;"
+			>
+				// ── Sidebar header: workspace selector ────────────────────────
+				<div
+					class="relative h-14 flex items-center shrink-0 border-b border-zinc-200 dark:border-atom-border"
+					x-data="{ workspaceOpen: false }"
+					@click.outside="workspaceOpen = false"
+				>
+					// Expanded: icon | separator | button+dropdown
+					<template x-if="sidebarOpen">
+						<div class="flex items-center flex-1 h-full">
+							<div class="flex items-center justify-center pl-4 pr-3 h-full shrink-0">
+								<i data-lucide="layers" width="17" height="17" class="text-zinc-900 dark:text-white"></i>
+							</div>
+							<div class="w-px h-5 bg-zinc-200 dark:bg-atom-border shrink-0"></div>
+							<div class="relative flex-1 h-full">
+								<button
+									@click="workspaceOpen = !workspaceOpen"
+									class="flex items-center gap-2.5 w-full pl-3 pr-4 h-full hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors"
+								>
+									<div class="w-7 h-7 bg-zinc-900 dark:bg-white flex items-center justify-center shrink-0">
+										if len(workspaceSlug) > 0 {
+											<span class="text-[10px] font-bold text-white dark:text-zinc-900 uppercase leading-none">{ string([]rune(workspaceSlug)[0:1]) }</span>
+										}
+									</div>
+									<span class="text-sm font-semibold text-zinc-900 dark:text-white truncate flex-1 text-left">{ workspaceSlug }</span>
+									<i data-lucide="chevrons-up-down" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+								</button>
+								// Team dropdown
+								<div
+									x-show="workspaceOpen"
+									x-cloak
+									class="absolute left-0 top-full z-50 w-72 border border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg shadow-xl"
+								>
+									<div class="flex items-start gap-3 px-4 py-4 border-b border-zinc-200 dark:border-atom-border">
+										<div class="w-7 h-7 bg-zinc-900 dark:bg-white flex items-center justify-center shrink-0 mt-0.5">
+											if len(workspaceSlug) > 0 {
+												<span class="text-[10px] font-bold text-white dark:text-zinc-900 uppercase leading-none">{ string([]rune(workspaceSlug)[0:1]) }</span>
+											}
+										</div>
+										<div class="flex-1 min-w-0">
+											<div class="flex items-center gap-2 mb-1">
+												<span class="text-sm font-bold text-zinc-900 dark:text-white truncate">{ workspaceSlug }</span>
+												<span class="text-[9px] font-bold text-zinc-500 dark:text-atom-muted bg-zinc-100 dark:bg-atom-surface border border-zinc-200 dark:border-atom-border px-1.5 py-0.5 uppercase tracking-wider shrink-0">Free</span>
+											</div>
+											<span class="text-xs text-zinc-500 dark:text-atom-muted">1 member</span>
+										</div>
+									</div>
+									<div class="py-1">
+										<a
+											href={ templ.SafeURL("/" + workspaceSlug + "/billing") }
+											hx-get={ "/" + workspaceSlug + "/billing" }
+											hx-target="#dashboard-content"
+											hx-push-url={ "/" + workspaceSlug + "/billing" }
+											class="flex items-center gap-3 px-4 py-2.5 text-sm text-zinc-700 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+											@click="workspaceOpen = false"
+										>
+											<i data-lucide="credit-card" width="15" height="15" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+											Billing
+										</a>
+										<a
+											href={ templ.SafeURL("/" + workspaceSlug + "/settings") }
+											hx-get={ "/" + workspaceSlug + "/settings" }
+											hx-target="#dashboard-content"
+											hx-push-url={ "/" + workspaceSlug + "/settings" }
+											class="flex items-center gap-3 px-4 py-2.5 text-sm text-zinc-700 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+											@click="workspaceOpen = false"
+										>
+											<i data-lucide="settings" width="15" height="15" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+											Workspace Settings
+										</a>
+									</div>
+									<div class="border-t border-zinc-200 dark:border-atom-border py-1">
+										<a
+											href="/new-workspace"
+											hx-get="/new-workspace"
+											hx-target="#dashboard-content"
+											hx-push-url="/new-workspace"
+											class="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-zinc-700 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+											@click="workspaceOpen = false"
+										>
+											<i data-lucide="plus" width="15" height="15" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+											New Workspace
+										</a>
+									</div>
+								</div>
+							</div>
+							<button
+								@click="sidebarOpen = false"
+								class="lg:hidden flex items-center justify-center w-11 h-full border-l border-zinc-200 dark:border-atom-border text-zinc-400 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors shrink-0"
+								aria-label="Close sidebar"
+							>
+								<i data-lucide="x" width="16" height="16"></i>
+							</button>
+						</div>
+					</template>
+					// Collapsed: layers icon only
+					<template x-if="!sidebarOpen">
+						<button
+							@click="sidebarOpen = true"
+							class="flex items-center justify-center w-full h-full hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors"
+							aria-label="Expand sidebar"
+						>
+							<i data-lucide="layers" width="17" height="17" class="text-zinc-900 dark:text-white"></i>
+						</button>
+					</template>
+				</div>
+												// ── Project nav ───────────────────────────────────────────────────
+				<nav
+					class="flex flex-col gap-1 flex-1 overflow-y-auto overflow-x-hidden"
+					:class="sidebarOpen ? 'p-3' : 'p-1'"
+				>
+					// Back link + project name (expanded only)
+					<template x-if="sidebarOpen">
+						<div class="px-1 pt-1 pb-3 mb-1 border-b border-zinc-200 dark:border-atom-border">
+							<a
+								href={ templ.SafeURL("/" + workspaceSlug) }
+								class="flex items-center gap-1.5 text-[11px] text-zinc-400 dark:text-atom-muted hover:text-zinc-600 dark:hover:text-atom-fg transition-colors mb-3"
+							>
+								<i data-lucide="arrow-left" width="11" height="11" class="shrink-0"></i>
+								Dashboard
+							</a>
+							<div class="flex items-center gap-2.5">
+								<div class="w-7 h-7 bg-zinc-100 dark:bg-atom-surface border border-zinc-200 dark:border-atom-border flex items-center justify-center shrink-0">
+									<i data-lucide="folder" width="13" height="13" class="text-zinc-500 dark:text-atom-muted"></i>
+								</div>
+								<span class="text-sm font-bold text-zinc-900 dark:text-white truncate">{ projectName }</span>
+							</div>
+						</div>
+					</template>
+					@DashNavItem("layout-grid", "Overview", "/"+workspaceSlug+"/projects/"+projectID)
+					@DashNavSection("Manage")
+					@DashNavItem("settings", "Settings", "/"+workspaceSlug+"/projects/"+projectID+"/settings")
+				</nav>
+				// Bottom actions
+				<div
+					class="flex flex-col gap-1 border-t border-zinc-200 dark:border-atom-border shrink-0"
+					:class="sidebarOpen ? 'p-3' : 'p-1'"
+				>
+					@DashNavItem("life-buoy", "Support", "/"+workspaceSlug+"/support")
+				</div>
+			</aside>
+			// ── MAIN ─────────────────────────────────────────────────────────────
+			<div class="flex-1 min-w-0 flex flex-col">
+				// Content header
+				<header
+					class="h-14 shrink-0 flex items-center border-b border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg"
+					x-data="{ userOpen: false }"
+					@keydown.escape.window="userOpen = false"
+				>
+					// Mobile sidebar toggle
+					<button
+						@click="sidebarOpen = true"
+						class="flex items-center justify-center w-12 h-full border-r border-zinc-200 dark:border-atom-border text-zinc-400 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg lg:hidden shrink-0"
+						aria-label="Open sidebar"
+					>
+						<i data-lucide="menu" width="16" height="16"></i>
+					</button>
+					// Project selector dropdown
+					<div class="relative flex items-center h-full border-r border-zinc-200 dark:border-atom-border shrink-0" @click.outside="projectOpen = false">
+						<button
+							@click="projectOpen = !projectOpen"
+							class="flex items-center gap-2.5 px-4 h-full hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors"
+						>
+							<i data-lucide="folder" width="14" height="14" class="text-zinc-500 dark:text-atom-muted shrink-0"></i>
+							<span class="hidden lg:inline text-sm font-medium text-zinc-900 dark:text-white whitespace-nowrap">{ projectName }</span>
+							<i data-lucide="chevron-down" width="13" height="13" class="text-zinc-400 dark:text-atom-muted hidden lg:block"></i>
+						</button>
+						<div
+							x-show="projectOpen"
+							x-cloak
+							class="absolute left-0 top-full mt-0 w-64 z-50 border border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg shadow-lg"
+						>
+							<div class="px-3 pt-2 pb-1">
+								<span class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest">Switch Project</span>
+							</div>
+							<div class="py-1">
+								<div class="flex items-center gap-2.5 pl-0 pr-3 py-2.5 bg-zinc-100 dark:bg-atom-surface border-l-2 border-zinc-900 dark:border-white">
+									<div class="w-8 flex items-center justify-center shrink-0">
+										<i data-lucide="folder" width="13" height="13" class="text-zinc-900 dark:text-white"></i>
+									</div>
+									<span class="text-xs font-semibold text-zinc-900 dark:text-white truncate flex-1">{ projectName }</span>
+								</div>
+							</div>
+							<div class="border-t border-zinc-200 dark:border-atom-border py-1">
+								<a
+									href={ templ.SafeURL("/" + workspaceSlug) }
+									class="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+									@click="projectOpen = false"
+								>
+									<i data-lucide="layout-grid" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+									All Projects
+								</a>
+							</div>
+						</div>
+					</div>
+					// Spacer
+					<div class="flex-1"></div>
+					// Search
+					<button
+						@click="paletteOpen = true"
+						class="hidden lg:flex items-center gap-2 px-4 h-full border-l border-zinc-200 dark:border-atom-border text-sm text-zinc-500 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors shrink-0"
+					>
+						<i data-lucide="search" width="13" height="13"></i>
+						<span>Search</span>
+						<kbd class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted px-1 py-0.5 border border-zinc-200 dark:border-atom-border ml-1">⌘K</kbd>
+					</button>
+					// + Add Service
+					<a
+						href={ templ.SafeURL("/" + workspaceSlug + "/projects/" + projectID + "/new") }
+						class="flex items-center gap-2 px-5 h-full border-l border-zinc-200 dark:border-atom-border bg-zinc-900 dark:bg-white text-[10px] font-bold text-white dark:text-zinc-900 uppercase tracking-widest hover:opacity-80 transition-opacity shrink-0"
+					>
+						<i data-lucide="plus" width="12" height="12"></i>
+						<span class="hidden sm:inline">Add Service</span>
+					</a>
+					// Upgrade
+					<a
+						href={ templ.SafeURL("/plans") }
+						class="hidden lg:flex items-center gap-1.5 px-4 h-full border-l border-zinc-200 dark:border-atom-border text-sm text-zinc-600 dark:text-atom-fg hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors shrink-0"
+					>
+						<i data-lucide="zap" width="13" height="13"></i>
+						<span>Upgrade</span>
+					</a>
+					// Help
+					<button
+						class="hidden lg:flex items-center justify-center w-11 h-full border-l border-zinc-200 dark:border-atom-border text-zinc-400 dark:text-atom-muted hover:text-zinc-900 dark:hover:text-atom-fg hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors shrink-0"
+					>
+						<i data-lucide="circle-help" width="15" height="15"></i>
+					</button>
+					// User avatar dropdown
+					<div class="relative h-full flex items-center border-l border-zinc-200 dark:border-atom-border mr-3 shrink-0" @click.outside="userOpen = false">
+						<button
+							@click="userOpen = !userOpen"
+							class="h-full px-3 flex items-center hover:bg-zinc-100 dark:hover:bg-atom-surface transition-colors"
+						>
+							<div class="w-7 h-7 bg-zinc-900 dark:bg-white flex items-center justify-center shrink-0">
+								if len(userName) > 0 {
+									<span class="text-[10px] font-bold text-white dark:text-zinc-900 uppercase leading-none">{ string([]rune(userName)[0:1]) }</span>
+								}
+							</div>
+						</button>
+						<div
+							x-show="userOpen"
+							x-cloak
+							class="absolute right-0 top-full w-56 z-50 border border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg shadow-lg"
+						>
+							<div class="px-4 py-3 border-b border-zinc-200 dark:border-atom-border">
+								<span class="block text-[11px] font-bold text-zinc-900 dark:text-white truncate">{ userName }</span>
+							</div>
+							<div class="py-1">
+								<a
+									href="/account"
+									class="flex items-center gap-3 px-4 py-2.5 text-xs text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+									@click="userOpen = false"
+								>
+									<i data-lucide="user" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+									Account Settings
+								</a>
+								<button
+									onclick="toggleTheme()"
+									class="flex items-center gap-3 w-full px-4 py-2.5 text-xs text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+									@click="userOpen = false"
+								>
+									<i data-lucide="sun" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0 dark:hidden"></i>
+									<i data-lucide="moon" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0 hidden dark:block"></i>
+									Toggle Theme
+								</button>
+							</div>
+							<div class="border-t border-zinc-200 dark:border-atom-border py-1">
+								<form method="POST" action="/auth/logout">
+									<button
+										type="submit"
+										class="flex items-center gap-3 w-full px-4 py-2.5 text-xs text-zinc-600 dark:text-atom-fg hover:bg-zinc-50 dark:hover:bg-atom-surface transition-colors"
+									>
+										<i data-lucide="log-out" width="13" height="13" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+										Sign Out
+									</button>
+								</form>
+							</div>
+						</div>
+					</div>
+				</header>
+				// Scrollable content
+				<div
+					id="dashboard-content"
+					class="flex-1 min-w-0 overflow-y-auto"
+				>
+					{ children... }
+				</div>
+			</div>
+			// ── COMMAND PALETTE ──────────────────────────────────────────────
+			<div
+				x-show="paletteOpen"
+				x-cloak
+				class="fixed inset-0 z-50"
+				@keydown.escape.window="paletteOpen = false"
+			>
+				<div
+					class="absolute inset-0 bg-black/50 backdrop-blur-sm"
+					@click="paletteOpen = false"
+				></div>
+				<div class="relative z-10 w-full max-w-lg mx-auto mt-[15vh]">
+					<div
+						class="border border-zinc-200 dark:border-atom-border bg-white dark:bg-atom-bg shadow-2xl"
+						@click.outside="paletteOpen = false"
+					>
+						<div class="flex items-center gap-3 px-4 py-3 border-b border-zinc-200 dark:border-atom-border">
+							<i data-lucide="search" width="15" height="15" class="text-zinc-400 dark:text-atom-muted shrink-0"></i>
+							<input
+								type="text"
+								placeholder="Type a command or search..."
+								class="flex-1 bg-transparent text-sm font-mono text-zinc-900 dark:text-atom-fg placeholder-zinc-400 dark:placeholder-atom-muted outline-none"
+								x-ref="paletteInput"
+								x-init="$watch('paletteOpen', val => { if (val) $nextTick(() => $refs.paletteInput.focus()) })"
+							/>
+							<kbd class="text-[10px] font-mono text-zinc-400 dark:text-atom-muted px-1.5 py-0.5 border border-zinc-200 dark:border-atom-border">ESC</kbd>
+						</div>
+						<div class="py-2 max-h-80 overflow-y-auto">
+							<div class="px-3 py-1">
+								<span class="text-[10px] font-bold text-zinc-400 dark:text-atom-muted uppercase tracking-widest">Project</span>
+							</div>
+							@DashPaletteItem("layout-grid", "Overview", "/"+workspaceSlug+"/projects/"+projectID)
+							@DashPaletteItem("settings", "Settings", "/"+workspaceSlug+"/projects/"+projectID+"/settings")
+							<div class="my-1 mx-3 border-t border-zinc-100 dark:border-atom-border"></div>
+							@DashPaletteItem("arrow-left", "Back to Dashboard", "/"+workspaceSlug)
+						</div>
+					</div>
+				</div>
+			</div>
+		</body>
+	</html>
+}
