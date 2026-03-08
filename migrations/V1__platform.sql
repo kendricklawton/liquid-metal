@@ -1,17 +1,14 @@
--- ============================================================================
+
 -- V1: Platform schema — Liquid Metal PaaS
 -- Ported from project-platform/core/migrations (0001–0003)
 --
 -- PK strategy : UUIDv7 (application-generated, time-sortable)
 -- Encryption  : Envelope encryption via KMS for secrets
 -- Partitioning: build_log_lines, audit_log (monthly by created_at)
--- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- ============================================================================
 -- UTILITY: updated_at trigger
--- ============================================================================
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -20,9 +17,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- ============================================================================
 -- USERS
--- ============================================================================
 CREATE TABLE users (
     id                 UUID        PRIMARY KEY,
     email              TEXT        UNIQUE NOT NULL,
@@ -42,9 +37,7 @@ CREATE TRIGGER trg_users_updated_at
     BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ============================================================================
 -- WORKSPACES (formerly "teams" — renamed in 0003_rename_teams_to_workspaces)
--- ============================================================================
 CREATE TABLE workspaces (
     id                       UUID        PRIMARY KEY,
     name                     TEXT        NOT NULL,
@@ -61,9 +54,7 @@ CREATE TRIGGER trg_workspaces_updated_at
     BEFORE UPDATE ON workspaces
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ============================================================================
 -- WORKSPACE MEMBERS (RBAC: owner, member, viewer)
--- ============================================================================
 CREATE TABLE workspace_members (
     workspace_id UUID        NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     user_id      UUID        NOT NULL REFERENCES users(id)      ON DELETE CASCADE,
@@ -74,10 +65,8 @@ CREATE TABLE workspace_members (
 
 CREATE INDEX idx_workspace_members_user ON workspace_members(user_id);
 
--- ============================================================================
 -- PROJECTS
 -- A project is a Git repo + build config. One project → many services.
--- ============================================================================
 CREATE TABLE projects (
     id              UUID        PRIMARY KEY,
     workspace_id    UUID        NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -101,9 +90,7 @@ CREATE TRIGGER trg_projects_updated_at
     BEFORE UPDATE ON projects
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ============================================================================
 -- DOMAINS
--- ============================================================================
 CREATE TABLE domains (
     id                UUID        PRIMARY KEY,
     project_id        UUID        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -124,9 +111,7 @@ CREATE TRIGGER trg_domains_updated_at
     BEFORE UPDATE ON domains
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ============================================================================
 -- SECRETS / ENV VARS (Envelope encryption)
--- ============================================================================
 CREATE TABLE project_env_vars (
     id                  UUID        PRIMARY KEY,
     project_id          UUID        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -147,9 +132,7 @@ CREATE TRIGGER trg_env_vars_updated_at
     BEFORE UPDATE ON project_env_vars
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ============================================================================
 -- WEBHOOKS (GitHub / GitLab / Bitbucket)
--- ============================================================================
 CREATE TABLE webhooks (
     id                      UUID        PRIMARY KEY,
     project_id              UUID        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -169,24 +152,22 @@ CREATE TRIGGER trg_webhooks_updated_at
     BEFORE UPDATE ON webhooks
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ============================================================================
 -- SERVICES
 --
 -- Replaces "deployments" from project-platform. Each service is a live,
 -- running compute unit — either a Firecracker microVM (metal) or a Wasmtime
--- executor (flash). Linked to a project; one project can have multiple
+-- executor (liquid). Linked to a project; one project can have multiple
 -- services (e.g. production + preview).
 --
 -- slug  : Pingora hot-path lookup on every request — must stay fast.
 -- upstream_addr : written by daemon after the VM/Wasm is ready.
--- ============================================================================
 CREATE TABLE services (
     id           UUID        PRIMARY KEY,
     project_id   UUID        REFERENCES projects(id) ON DELETE SET NULL,
     workspace_id UUID        REFERENCES workspaces(id) ON DELETE CASCADE,
     name         TEXT        NOT NULL,
     slug         TEXT        UNIQUE NOT NULL,
-    engine       TEXT        NOT NULL CHECK (engine IN ('metal', 'flash')),
+    engine       TEXT        NOT NULL CHECK (engine IN ('metal', 'liquid')),
 
     -- Git context (set on deploy, null for manually created services)
     branch       TEXT,
@@ -199,7 +180,7 @@ CREATE TABLE services (
     port         INT,
     rootfs_path  TEXT,
 
-    -- Flash engine config
+    -- liquid engine config
     wasm_path    TEXT,
 
     -- Runtime state — written by daemon after boot
@@ -228,12 +209,10 @@ CREATE TRIGGER trg_services_updated_at
     BEFORE UPDATE ON services
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ============================================================================
 -- BUILD LOG LINES (Partitioned by month)
 --
 -- Linked to services (replaces "deployment_id" from project-platform).
 -- PK is (id, created_at) — Postgres requires partition key in PK.
--- ============================================================================
 CREATE TABLE build_log_lines (
     id          UUID        NOT NULL,
     service_id  UUID        NOT NULL,
@@ -269,12 +248,10 @@ CREATE TABLE build_log_lines_2026_12 PARTITION OF build_log_lines
     FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
 CREATE TABLE build_log_lines_default PARTITION OF build_log_lines DEFAULT;
 
--- ============================================================================
 -- AUDIT LOG (Partitioned by month)
 --
 -- Every mutation in the system gets an entry. Partition key in PK required.
 -- Old partitions can be detached and archived to RustFS/S3 after 12–18 months.
--- ============================================================================
 CREATE TABLE audit_log (
     id            UUID        NOT NULL,
     workspace_id  UUID        NOT NULL,
@@ -315,10 +292,8 @@ CREATE TABLE audit_log_2026_12 PARTITION OF audit_log
     FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
 CREATE TABLE audit_log_default PARTITION OF audit_log DEFAULT;
 
--- ============================================================================
 -- USAGE / BILLING
 -- Metrics adapted for Liquid Metal: VM hours, Wasm invocations, bandwidth, storage.
--- ============================================================================
 CREATE TABLE usage_records (
     id           UUID        PRIMARY KEY,
     workspace_id UUID        NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -338,14 +313,11 @@ CREATE TABLE usage_records (
 CREATE INDEX idx_usage_workspace_period ON usage_records(workspace_id, period_start, period_end);
 CREATE INDEX idx_usage_workspace_metric ON usage_records(workspace_id, metric, period_start);
 
--- ============================================================================
 -- DATABASE-LEVEL SAFETY SETTINGS (run as superuser against production DB)
--- ============================================================================
 -- ALTER DATABASE machinename SET statement_timeout              = '30s';
 -- ALTER DATABASE machinename SET lock_timeout                   = '10s';
 -- ALTER DATABASE machinename SET idle_in_transaction_session_timeout = '60s';
 
--- ============================================================================
 -- PARTITION MAINTENANCE
 --
 -- Run monthly via pg_cron or external cron to add next month's partitions:
@@ -358,4 +330,3 @@ CREATE INDEX idx_usage_workspace_metric ON usage_records(workspace_id, metric, p
 -- To archive old partitions:
 --   ALTER TABLE build_log_lines DETACH PARTITION build_log_lines_2026_03;
 --   -- pg_dump → RustFS, then DROP TABLE build_log_lines_2026_03;
--- ============================================================================

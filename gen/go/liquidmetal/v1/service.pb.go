@@ -129,16 +129,18 @@ func (ServiceStatus) EnumDescriptor() ([]byte, []int) {
 type Service struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Slug          string                 `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
-	Engine        Engine                 `protobuf:"varint,4,opt,name=engine,proto3,enum=liquidmetal.v1.Engine" json:"engine,omitempty"`
-	Status        ServiceStatus          `protobuf:"varint,5,opt,name=status,proto3,enum=liquidmetal.v1.ServiceStatus" json:"status,omitempty"`
-	UpstreamAddr  string                 `protobuf:"bytes,6,opt,name=upstream_addr,json=upstreamAddr,proto3" json:"upstream_addr,omitempty"`
-	ProjectId     string                 `protobuf:"bytes,7,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	ProjectId     string                 `protobuf:"bytes,2,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Slug          string                 `protobuf:"bytes,4,opt,name=slug,proto3" json:"slug,omitempty"`
+	Engine        Engine                 `protobuf:"varint,5,opt,name=engine,proto3,enum=liquidmetal.v1.Engine" json:"engine,omitempty"`
+	Status        ServiceStatus          `protobuf:"varint,6,opt,name=status,proto3,enum=liquidmetal.v1.ServiceStatus" json:"status,omitempty"`
+	UpstreamAddr  string                 `protobuf:"bytes,7,opt,name=upstream_addr,json=upstreamAddr,proto3" json:"upstream_addr,omitempty"`
 	CommitSha     string                 `protobuf:"bytes,8,opt,name=commit_sha,json=commitSha,proto3" json:"commit_sha,omitempty"`
 	CommitMessage string                 `protobuf:"bytes,9,opt,name=commit_message,json=commitMessage,proto3" json:"commit_message,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	ProvisionedAt *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=provisioned_at,json=provisionedAt,proto3" json:"provisioned_at,omitempty"`
+	NodeId        string                 `protobuf:"bytes,10,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	ProvisionedAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=provisioned_at,json=provisionedAt,proto3" json:"provisioned_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -180,6 +182,13 @@ func (x *Service) GetId() string {
 	return ""
 }
 
+func (x *Service) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
 func (x *Service) GetName() string {
 	if x != nil {
 		return x.Name
@@ -215,13 +224,6 @@ func (x *Service) GetUpstreamAddr() string {
 	return ""
 }
 
-func (x *Service) GetProjectId() string {
-	if x != nil {
-		return x.ProjectId
-	}
-	return ""
-}
-
 func (x *Service) GetCommitSha() string {
 	if x != nil {
 		return x.CommitSha
@@ -236,9 +238,23 @@ func (x *Service) GetCommitMessage() string {
 	return ""
 }
 
+func (x *Service) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
 func (x *Service) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *Service) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
 	}
 	return nil
 }
@@ -250,10 +266,11 @@ func (x *Service) GetProvisionedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// ListServices
 type ListServicesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ProjectId     string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -295,9 +312,24 @@ func (x *ListServicesRequest) GetProjectId() string {
 	return ""
 }
 
+func (x *ListServicesRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListServicesRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
 type ListServicesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Services      []*Service             `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -339,7 +371,13 @@ func (x *ListServicesResponse) GetServices() []*Service {
 	return nil
 }
 
-// GetService
+func (x *ListServicesResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 type GetServiceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -428,136 +466,6 @@ func (x *GetServiceResponse) GetService() *Service {
 	return nil
 }
 
-// CreateService
-type CreateServiceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Engine        Engine                 `protobuf:"varint,2,opt,name=engine,proto3,enum=liquidmetal.v1.Engine" json:"engine,omitempty"`
-	ProjectId     string                 `protobuf:"bytes,3,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	Port          int32                  `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`                         // metal only
-	Vcpu          int32                  `protobuf:"varint,5,opt,name=vcpu,proto3" json:"vcpu,omitempty"`                         // metal only
-	MemoryMb      int32                  `protobuf:"varint,6,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"` // metal only
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateServiceRequest) Reset() {
-	*x = CreateServiceRequest{}
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateServiceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateServiceRequest) ProtoMessage() {}
-
-func (x *CreateServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateServiceRequest.ProtoReflect.Descriptor instead.
-func (*CreateServiceRequest) Descriptor() ([]byte, []int) {
-	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *CreateServiceRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *CreateServiceRequest) GetEngine() Engine {
-	if x != nil {
-		return x.Engine
-	}
-	return Engine_ENGINE_UNSPECIFIED
-}
-
-func (x *CreateServiceRequest) GetProjectId() string {
-	if x != nil {
-		return x.ProjectId
-	}
-	return ""
-}
-
-func (x *CreateServiceRequest) GetPort() int32 {
-	if x != nil {
-		return x.Port
-	}
-	return 0
-}
-
-func (x *CreateServiceRequest) GetVcpu() int32 {
-	if x != nil {
-		return x.Vcpu
-	}
-	return 0
-}
-
-func (x *CreateServiceRequest) GetMemoryMb() int32 {
-	if x != nil {
-		return x.MemoryMb
-	}
-	return 0
-}
-
-type CreateServiceResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Service       *Service               `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateServiceResponse) Reset() {
-	*x = CreateServiceResponse{}
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateServiceResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateServiceResponse) ProtoMessage() {}
-
-func (x *CreateServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateServiceResponse.ProtoReflect.Descriptor instead.
-func (*CreateServiceResponse) Descriptor() ([]byte, []int) {
-	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *CreateServiceResponse) GetService() *Service {
-	if x != nil {
-		return x.Service
-	}
-	return nil
-}
-
-// DeleteService
 type DeleteServiceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -567,7 +475,7 @@ type DeleteServiceRequest struct {
 
 func (x *DeleteServiceRequest) Reset() {
 	*x = DeleteServiceRequest{}
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[7]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -579,7 +487,7 @@ func (x *DeleteServiceRequest) String() string {
 func (*DeleteServiceRequest) ProtoMessage() {}
 
 func (x *DeleteServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[7]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -592,7 +500,7 @@ func (x *DeleteServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteServiceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteServiceRequest) Descriptor() ([]byte, []int) {
-	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{7}
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *DeleteServiceRequest) GetId() string {
@@ -610,7 +518,7 @@ type DeleteServiceResponse struct {
 
 func (x *DeleteServiceResponse) Reset() {
 	*x = DeleteServiceResponse{}
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[8]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -622,7 +530,7 @@ func (x *DeleteServiceResponse) String() string {
 func (*DeleteServiceResponse) ProtoMessage() {}
 
 func (x *DeleteServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[8]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -635,21 +543,21 @@ func (x *DeleteServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteServiceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteServiceResponse) Descriptor() ([]byte, []int) {
-	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{8}
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{6}
 }
 
-// GetServiceLogs
 type GetServiceLogsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ServiceId     string                 `protobuf:"bytes,1,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
 	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetServiceLogsRequest) Reset() {
 	*x = GetServiceLogsRequest{}
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[9]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -661,7 +569,7 @@ func (x *GetServiceLogsRequest) String() string {
 func (*GetServiceLogsRequest) ProtoMessage() {}
 
 func (x *GetServiceLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[9]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -674,7 +582,7 @@ func (x *GetServiceLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServiceLogsRequest.ProtoReflect.Descriptor instead.
 func (*GetServiceLogsRequest) Descriptor() ([]byte, []int) {
-	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{9}
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetServiceLogsRequest) GetServiceId() string {
@@ -691,6 +599,13 @@ func (x *GetServiceLogsRequest) GetLimit() int32 {
 	return 0
 }
 
+func (x *GetServiceLogsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
 type LogLine struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Message       string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
@@ -701,7 +616,7 @@ type LogLine struct {
 
 func (x *LogLine) Reset() {
 	*x = LogLine{}
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[10]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +628,7 @@ func (x *LogLine) String() string {
 func (*LogLine) ProtoMessage() {}
 
 func (x *LogLine) ProtoReflect() protoreflect.Message {
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[10]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +641,7 @@ func (x *LogLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogLine.ProtoReflect.Descriptor instead.
 func (*LogLine) Descriptor() ([]byte, []int) {
-	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{10}
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *LogLine) GetMessage() string {
@@ -746,13 +661,14 @@ func (x *LogLine) GetTs() *timestamppb.Timestamp {
 type GetServiceLogsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Lines         []*LogLine             `protobuf:"bytes,1,rep,name=lines,proto3" json:"lines,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetServiceLogsResponse) Reset() {
 	*x = GetServiceLogsResponse{}
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[11]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -764,7 +680,7 @@ func (x *GetServiceLogsResponse) String() string {
 func (*GetServiceLogsResponse) ProtoMessage() {}
 
 func (x *GetServiceLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_liquidmetal_v1_service_proto_msgTypes[11]
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -777,7 +693,7 @@ func (x *GetServiceLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServiceLogsResponse.ProtoReflect.Descriptor instead.
 func (*GetServiceLogsResponse) Descriptor() ([]byte, []int) {
-	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{11}
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetServiceLogsResponse) GetLines() []*LogLine {
@@ -787,58 +703,506 @@ func (x *GetServiceLogsResponse) GetLines() []*LogLine {
 	return nil
 }
 
+func (x *GetServiceLogsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+type GetUploadUrlRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId     string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Slug          string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	Engine        Engine                 `protobuf:"varint,3,opt,name=engine,proto3,enum=liquidmetal.v1.Engine" json:"engine,omitempty"`
+	DeployId      string                 `protobuf:"bytes,4,opt,name=deploy_id,json=deployId,proto3" json:"deploy_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUploadUrlRequest) Reset() {
+	*x = GetUploadUrlRequest{}
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUploadUrlRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUploadUrlRequest) ProtoMessage() {}
+
+func (x *GetUploadUrlRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUploadUrlRequest.ProtoReflect.Descriptor instead.
+func (*GetUploadUrlRequest) Descriptor() ([]byte, []int) {
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetUploadUrlRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *GetUploadUrlRequest) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *GetUploadUrlRequest) GetEngine() Engine {
+	if x != nil {
+		return x.Engine
+	}
+	return Engine_ENGINE_UNSPECIFIED
+}
+
+func (x *GetUploadUrlRequest) GetDeployId() string {
+	if x != nil {
+		return x.DeployId
+	}
+	return ""
+}
+
+type GetUploadUrlResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UploadUrl     string                 `protobuf:"bytes,1,opt,name=upload_url,json=uploadUrl,proto3" json:"upload_url,omitempty"`
+	ArtifactKey   string                 `protobuf:"bytes,2,opt,name=artifact_key,json=artifactKey,proto3" json:"artifact_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUploadUrlResponse) Reset() {
+	*x = GetUploadUrlResponse{}
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUploadUrlResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUploadUrlResponse) ProtoMessage() {}
+
+func (x *GetUploadUrlResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUploadUrlResponse.ProtoReflect.Descriptor instead.
+func (*GetUploadUrlResponse) Descriptor() ([]byte, []int) {
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetUploadUrlResponse) GetUploadUrl() string {
+	if x != nil {
+		return x.UploadUrl
+	}
+	return ""
+}
+
+func (x *GetUploadUrlResponse) GetArtifactKey() string {
+	if x != nil {
+		return x.ArtifactKey
+	}
+	return ""
+}
+
+type DeployRequest struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId   string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Name        string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Slug        string                 `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
+	Engine      Engine                 `protobuf:"varint,4,opt,name=engine,proto3,enum=liquidmetal.v1.Engine" json:"engine,omitempty"`
+	DeployId    string                 `protobuf:"bytes,5,opt,name=deploy_id,json=deployId,proto3" json:"deploy_id,omitempty"`
+	ArtifactKey string                 `protobuf:"bytes,6,opt,name=artifact_key,json=artifactKey,proto3" json:"artifact_key,omitempty"`
+	Sha256      string                 `protobuf:"bytes,7,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// Enforces that Liquid deployments cannot send Metal memory specs
+	//
+	// Types that are valid to be assigned to Spec:
+	//
+	//	*DeployRequest_Metal
+	//	*DeployRequest_Liquid
+	Spec          isDeployRequest_Spec `protobuf_oneof:"spec"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeployRequest) Reset() {
+	*x = DeployRequest{}
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeployRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeployRequest) ProtoMessage() {}
+
+func (x *DeployRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeployRequest.ProtoReflect.Descriptor instead.
+func (*DeployRequest) Descriptor() ([]byte, []int) {
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *DeployRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *DeployRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DeployRequest) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+func (x *DeployRequest) GetEngine() Engine {
+	if x != nil {
+		return x.Engine
+	}
+	return Engine_ENGINE_UNSPECIFIED
+}
+
+func (x *DeployRequest) GetDeployId() string {
+	if x != nil {
+		return x.DeployId
+	}
+	return ""
+}
+
+func (x *DeployRequest) GetArtifactKey() string {
+	if x != nil {
+		return x.ArtifactKey
+	}
+	return ""
+}
+
+func (x *DeployRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *DeployRequest) GetSpec() isDeployRequest_Spec {
+	if x != nil {
+		return x.Spec
+	}
+	return nil
+}
+
+func (x *DeployRequest) GetMetal() *MetalSpec {
+	if x != nil {
+		if x, ok := x.Spec.(*DeployRequest_Metal); ok {
+			return x.Metal
+		}
+	}
+	return nil
+}
+
+func (x *DeployRequest) GetLiquid() *LiquidSpec {
+	if x != nil {
+		if x, ok := x.Spec.(*DeployRequest_Liquid); ok {
+			return x.Liquid
+		}
+	}
+	return nil
+}
+
+type isDeployRequest_Spec interface {
+	isDeployRequest_Spec()
+}
+
+type DeployRequest_Metal struct {
+	Metal *MetalSpec `protobuf:"bytes,8,opt,name=metal,proto3,oneof"`
+}
+
+type DeployRequest_Liquid struct {
+	Liquid *LiquidSpec `protobuf:"bytes,9,opt,name=liquid,proto3,oneof"`
+}
+
+func (*DeployRequest_Metal) isDeployRequest_Spec() {}
+
+func (*DeployRequest_Liquid) isDeployRequest_Spec() {}
+
+type MetalSpec struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vcpu          int32                  `protobuf:"varint,1,opt,name=vcpu,proto3" json:"vcpu,omitempty"`
+	MemoryMb      int32                  `protobuf:"varint,2,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	Port          int32                  `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MetalSpec) Reset() {
+	*x = MetalSpec{}
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MetalSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MetalSpec) ProtoMessage() {}
+
+func (x *MetalSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MetalSpec.ProtoReflect.Descriptor instead.
+func (*MetalSpec) Descriptor() ([]byte, []int) {
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *MetalSpec) GetVcpu() int32 {
+	if x != nil {
+		return x.Vcpu
+	}
+	return 0
+}
+
+func (x *MetalSpec) GetMemoryMb() int32 {
+	if x != nil {
+		return x.MemoryMb
+	}
+	return 0
+}
+
+func (x *MetalSpec) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type LiquidSpec struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entrypoint    string                 `protobuf:"bytes,1,opt,name=entrypoint,proto3" json:"entrypoint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LiquidSpec) Reset() {
+	*x = LiquidSpec{}
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LiquidSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LiquidSpec) ProtoMessage() {}
+
+func (x *LiquidSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LiquidSpec.ProtoReflect.Descriptor instead.
+func (*LiquidSpec) Descriptor() ([]byte, []int) {
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *LiquidSpec) GetEntrypoint() string {
+	if x != nil {
+		return x.Entrypoint
+	}
+	return ""
+}
+
+type DeployResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Service       *Service               `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeployResponse) Reset() {
+	*x = DeployResponse{}
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeployResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeployResponse) ProtoMessage() {}
+
+func (x *DeployResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_liquidmetal_v1_service_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeployResponse.ProtoReflect.Descriptor instead.
+func (*DeployResponse) Descriptor() ([]byte, []int) {
+	return file_liquidmetal_v1_service_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *DeployResponse) GetService() *Service {
+	if x != nil {
+		return x.Service
+	}
+	return nil
+}
+
 var File_liquidmetal_v1_service_proto protoreflect.FileDescriptor
 
 const file_liquidmetal_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1cliquidmetal/v1/service.proto\x12\x0eliquidmetal.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb0\x03\n" +
+	"\x1cliquidmetal/v1/service.proto\x12\x0eliquidmetal.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x84\x04\n" +
 	"\aService\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
-	"\x04slug\x18\x03 \x01(\tR\x04slug\x12.\n" +
-	"\x06engine\x18\x04 \x01(\x0e2\x16.liquidmetal.v1.EngineR\x06engine\x125\n" +
-	"\x06status\x18\x05 \x01(\x0e2\x1d.liquidmetal.v1.ServiceStatusR\x06status\x12#\n" +
-	"\rupstream_addr\x18\x06 \x01(\tR\fupstreamAddr\x12\x1d\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
-	"project_id\x18\a \x01(\tR\tprojectId\x12\x1d\n" +
+	"project_id\x18\x02 \x01(\tR\tprojectId\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x12\n" +
+	"\x04slug\x18\x04 \x01(\tR\x04slug\x12.\n" +
+	"\x06engine\x18\x05 \x01(\x0e2\x16.liquidmetal.v1.EngineR\x06engine\x125\n" +
+	"\x06status\x18\x06 \x01(\x0e2\x1d.liquidmetal.v1.ServiceStatusR\x06status\x12#\n" +
+	"\rupstream_addr\x18\a \x01(\tR\fupstreamAddr\x12\x1d\n" +
 	"\n" +
 	"commit_sha\x18\b \x01(\tR\tcommitSha\x12%\n" +
-	"\x0ecommit_message\x18\t \x01(\tR\rcommitMessage\x129\n" +
+	"\x0ecommit_message\x18\t \x01(\tR\rcommitMessage\x12\x17\n" +
+	"\anode_id\x18\n" +
+	" \x01(\tR\x06nodeId\x129\n" +
 	"\n" +
-	"created_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12A\n" +
-	"\x0eprovisioned_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\rprovisionedAt\"4\n" +
+	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12A\n" +
+	"\x0eprovisioned_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\rprovisionedAt\"p\n" +
 	"\x13ListServicesRequest\x12\x1d\n" +
 	"\n" +
-	"project_id\x18\x01 \x01(\tR\tprojectId\"K\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"s\n" +
 	"\x14ListServicesResponse\x123\n" +
-	"\bservices\x18\x01 \x03(\v2\x17.liquidmetal.v1.ServiceR\bservices\"#\n" +
+	"\bservices\x18\x01 \x03(\v2\x17.liquidmetal.v1.ServiceR\bservices\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"#\n" +
 	"\x11GetServiceRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"G\n" +
 	"\x12GetServiceResponse\x121\n" +
-	"\aservice\x18\x01 \x01(\v2\x17.liquidmetal.v1.ServiceR\aservice\"\xbe\x01\n" +
-	"\x14CreateServiceRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12.\n" +
-	"\x06engine\x18\x02 \x01(\x0e2\x16.liquidmetal.v1.EngineR\x06engine\x12\x1d\n" +
-	"\n" +
-	"project_id\x18\x03 \x01(\tR\tprojectId\x12\x12\n" +
-	"\x04port\x18\x04 \x01(\x05R\x04port\x12\x12\n" +
-	"\x04vcpu\x18\x05 \x01(\x05R\x04vcpu\x12\x1b\n" +
-	"\tmemory_mb\x18\x06 \x01(\x05R\bmemoryMb\"J\n" +
-	"\x15CreateServiceResponse\x121\n" +
 	"\aservice\x18\x01 \x01(\v2\x17.liquidmetal.v1.ServiceR\aservice\"&\n" +
 	"\x14DeleteServiceRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x17\n" +
-	"\x15DeleteServiceResponse\"L\n" +
+	"\x15DeleteServiceResponse\"k\n" +
 	"\x15GetServiceLogsRequest\x12\x1d\n" +
 	"\n" +
 	"service_id\x18\x01 \x01(\tR\tserviceId\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\x05R\x05limit\"O\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"O\n" +
 	"\aLogLine\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12*\n" +
-	"\x02ts\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02ts\"G\n" +
+	"\x02ts\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02ts\"o\n" +
 	"\x16GetServiceLogsResponse\x12-\n" +
-	"\x05lines\x18\x01 \x03(\v2\x17.liquidmetal.v1.LogLineR\x05lines*E\n" +
+	"\x05lines\x18\x01 \x03(\v2\x17.liquidmetal.v1.LogLineR\x05lines\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x95\x01\n" +
+	"\x13GetUploadUrlRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x12\n" +
+	"\x04slug\x18\x02 \x01(\tR\x04slug\x12.\n" +
+	"\x06engine\x18\x03 \x01(\x0e2\x16.liquidmetal.v1.EngineR\x06engine\x12\x1b\n" +
+	"\tdeploy_id\x18\x04 \x01(\tR\bdeployId\"X\n" +
+	"\x14GetUploadUrlResponse\x12\x1d\n" +
+	"\n" +
+	"upload_url\x18\x01 \x01(\tR\tuploadUrl\x12!\n" +
+	"\fartifact_key\x18\x02 \x01(\tR\vartifactKey\"\xcf\x02\n" +
+	"\rDeployRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
+	"\x04slug\x18\x03 \x01(\tR\x04slug\x12.\n" +
+	"\x06engine\x18\x04 \x01(\x0e2\x16.liquidmetal.v1.EngineR\x06engine\x12\x1b\n" +
+	"\tdeploy_id\x18\x05 \x01(\tR\bdeployId\x12!\n" +
+	"\fartifact_key\x18\x06 \x01(\tR\vartifactKey\x12\x16\n" +
+	"\x06sha256\x18\a \x01(\tR\x06sha256\x121\n" +
+	"\x05metal\x18\b \x01(\v2\x19.liquidmetal.v1.MetalSpecH\x00R\x05metal\x124\n" +
+	"\x06liquid\x18\t \x01(\v2\x1a.liquidmetal.v1.LiquidSpecH\x00R\x06liquidB\x06\n" +
+	"\x04spec\"P\n" +
+	"\tMetalSpec\x12\x12\n" +
+	"\x04vcpu\x18\x01 \x01(\x05R\x04vcpu\x12\x1b\n" +
+	"\tmemory_mb\x18\x02 \x01(\x05R\bmemoryMb\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\x05R\x04port\",\n" +
+	"\n" +
+	"LiquidSpec\x12\x1e\n" +
+	"\n" +
+	"entrypoint\x18\x01 \x01(\tR\n" +
+	"entrypoint\"C\n" +
+	"\x0eDeployResponse\x121\n" +
+	"\aservice\x18\x01 \x01(\v2\x17.liquidmetal.v1.ServiceR\aservice*E\n" +
 	"\x06Engine\x12\x16\n" +
 	"\x12ENGINE_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fENGINE_METAL\x10\x01\x12\x11\n" +
@@ -848,12 +1212,13 @@ const file_liquidmetal_v1_service_proto_rawDesc = "" +
 	"\x1bSERVICE_STATUS_PROVISIONING\x10\x01\x12\x1a\n" +
 	"\x16SERVICE_STATUS_RUNNING\x10\x02\x12\x19\n" +
 	"\x15SERVICE_STATUS_FAILED\x10\x03\x12\x1a\n" +
-	"\x16SERVICE_STATUS_STOPPED\x10\x042\xdd\x03\n" +
+	"\x16SERVICE_STATUS_STOPPED\x10\x042\xa3\x04\n" +
 	"\x0eServiceService\x12Y\n" +
 	"\fListServices\x12#.liquidmetal.v1.ListServicesRequest\x1a$.liquidmetal.v1.ListServicesResponse\x12S\n" +
 	"\n" +
-	"GetService\x12!.liquidmetal.v1.GetServiceRequest\x1a\".liquidmetal.v1.GetServiceResponse\x12\\\n" +
-	"\rCreateService\x12$.liquidmetal.v1.CreateServiceRequest\x1a%.liquidmetal.v1.CreateServiceResponse\x12\\\n" +
+	"GetService\x12!.liquidmetal.v1.GetServiceRequest\x1a\".liquidmetal.v1.GetServiceResponse\x12Y\n" +
+	"\fGetUploadUrl\x12#.liquidmetal.v1.GetUploadUrlRequest\x1a$.liquidmetal.v1.GetUploadUrlResponse\x12G\n" +
+	"\x06Deploy\x12\x1d.liquidmetal.v1.DeployRequest\x1a\x1e.liquidmetal.v1.DeployResponse\x12\\\n" +
 	"\rDeleteService\x12$.liquidmetal.v1.DeleteServiceRequest\x1a%.liquidmetal.v1.DeleteServiceResponse\x12_\n" +
 	"\x0eGetServiceLogs\x12%.liquidmetal.v1.GetServiceLogsRequest\x1a&.liquidmetal.v1.GetServiceLogsResponseBLZJgithub.com/kendricklawton/liquid-metal/gen/go/liquidmetal/v1;liquidmetalv1b\x06proto3"
 
@@ -870,7 +1235,7 @@ func file_liquidmetal_v1_service_proto_rawDescGZIP() []byte {
 }
 
 var file_liquidmetal_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_liquidmetal_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_liquidmetal_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_liquidmetal_v1_service_proto_goTypes = []any{
 	(Engine)(0),                    // 0: liquidmetal.v1.Engine
 	(ServiceStatus)(0),             // 1: liquidmetal.v1.ServiceStatus
@@ -879,41 +1244,51 @@ var file_liquidmetal_v1_service_proto_goTypes = []any{
 	(*ListServicesResponse)(nil),   // 4: liquidmetal.v1.ListServicesResponse
 	(*GetServiceRequest)(nil),      // 5: liquidmetal.v1.GetServiceRequest
 	(*GetServiceResponse)(nil),     // 6: liquidmetal.v1.GetServiceResponse
-	(*CreateServiceRequest)(nil),   // 7: liquidmetal.v1.CreateServiceRequest
-	(*CreateServiceResponse)(nil),  // 8: liquidmetal.v1.CreateServiceResponse
-	(*DeleteServiceRequest)(nil),   // 9: liquidmetal.v1.DeleteServiceRequest
-	(*DeleteServiceResponse)(nil),  // 10: liquidmetal.v1.DeleteServiceResponse
-	(*GetServiceLogsRequest)(nil),  // 11: liquidmetal.v1.GetServiceLogsRequest
-	(*LogLine)(nil),                // 12: liquidmetal.v1.LogLine
-	(*GetServiceLogsResponse)(nil), // 13: liquidmetal.v1.GetServiceLogsResponse
-	(*timestamppb.Timestamp)(nil),  // 14: google.protobuf.Timestamp
+	(*DeleteServiceRequest)(nil),   // 7: liquidmetal.v1.DeleteServiceRequest
+	(*DeleteServiceResponse)(nil),  // 8: liquidmetal.v1.DeleteServiceResponse
+	(*GetServiceLogsRequest)(nil),  // 9: liquidmetal.v1.GetServiceLogsRequest
+	(*LogLine)(nil),                // 10: liquidmetal.v1.LogLine
+	(*GetServiceLogsResponse)(nil), // 11: liquidmetal.v1.GetServiceLogsResponse
+	(*GetUploadUrlRequest)(nil),    // 12: liquidmetal.v1.GetUploadUrlRequest
+	(*GetUploadUrlResponse)(nil),   // 13: liquidmetal.v1.GetUploadUrlResponse
+	(*DeployRequest)(nil),          // 14: liquidmetal.v1.DeployRequest
+	(*MetalSpec)(nil),              // 15: liquidmetal.v1.MetalSpec
+	(*LiquidSpec)(nil),             // 16: liquidmetal.v1.LiquidSpec
+	(*DeployResponse)(nil),         // 17: liquidmetal.v1.DeployResponse
+	(*timestamppb.Timestamp)(nil),  // 18: google.protobuf.Timestamp
 }
 var file_liquidmetal_v1_service_proto_depIdxs = []int32{
 	0,  // 0: liquidmetal.v1.Service.engine:type_name -> liquidmetal.v1.Engine
 	1,  // 1: liquidmetal.v1.Service.status:type_name -> liquidmetal.v1.ServiceStatus
-	14, // 2: liquidmetal.v1.Service.created_at:type_name -> google.protobuf.Timestamp
-	14, // 3: liquidmetal.v1.Service.provisioned_at:type_name -> google.protobuf.Timestamp
-	2,  // 4: liquidmetal.v1.ListServicesResponse.services:type_name -> liquidmetal.v1.Service
-	2,  // 5: liquidmetal.v1.GetServiceResponse.service:type_name -> liquidmetal.v1.Service
-	0,  // 6: liquidmetal.v1.CreateServiceRequest.engine:type_name -> liquidmetal.v1.Engine
-	2,  // 7: liquidmetal.v1.CreateServiceResponse.service:type_name -> liquidmetal.v1.Service
-	14, // 8: liquidmetal.v1.LogLine.ts:type_name -> google.protobuf.Timestamp
-	12, // 9: liquidmetal.v1.GetServiceLogsResponse.lines:type_name -> liquidmetal.v1.LogLine
-	3,  // 10: liquidmetal.v1.ServiceService.ListServices:input_type -> liquidmetal.v1.ListServicesRequest
-	5,  // 11: liquidmetal.v1.ServiceService.GetService:input_type -> liquidmetal.v1.GetServiceRequest
-	7,  // 12: liquidmetal.v1.ServiceService.CreateService:input_type -> liquidmetal.v1.CreateServiceRequest
-	9,  // 13: liquidmetal.v1.ServiceService.DeleteService:input_type -> liquidmetal.v1.DeleteServiceRequest
-	11, // 14: liquidmetal.v1.ServiceService.GetServiceLogs:input_type -> liquidmetal.v1.GetServiceLogsRequest
-	4,  // 15: liquidmetal.v1.ServiceService.ListServices:output_type -> liquidmetal.v1.ListServicesResponse
-	6,  // 16: liquidmetal.v1.ServiceService.GetService:output_type -> liquidmetal.v1.GetServiceResponse
-	8,  // 17: liquidmetal.v1.ServiceService.CreateService:output_type -> liquidmetal.v1.CreateServiceResponse
-	10, // 18: liquidmetal.v1.ServiceService.DeleteService:output_type -> liquidmetal.v1.DeleteServiceResponse
-	13, // 19: liquidmetal.v1.ServiceService.GetServiceLogs:output_type -> liquidmetal.v1.GetServiceLogsResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	18, // 2: liquidmetal.v1.Service.created_at:type_name -> google.protobuf.Timestamp
+	18, // 3: liquidmetal.v1.Service.updated_at:type_name -> google.protobuf.Timestamp
+	18, // 4: liquidmetal.v1.Service.provisioned_at:type_name -> google.protobuf.Timestamp
+	2,  // 5: liquidmetal.v1.ListServicesResponse.services:type_name -> liquidmetal.v1.Service
+	2,  // 6: liquidmetal.v1.GetServiceResponse.service:type_name -> liquidmetal.v1.Service
+	18, // 7: liquidmetal.v1.LogLine.ts:type_name -> google.protobuf.Timestamp
+	10, // 8: liquidmetal.v1.GetServiceLogsResponse.lines:type_name -> liquidmetal.v1.LogLine
+	0,  // 9: liquidmetal.v1.GetUploadUrlRequest.engine:type_name -> liquidmetal.v1.Engine
+	0,  // 10: liquidmetal.v1.DeployRequest.engine:type_name -> liquidmetal.v1.Engine
+	15, // 11: liquidmetal.v1.DeployRequest.metal:type_name -> liquidmetal.v1.MetalSpec
+	16, // 12: liquidmetal.v1.DeployRequest.liquid:type_name -> liquidmetal.v1.LiquidSpec
+	2,  // 13: liquidmetal.v1.DeployResponse.service:type_name -> liquidmetal.v1.Service
+	3,  // 14: liquidmetal.v1.ServiceService.ListServices:input_type -> liquidmetal.v1.ListServicesRequest
+	5,  // 15: liquidmetal.v1.ServiceService.GetService:input_type -> liquidmetal.v1.GetServiceRequest
+	12, // 16: liquidmetal.v1.ServiceService.GetUploadUrl:input_type -> liquidmetal.v1.GetUploadUrlRequest
+	14, // 17: liquidmetal.v1.ServiceService.Deploy:input_type -> liquidmetal.v1.DeployRequest
+	7,  // 18: liquidmetal.v1.ServiceService.DeleteService:input_type -> liquidmetal.v1.DeleteServiceRequest
+	9,  // 19: liquidmetal.v1.ServiceService.GetServiceLogs:input_type -> liquidmetal.v1.GetServiceLogsRequest
+	4,  // 20: liquidmetal.v1.ServiceService.ListServices:output_type -> liquidmetal.v1.ListServicesResponse
+	6,  // 21: liquidmetal.v1.ServiceService.GetService:output_type -> liquidmetal.v1.GetServiceResponse
+	13, // 22: liquidmetal.v1.ServiceService.GetUploadUrl:output_type -> liquidmetal.v1.GetUploadUrlResponse
+	17, // 23: liquidmetal.v1.ServiceService.Deploy:output_type -> liquidmetal.v1.DeployResponse
+	8,  // 24: liquidmetal.v1.ServiceService.DeleteService:output_type -> liquidmetal.v1.DeleteServiceResponse
+	11, // 25: liquidmetal.v1.ServiceService.GetServiceLogs:output_type -> liquidmetal.v1.GetServiceLogsResponse
+	20, // [20:26] is the sub-list for method output_type
+	14, // [14:20] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_liquidmetal_v1_service_proto_init() }
@@ -921,13 +1296,17 @@ func file_liquidmetal_v1_service_proto_init() {
 	if File_liquidmetal_v1_service_proto != nil {
 		return
 	}
+	file_liquidmetal_v1_service_proto_msgTypes[12].OneofWrappers = []any{
+		(*DeployRequest_Metal)(nil),
+		(*DeployRequest_Liquid)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_liquidmetal_v1_service_proto_rawDesc), len(file_liquidmetal_v1_service_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   12,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

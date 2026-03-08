@@ -33,9 +33,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.config/flux/config.yaml)")
 	rootCmd.PersistentFlags().String("api-url", "", "Rust API URL (overrides config)")
 	rootCmd.PersistentFlags().String("token", "", "API token (overrides config)")
+	rootCmd.PersistentFlags().String("client-id", "", "WorkOS client ID (overrides config, env: FLUX_WORKOS_CLIENT_ID)")
+	rootCmd.PersistentFlags().Int("cli-port", 0, "local OAuth callback port (default 8765, env: FLUX_CLI_PORT)")
 
-	viper.BindPFlag("api_url", rootCmd.PersistentFlags().Lookup("api-url"))
-	viper.BindPFlag("token", rootCmd.PersistentFlags().Lookup("token"))
+	viper.BindPFlag("api_url",          rootCmd.PersistentFlags().Lookup("api-url"))
+	viper.BindPFlag("token",            rootCmd.PersistentFlags().Lookup("token"))
+	viper.BindPFlag("workos_client_id", rootCmd.PersistentFlags().Lookup("client-id"))
+	viper.BindPFlag("cli_port",         rootCmd.PersistentFlags().Lookup("cli-port"))
 
 	rootCmd.AddCommand(loginCmd, whoamiCmd, statusCmd, logsCmd, deployCmd)
 }

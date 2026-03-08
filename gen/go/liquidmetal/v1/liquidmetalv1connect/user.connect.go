@@ -39,6 +39,7 @@ const (
 
 // UserServiceClient is a client for the liquidmetal.v1.UserService service.
 type UserServiceClient interface {
+	// Returns the currently authenticated user based on the ConnectRPC authorization header
 	GetMe(context.Context, *connect.Request[v1.GetMeRequest]) (*connect.Response[v1.GetMeResponse], error)
 }
 
@@ -74,6 +75,7 @@ func (c *userServiceClient) GetMe(ctx context.Context, req *connect.Request[v1.G
 
 // UserServiceHandler is an implementation of the liquidmetal.v1.UserService service.
 type UserServiceHandler interface {
+	// Returns the currently authenticated user based on the ConnectRPC authorization header
 	GetMe(context.Context, *connect.Request[v1.GetMeRequest]) (*connect.Response[v1.GetMeResponse], error)
 }
 

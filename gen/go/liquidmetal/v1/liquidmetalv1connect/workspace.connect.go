@@ -36,11 +36,23 @@ const (
 	// WorkspaceServiceCreateWorkspaceProcedure is the fully-qualified name of the WorkspaceService's
 	// CreateWorkspace RPC.
 	WorkspaceServiceCreateWorkspaceProcedure = "/liquidmetal.v1.WorkspaceService/CreateWorkspace"
+	// WorkspaceServiceGetWorkspaceProcedure is the fully-qualified name of the WorkspaceService's
+	// GetWorkspace RPC.
+	WorkspaceServiceGetWorkspaceProcedure = "/liquidmetal.v1.WorkspaceService/GetWorkspace"
+	// WorkspaceServiceListWorkspacesProcedure is the fully-qualified name of the WorkspaceService's
+	// ListWorkspaces RPC.
+	WorkspaceServiceListWorkspacesProcedure = "/liquidmetal.v1.WorkspaceService/ListWorkspaces"
+	// WorkspaceServiceDeleteWorkspaceProcedure is the fully-qualified name of the WorkspaceService's
+	// DeleteWorkspace RPC.
+	WorkspaceServiceDeleteWorkspaceProcedure = "/liquidmetal.v1.WorkspaceService/DeleteWorkspace"
 )
 
 // WorkspaceServiceClient is a client for the liquidmetal.v1.WorkspaceService service.
 type WorkspaceServiceClient interface {
 	CreateWorkspace(context.Context, *connect.Request[v1.CreateWorkspaceRequest]) (*connect.Response[v1.CreateWorkspaceResponse], error)
+	GetWorkspace(context.Context, *connect.Request[v1.GetWorkspaceRequest]) (*connect.Response[v1.GetWorkspaceResponse], error)
+	ListWorkspaces(context.Context, *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error)
+	DeleteWorkspace(context.Context, *connect.Request[v1.DeleteWorkspaceRequest]) (*connect.Response[v1.DeleteWorkspaceResponse], error)
 }
 
 // NewWorkspaceServiceClient constructs a client for the liquidmetal.v1.WorkspaceService service. By
@@ -60,12 +72,33 @@ func NewWorkspaceServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(workspaceServiceMethods.ByName("CreateWorkspace")),
 			connect.WithClientOptions(opts...),
 		),
+		getWorkspace: connect.NewClient[v1.GetWorkspaceRequest, v1.GetWorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceServiceGetWorkspaceProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("GetWorkspace")),
+			connect.WithClientOptions(opts...),
+		),
+		listWorkspaces: connect.NewClient[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse](
+			httpClient,
+			baseURL+WorkspaceServiceListWorkspacesProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("ListWorkspaces")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteWorkspace: connect.NewClient[v1.DeleteWorkspaceRequest, v1.DeleteWorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceServiceDeleteWorkspaceProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("DeleteWorkspace")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // workspaceServiceClient implements WorkspaceServiceClient.
 type workspaceServiceClient struct {
 	createWorkspace *connect.Client[v1.CreateWorkspaceRequest, v1.CreateWorkspaceResponse]
+	getWorkspace    *connect.Client[v1.GetWorkspaceRequest, v1.GetWorkspaceResponse]
+	listWorkspaces  *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
+	deleteWorkspace *connect.Client[v1.DeleteWorkspaceRequest, v1.DeleteWorkspaceResponse]
 }
 
 // CreateWorkspace calls liquidmetal.v1.WorkspaceService.CreateWorkspace.
@@ -73,9 +106,27 @@ func (c *workspaceServiceClient) CreateWorkspace(ctx context.Context, req *conne
 	return c.createWorkspace.CallUnary(ctx, req)
 }
 
+// GetWorkspace calls liquidmetal.v1.WorkspaceService.GetWorkspace.
+func (c *workspaceServiceClient) GetWorkspace(ctx context.Context, req *connect.Request[v1.GetWorkspaceRequest]) (*connect.Response[v1.GetWorkspaceResponse], error) {
+	return c.getWorkspace.CallUnary(ctx, req)
+}
+
+// ListWorkspaces calls liquidmetal.v1.WorkspaceService.ListWorkspaces.
+func (c *workspaceServiceClient) ListWorkspaces(ctx context.Context, req *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error) {
+	return c.listWorkspaces.CallUnary(ctx, req)
+}
+
+// DeleteWorkspace calls liquidmetal.v1.WorkspaceService.DeleteWorkspace.
+func (c *workspaceServiceClient) DeleteWorkspace(ctx context.Context, req *connect.Request[v1.DeleteWorkspaceRequest]) (*connect.Response[v1.DeleteWorkspaceResponse], error) {
+	return c.deleteWorkspace.CallUnary(ctx, req)
+}
+
 // WorkspaceServiceHandler is an implementation of the liquidmetal.v1.WorkspaceService service.
 type WorkspaceServiceHandler interface {
 	CreateWorkspace(context.Context, *connect.Request[v1.CreateWorkspaceRequest]) (*connect.Response[v1.CreateWorkspaceResponse], error)
+	GetWorkspace(context.Context, *connect.Request[v1.GetWorkspaceRequest]) (*connect.Response[v1.GetWorkspaceResponse], error)
+	ListWorkspaces(context.Context, *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error)
+	DeleteWorkspace(context.Context, *connect.Request[v1.DeleteWorkspaceRequest]) (*connect.Response[v1.DeleteWorkspaceResponse], error)
 }
 
 // NewWorkspaceServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -91,10 +142,34 @@ func NewWorkspaceServiceHandler(svc WorkspaceServiceHandler, opts ...connect.Han
 		connect.WithSchema(workspaceServiceMethods.ByName("CreateWorkspace")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceServiceGetWorkspaceHandler := connect.NewUnaryHandler(
+		WorkspaceServiceGetWorkspaceProcedure,
+		svc.GetWorkspace,
+		connect.WithSchema(workspaceServiceMethods.ByName("GetWorkspace")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceServiceListWorkspacesHandler := connect.NewUnaryHandler(
+		WorkspaceServiceListWorkspacesProcedure,
+		svc.ListWorkspaces,
+		connect.WithSchema(workspaceServiceMethods.ByName("ListWorkspaces")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceServiceDeleteWorkspaceHandler := connect.NewUnaryHandler(
+		WorkspaceServiceDeleteWorkspaceProcedure,
+		svc.DeleteWorkspace,
+		connect.WithSchema(workspaceServiceMethods.ByName("DeleteWorkspace")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/liquidmetal.v1.WorkspaceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceServiceCreateWorkspaceProcedure:
 			workspaceServiceCreateWorkspaceHandler.ServeHTTP(w, r)
+		case WorkspaceServiceGetWorkspaceProcedure:
+			workspaceServiceGetWorkspaceHandler.ServeHTTP(w, r)
+		case WorkspaceServiceListWorkspacesProcedure:
+			workspaceServiceListWorkspacesHandler.ServeHTTP(w, r)
+		case WorkspaceServiceDeleteWorkspaceProcedure:
+			workspaceServiceDeleteWorkspaceHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -106,4 +181,16 @@ type UnimplementedWorkspaceServiceHandler struct{}
 
 func (UnimplementedWorkspaceServiceHandler) CreateWorkspace(context.Context, *connect.Request[v1.CreateWorkspaceRequest]) (*connect.Response[v1.CreateWorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("liquidmetal.v1.WorkspaceService.CreateWorkspace is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) GetWorkspace(context.Context, *connect.Request[v1.GetWorkspaceRequest]) (*connect.Response[v1.GetWorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("liquidmetal.v1.WorkspaceService.GetWorkspace is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) ListWorkspaces(context.Context, *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("liquidmetal.v1.WorkspaceService.ListWorkspaces is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) DeleteWorkspace(context.Context, *connect.Request[v1.DeleteWorkspaceRequest]) (*connect.Response[v1.DeleteWorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("liquidmetal.v1.WorkspaceService.DeleteWorkspace is not implemented"))
 }

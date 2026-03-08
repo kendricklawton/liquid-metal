@@ -1,7 +1,7 @@
 use crate::AppState;
+use crate::grpc::auth::extract_user_id;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
-use uuid::Uuid;
 
 use crate::proto::liquidmetal::v1::user_service_server::UserService;
 use crate::proto::liquidmetal::v1::{GetMeRequest, GetMeResponse, User};
@@ -16,20 +16,7 @@ impl UserService for UserServiceImpl {
         &self,
         request: Request<GetMeRequest>,
     ) -> Result<Response<GetMeResponse>, Status> {
-        // Extract user UUID from Authorization: Bearer {uuid} header
-        let auth = request
-            .metadata()
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        if !auth.starts_with("Bearer ") {
-            return Err(Status::unauthenticated("missing Bearer token"));
-        }
-
-        let user_id: Uuid = auth["Bearer ".len()..]
-            .parse()
-            .map_err(|_| Status::unauthenticated("invalid token format"))?;
+        let user_id = extract_user_id(&request)?;
 
         let db = self.state.db.get().await.map_err(|e| {
             tracing::error!(error = %e, "db pool error");
@@ -50,10 +37,11 @@ impl UserService for UserServiceImpl {
 
         Ok(Response::new(GetMeResponse {
             user: Some(User {
-                id:         row.get::<_, Uuid>("id").to_string(),
+                id:         row.get::<_, uuid::Uuid>("id").to_string(),
                 email:      row.get("email"),
                 name:       row.get("name"),
                 created_at: None,
+                updated_at: None,
             }),
         }))
     }

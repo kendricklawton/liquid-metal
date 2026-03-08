@@ -36,6 +36,9 @@ tonic              = { workspace = true }
 tonic-prost        = "0.14"
 prost              = { workspace = true }
 prost-types        = { workspace = true }
+aes-gcm            = { workspace = true }
+async-trait        = { workspace = true }
+reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 tower          = { workspace = true }

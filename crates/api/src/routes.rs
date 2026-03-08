@@ -49,24 +49,52 @@ pub async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Hea
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
-/// Bearer token auth. No-op when API_KEY env var is unset (local dev).
+/// Per-user auth middleware: validates the caller's UUID from either
+/// `X-Api-Key: {uuid}` (CLI) or `Authorization: Bearer {uuid}` (web/ConnectRPC)
+/// against the `users` table.
+///
+/// Set `DISABLE_AUTH=1` to bypass in local dev. Never set this in production.
 pub async fn auth_middleware(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let api_key = std::env::var("API_KEY").unwrap_or_default();
-    if api_key.is_empty() {
+    if std::env::var("DISABLE_AUTH").as_deref() == Ok("1") {
         return Ok(next.run(req).await);
     }
 
-    let token = req
+    // Accept X-Api-Key (CLI) or Authorization: Bearer (web/ConnectRPC).
+    let raw = req
         .headers()
         .get("x-api-key")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+        .or_else(|| {
+            req.headers()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        });
 
-    if token != api_key {
+    let raw = raw.ok_or(StatusCode::UNAUTHORIZED)?;
+    let user_id: Uuid = raw.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let db = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "db pool error in auth middleware");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let row = db
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
+            &[&user_id],
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "user lookup in auth middleware failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !row.get::<_, bool>(0) {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -354,7 +382,7 @@ pub async fn delete_service(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ── Auth provision (internal — called by Go web BFF) ─────────────────────────
+// ── Auth: shared types ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct ProvisionRequest {
@@ -371,14 +399,15 @@ pub struct ProvisionResponse {
     pub tier: String,
 }
 
-/// POST /auth/provision — upsert user + workspace on first login via WorkOS.
+// ── Auth: internal provision (called by Go web BFF) ──────────────────────────
+
+/// POST /auth/provision — upsert user + workspace on first browser login via WorkOS.
 /// Protected by X-Internal-Secret header (Go web BFF → Rust API only).
 pub async fn provision_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<ProvisionRequest>,
 ) -> Result<Json<ProvisionResponse>, StatusCode> {
-    // Internal secret guard
     let secret = headers
         .get("x-internal-secret")
         .and_then(|v| v.to_str().ok())
@@ -396,7 +425,83 @@ pub async fn provision_user(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // Return existing user if already provisioned
+    do_provision(&mut db, &req.email, &req.first_name, &req.last_name).await
+}
+
+// ── Auth: CLI provision (PKCE — no web server required) ──────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CliProvisionRequest {
+    /// WorkOS access token obtained by the CLI via PKCE.
+    pub access_token: String,
+}
+
+/// Minimal WorkOS user info returned by GET /user_management/users/me.
+#[derive(Debug, Deserialize)]
+struct WorkOSUser {
+    email:      String,
+    first_name: String,
+    last_name:  String,
+}
+
+/// POST /auth/cli/provision — provision a user via a WorkOS PKCE access token.
+///
+/// Called directly by the CLI after it completes the PKCE browser flow.
+/// No `X-Internal-Secret` required — the WorkOS access token is the proof of
+/// identity. The token is verified by calling WorkOS's own `/users/me` endpoint.
+pub async fn cli_provision(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CliProvisionRequest>,
+) -> Result<Json<ProvisionResponse>, StatusCode> {
+    if req.access_token.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Verify the token with WorkOS and retrieve the user's identity.
+    let wu = verify_workos_token(&req.access_token).await.map_err(|e| {
+        tracing::warn!(error = %e, "WorkOS token verification failed");
+        StatusCode::UNAUTHORIZED
+    })?;
+
+    let mut db = state.db.get().await.map_err(|e| {
+        tracing::error!(error = %e, "db pool");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    do_provision(&mut db, &wu.email, &wu.first_name, &wu.last_name).await
+}
+
+/// Call `GET https://api.workos.com/user_management/users/me` with the access
+/// token as a Bearer credential. Returns the user's identity or an error if
+/// the token is invalid or expired.
+async fn verify_workos_token(access_token: &str) -> anyhow::Result<WorkOSUser> {
+    let resp = reqwest::Client::new()
+        .get("https://api.workos.com/user_management/users/me")
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("WorkOS request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!("WorkOS returned {}", resp.status()));
+    }
+
+    resp.json::<WorkOSUser>()
+        .await
+        .map_err(|e| anyhow::anyhow!("WorkOS response parse error: {e}"))
+}
+
+// ── Auth: shared provisioning logic ──────────────────────────────────────────
+
+/// Upsert user + workspace atomically. Returns the user's UUID, display name,
+/// workspace slug, and tier. Idempotent — safe to call on every login.
+async fn do_provision(
+    db:         &mut deadpool_postgres::Object,
+    email:      &str,
+    first_name: &str,
+    last_name:  &str,
+) -> Result<Json<ProvisionResponse>, StatusCode> {
+    // Fast path: return existing user.
     let existing = db
         .query_opt(
             "SELECT u.id, u.name, u.tier, w.slug \
@@ -404,7 +509,7 @@ pub async fn provision_user(
              LEFT JOIN workspace_members wm ON wm.user_id = u.id AND wm.role = 'owner' \
              LEFT JOIN workspaces w ON w.id = wm.workspace_id \
              WHERE u.email = $1 AND u.deleted_at IS NULL",
-            &[&req.email],
+            &[&email],
         )
         .await
         .map_err(|e| {
@@ -417,15 +522,16 @@ pub async fn provision_user(
             id:   row.get::<_, Uuid>("id").to_string(),
             name: row.get("name"),
             slug: row.get::<_, Option<String>>("slug").unwrap_or_default(),
-            tier: row.get::<_, Option<String>>("tier").unwrap_or_else(|| "free".to_string()),
+            tier: row.get::<_, Option<String>>("tier")
+                      .unwrap_or_else(|| "free".to_string()),
         }));
     }
 
-    // New user — create user + workspace atomically
+    // New user — create user + workspace atomically.
     let user_id      = Uuid::now_v7();
     let workspace_id = Uuid::now_v7();
-    let full_name    = format!("{} {}", req.first_name, req.last_name).trim().to_string();
-    let full_name    = if full_name.is_empty() { req.email.clone() } else { full_name };
+    let full_name    = format!("{} {}", first_name, last_name).trim().to_string();
+    let full_name    = if full_name.is_empty() { email.to_string() } else { full_name };
     let ws_slug      = workspace_slug(&full_name);
 
     let txn = db.transaction().await.map_err(|e| {
@@ -435,7 +541,7 @@ pub async fn provision_user(
 
     txn.execute(
         "INSERT INTO users (id, email, name) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING",
-        &[&user_id, &req.email, &full_name],
+        &[&user_id, &email, &full_name],
     ).await.map_err(|e| {
         tracing::error!(error = %e, "insert user");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -450,7 +556,8 @@ pub async fn provision_user(
     })?;
 
     txn.execute(
-        "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING",
+        "INSERT INTO workspace_members (workspace_id, user_id, role) \
+         VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING",
         &[&workspace_id, &user_id],
     ).await.map_err(|e| {
         tracing::error!(error = %e, "insert workspace member");
@@ -462,7 +569,7 @@ pub async fn provision_user(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    tracing::info!(email = req.email, user_id = %user_id, "user provisioned");
+    tracing::info!(email, user_id = %user_id, "user provisioned");
 
     Ok(Json(ProvisionResponse {
         id:   user_id.to_string(),
