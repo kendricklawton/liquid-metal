@@ -39,9 +39,11 @@ const (
 	// ServiceServiceGetServiceProcedure is the fully-qualified name of the ServiceService's GetService
 	// RPC.
 	ServiceServiceGetServiceProcedure = "/liquidmetal.v1.ServiceService/GetService"
-	// ServiceServiceCreateServiceProcedure is the fully-qualified name of the ServiceService's
-	// CreateService RPC.
-	ServiceServiceCreateServiceProcedure = "/liquidmetal.v1.ServiceService/CreateService"
+	// ServiceServiceGetUploadUrlProcedure is the fully-qualified name of the ServiceService's
+	// GetUploadUrl RPC.
+	ServiceServiceGetUploadUrlProcedure = "/liquidmetal.v1.ServiceService/GetUploadUrl"
+	// ServiceServiceDeployProcedure is the fully-qualified name of the ServiceService's Deploy RPC.
+	ServiceServiceDeployProcedure = "/liquidmetal.v1.ServiceService/Deploy"
 	// ServiceServiceDeleteServiceProcedure is the fully-qualified name of the ServiceService's
 	// DeleteService RPC.
 	ServiceServiceDeleteServiceProcedure = "/liquidmetal.v1.ServiceService/DeleteService"
@@ -54,7 +56,9 @@ const (
 type ServiceServiceClient interface {
 	ListServices(context.Context, *connect.Request[v1.ListServicesRequest]) (*connect.Response[v1.ListServicesResponse], error)
 	GetService(context.Context, *connect.Request[v1.GetServiceRequest]) (*connect.Response[v1.GetServiceResponse], error)
-	CreateService(context.Context, *connect.Request[v1.CreateServiceRequest]) (*connect.Response[v1.CreateServiceResponse], error)
+	// Two-step execution flow replaces monolithic CreateService
+	GetUploadUrl(context.Context, *connect.Request[v1.GetUploadUrlRequest]) (*connect.Response[v1.GetUploadUrlResponse], error)
+	Deploy(context.Context, *connect.Request[v1.DeployRequest]) (*connect.Response[v1.DeployResponse], error)
 	DeleteService(context.Context, *connect.Request[v1.DeleteServiceRequest]) (*connect.Response[v1.DeleteServiceResponse], error)
 	GetServiceLogs(context.Context, *connect.Request[v1.GetServiceLogsRequest]) (*connect.Response[v1.GetServiceLogsResponse], error)
 }
@@ -82,10 +86,16 @@ func NewServiceServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(serviceServiceMethods.ByName("GetService")),
 			connect.WithClientOptions(opts...),
 		),
-		createService: connect.NewClient[v1.CreateServiceRequest, v1.CreateServiceResponse](
+		getUploadUrl: connect.NewClient[v1.GetUploadUrlRequest, v1.GetUploadUrlResponse](
 			httpClient,
-			baseURL+ServiceServiceCreateServiceProcedure,
-			connect.WithSchema(serviceServiceMethods.ByName("CreateService")),
+			baseURL+ServiceServiceGetUploadUrlProcedure,
+			connect.WithSchema(serviceServiceMethods.ByName("GetUploadUrl")),
+			connect.WithClientOptions(opts...),
+		),
+		deploy: connect.NewClient[v1.DeployRequest, v1.DeployResponse](
+			httpClient,
+			baseURL+ServiceServiceDeployProcedure,
+			connect.WithSchema(serviceServiceMethods.ByName("Deploy")),
 			connect.WithClientOptions(opts...),
 		),
 		deleteService: connect.NewClient[v1.DeleteServiceRequest, v1.DeleteServiceResponse](
@@ -107,7 +117,8 @@ func NewServiceServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 type serviceServiceClient struct {
 	listServices   *connect.Client[v1.ListServicesRequest, v1.ListServicesResponse]
 	getService     *connect.Client[v1.GetServiceRequest, v1.GetServiceResponse]
-	createService  *connect.Client[v1.CreateServiceRequest, v1.CreateServiceResponse]
+	getUploadUrl   *connect.Client[v1.GetUploadUrlRequest, v1.GetUploadUrlResponse]
+	deploy         *connect.Client[v1.DeployRequest, v1.DeployResponse]
 	deleteService  *connect.Client[v1.DeleteServiceRequest, v1.DeleteServiceResponse]
 	getServiceLogs *connect.Client[v1.GetServiceLogsRequest, v1.GetServiceLogsResponse]
 }
@@ -122,9 +133,14 @@ func (c *serviceServiceClient) GetService(ctx context.Context, req *connect.Requ
 	return c.getService.CallUnary(ctx, req)
 }
 
-// CreateService calls liquidmetal.v1.ServiceService.CreateService.
-func (c *serviceServiceClient) CreateService(ctx context.Context, req *connect.Request[v1.CreateServiceRequest]) (*connect.Response[v1.CreateServiceResponse], error) {
-	return c.createService.CallUnary(ctx, req)
+// GetUploadUrl calls liquidmetal.v1.ServiceService.GetUploadUrl.
+func (c *serviceServiceClient) GetUploadUrl(ctx context.Context, req *connect.Request[v1.GetUploadUrlRequest]) (*connect.Response[v1.GetUploadUrlResponse], error) {
+	return c.getUploadUrl.CallUnary(ctx, req)
+}
+
+// Deploy calls liquidmetal.v1.ServiceService.Deploy.
+func (c *serviceServiceClient) Deploy(ctx context.Context, req *connect.Request[v1.DeployRequest]) (*connect.Response[v1.DeployResponse], error) {
+	return c.deploy.CallUnary(ctx, req)
 }
 
 // DeleteService calls liquidmetal.v1.ServiceService.DeleteService.
@@ -141,7 +157,9 @@ func (c *serviceServiceClient) GetServiceLogs(ctx context.Context, req *connect.
 type ServiceServiceHandler interface {
 	ListServices(context.Context, *connect.Request[v1.ListServicesRequest]) (*connect.Response[v1.ListServicesResponse], error)
 	GetService(context.Context, *connect.Request[v1.GetServiceRequest]) (*connect.Response[v1.GetServiceResponse], error)
-	CreateService(context.Context, *connect.Request[v1.CreateServiceRequest]) (*connect.Response[v1.CreateServiceResponse], error)
+	// Two-step execution flow replaces monolithic CreateService
+	GetUploadUrl(context.Context, *connect.Request[v1.GetUploadUrlRequest]) (*connect.Response[v1.GetUploadUrlResponse], error)
+	Deploy(context.Context, *connect.Request[v1.DeployRequest]) (*connect.Response[v1.DeployResponse], error)
 	DeleteService(context.Context, *connect.Request[v1.DeleteServiceRequest]) (*connect.Response[v1.DeleteServiceResponse], error)
 	GetServiceLogs(context.Context, *connect.Request[v1.GetServiceLogsRequest]) (*connect.Response[v1.GetServiceLogsResponse], error)
 }
@@ -165,10 +183,16 @@ func NewServiceServiceHandler(svc ServiceServiceHandler, opts ...connect.Handler
 		connect.WithSchema(serviceServiceMethods.ByName("GetService")),
 		connect.WithHandlerOptions(opts...),
 	)
-	serviceServiceCreateServiceHandler := connect.NewUnaryHandler(
-		ServiceServiceCreateServiceProcedure,
-		svc.CreateService,
-		connect.WithSchema(serviceServiceMethods.ByName("CreateService")),
+	serviceServiceGetUploadUrlHandler := connect.NewUnaryHandler(
+		ServiceServiceGetUploadUrlProcedure,
+		svc.GetUploadUrl,
+		connect.WithSchema(serviceServiceMethods.ByName("GetUploadUrl")),
+		connect.WithHandlerOptions(opts...),
+	)
+	serviceServiceDeployHandler := connect.NewUnaryHandler(
+		ServiceServiceDeployProcedure,
+		svc.Deploy,
+		connect.WithSchema(serviceServiceMethods.ByName("Deploy")),
 		connect.WithHandlerOptions(opts...),
 	)
 	serviceServiceDeleteServiceHandler := connect.NewUnaryHandler(
@@ -189,8 +213,10 @@ func NewServiceServiceHandler(svc ServiceServiceHandler, opts ...connect.Handler
 			serviceServiceListServicesHandler.ServeHTTP(w, r)
 		case ServiceServiceGetServiceProcedure:
 			serviceServiceGetServiceHandler.ServeHTTP(w, r)
-		case ServiceServiceCreateServiceProcedure:
-			serviceServiceCreateServiceHandler.ServeHTTP(w, r)
+		case ServiceServiceGetUploadUrlProcedure:
+			serviceServiceGetUploadUrlHandler.ServeHTTP(w, r)
+		case ServiceServiceDeployProcedure:
+			serviceServiceDeployHandler.ServeHTTP(w, r)
 		case ServiceServiceDeleteServiceProcedure:
 			serviceServiceDeleteServiceHandler.ServeHTTP(w, r)
 		case ServiceServiceGetServiceLogsProcedure:
@@ -212,8 +238,12 @@ func (UnimplementedServiceServiceHandler) GetService(context.Context, *connect.R
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("liquidmetal.v1.ServiceService.GetService is not implemented"))
 }
 
-func (UnimplementedServiceServiceHandler) CreateService(context.Context, *connect.Request[v1.CreateServiceRequest]) (*connect.Response[v1.CreateServiceResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("liquidmetal.v1.ServiceService.CreateService is not implemented"))
+func (UnimplementedServiceServiceHandler) GetUploadUrl(context.Context, *connect.Request[v1.GetUploadUrlRequest]) (*connect.Response[v1.GetUploadUrlResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("liquidmetal.v1.ServiceService.GetUploadUrl is not implemented"))
+}
+
+func (UnimplementedServiceServiceHandler) Deploy(context.Context, *connect.Request[v1.DeployRequest]) (*connect.Response[v1.DeployResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("liquidmetal.v1.ServiceService.Deploy is not implemented"))
 }
 
 func (UnimplementedServiceServiceHandler) DeleteService(context.Context, *connect.Request[v1.DeleteServiceRequest]) (*connect.Response[v1.DeleteServiceResponse], error) {

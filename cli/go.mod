@@ -6,6 +6,7 @@ replace github.com/kendricklawton/liquid-metal/gen/go => ../gen/go
 
 require (
 	connectrpc.com/connect v1.19.1
+	github.com/google/uuid v1.6.0
 	github.com/kendricklawton/liquid-metal/gen/go v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0

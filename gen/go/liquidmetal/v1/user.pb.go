@@ -28,6 +28,7 @@ type User struct {
 	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -86,6 +87,13 @@ func (x *User) GetName() string {
 func (x *User) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *User) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
 	}
 	return nil
 }
@@ -174,13 +182,15 @@ var File_liquidmetal_v1_user_proto protoreflect.FileDescriptor
 
 const file_liquidmetal_v1_user_proto_rawDesc = "" +
 	"\n" +
-	"\x19liquidmetal/v1/user.proto\x12\x0eliquidmetal.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"{\n" +
+	"\x19liquidmetal/v1/user.proto\x12\x0eliquidmetal.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb6\x01\n" +
 	"\x04User\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x129\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x0e\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x0e\n" +
 	"\fGetMeRequest\"9\n" +
 	"\rGetMeResponse\x12(\n" +
 	"\x04user\x18\x01 \x01(\v2\x14.liquidmetal.v1.UserR\x04user2S\n" +
@@ -208,14 +218,15 @@ var file_liquidmetal_v1_user_proto_goTypes = []any{
 }
 var file_liquidmetal_v1_user_proto_depIdxs = []int32{
 	3, // 0: liquidmetal.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	0, // 1: liquidmetal.v1.GetMeResponse.user:type_name -> liquidmetal.v1.User
-	1, // 2: liquidmetal.v1.UserService.GetMe:input_type -> liquidmetal.v1.GetMeRequest
-	2, // 3: liquidmetal.v1.UserService.GetMe:output_type -> liquidmetal.v1.GetMeResponse
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	3, // 1: liquidmetal.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	0, // 2: liquidmetal.v1.GetMeResponse.user:type_name -> liquidmetal.v1.User
+	1, // 3: liquidmetal.v1.UserService.GetMe:input_type -> liquidmetal.v1.GetMeRequest
+	2, // 4: liquidmetal.v1.UserService.GetMe:output_type -> liquidmetal.v1.GetMeResponse
+	4, // [4:5] is the sub-list for method output_type
+	3, // [3:4] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_liquidmetal_v1_user_proto_init() }
