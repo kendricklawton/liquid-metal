@@ -2,13 +2,27 @@ version: "3"
 
 dotenv: [".env"]
 
-
 tasks:
   # ── Dependencies ─────────────────────────────────────────────────────────
   up:
     desc: "Start local Postgres + NATS + RustFS (S3)"
     cmds:
       - docker compose up -d
+
+  up:db:
+    desc: "Start local Postgres only"
+    cmds:
+      - docker compose up -d db
+
+  up:nats:
+    desc: "Start local NATS only"
+    cmds:
+      - docker compose up -d nats
+
+  up:rustfs:
+    desc: "Start local RustFS (S3) only"
+    cmds:
+      - docker compose up -d rustfs
 
   down:
     desc: "Stop local dependencies"
@@ -47,7 +61,7 @@ tasks:
     desc: "Run the daemon locally (requires NATS; TAP/Firecracker/cgroup requires Linux)"
     env:
       NATS_URL: "nats://127.0.0.1:4222"
-      ROOTFS_DEVICE: "8:0"   # override in .env for your node
+      ROOTFS_DEVICE: "8:0" # override in .env for your node
       RUST_LOG: "daemon=debug"
     cmds:
       - cargo run -p daemon

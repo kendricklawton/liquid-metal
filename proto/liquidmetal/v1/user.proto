@@ -7,10 +7,11 @@ import "google/protobuf/timestamp.proto";
 option go_package = "github.com/kendricklawton/liquid-metal/gen/go/liquidmetal/v1;liquidmetalv1";
 
 message User {
-  string id         = 1;
-  string email      = 2;
-  string name       = 3;
+  string id = 1;
+  string email = 2;
+  string name = 3;
   google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
 }
 
 message GetMeRequest {}
@@ -20,5 +21,6 @@ message GetMeResponse {
 }
 
 service UserService {
+  // Returns the currently authenticated user based on the ConnectRPC authorization header
   rpc GetMe(GetMeRequest) returns (GetMeResponse);
 }
