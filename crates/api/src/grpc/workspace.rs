@@ -128,10 +128,44 @@ impl WorkspaceService for WorkspaceServiceImpl {
 
     async fn list_workspaces(
         &self,
-        _request: Request<ListWorkspacesRequest>,
+        request: Request<ListWorkspacesRequest>,
     ) -> Result<Response<ListWorkspacesResponse>, Status> {
+        let caller = extract_user_id(&request)?;
+
+        let db = self.state.db.get().await.map_err(|e| {
+            tracing::error!(error = %e, "db pool error");
+            Status::internal("db error")
+        })?;
+
+        let rows = db
+            .query(
+                "SELECT w.id, w.name, w.slug, w.tier \
+                 FROM workspaces w \
+                 JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1 \
+                 WHERE w.deleted_at IS NULL \
+                 ORDER BY w.created_at ASC",
+                &[&caller],
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "list_workspaces query failed");
+                Status::internal("query error")
+            })?;
+
+        let workspaces = rows
+            .iter()
+            .map(|row| Workspace {
+                id:         row.get::<_, Uuid>("id").to_string(),
+                name:       row.get("name"),
+                slug:       row.get("slug"),
+                tier:       BillingTier::Hobby as i32,
+                created_at: None,
+                updated_at: None,
+            })
+            .collect();
+
         Ok(Response::new(ListWorkspacesResponse {
-            workspaces:      vec![],
+            workspaces,
             next_page_token: String::new(),
         }))
     }

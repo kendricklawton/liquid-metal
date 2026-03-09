@@ -16,9 +16,6 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"connectrpc.com/connect"
-	v1 "github.com/kendricklawton/liquid-metal/gen/go/liquidmetal/v1"
-	v1connect "github.com/kendricklawton/liquid-metal/gen/go/liquidmetal/v1/liquidmetalv1connect"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -150,13 +147,13 @@ func runLogin(_ *cobra.Command, _ []string) error {
 
 	// ── Provision user in Liquid Metal ────────────────────────────────────────
 	fmt.Print("Provisioning account... ")
-	userID, displayName, err := provisionViaCLI(auth)
+	userID, displayName, workspaceID, err := provisionViaCLI(auth)
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}
 	fmt.Println("done.")
 
-	if err := saveConfig(userID, port); err != nil {
+	if err := saveConfig(userID, workspaceID, port); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
@@ -229,7 +226,7 @@ func exchangeCode(clientID, code, verifier, redirectURI string) (*workosAuthResp
 
 // ── Liquid Metal provisioning ─────────────────────────────────────────────────
 
-func provisionViaCLI(auth *workosAuthResponse) (string, string, error) {
+func provisionViaCLI(auth *workosAuthResponse) (userID, displayName, workspaceID string, err error) {
 	body, _ := json.Marshal(map[string]string{
 		"email":      auth.User.Email,
 		"first_name": auth.User.FirstName,
@@ -238,33 +235,34 @@ func provisionViaCLI(auth *workosAuthResponse) (string, string, error) {
 
 	resp, err := http.Post(apiURL()+"/auth/cli/provision", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return "", "", fmt.Errorf("POST to API: %w", err)
+		return "", "", "", fmt.Errorf("POST to API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("API returned %d", resp.StatusCode)
+		return "", "", "", fmt.Errorf("API returned %d", resp.StatusCode)
 	}
 
 	var pr struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		WorkspaceID string `json:"workspace_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		return "", "", fmt.Errorf("decode provision response: %w", err)
+		return "", "", "", fmt.Errorf("decode provision response: %w", err)
 	}
 	if pr.ID == "" {
-		return "", "", fmt.Errorf("no user ID in provision response")
+		return "", "", "", fmt.Errorf("no user ID in provision response")
 	}
 	if pr.Name == "" {
 		pr.Name = pr.ID
 	}
-	return pr.ID, pr.Name, nil
+	return pr.ID, pr.Name, pr.WorkspaceID, nil
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-func saveConfig(token string, cliPort int) error {
+func saveConfig(token, workspaceID string, cliPort int) error {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".config", "flux")
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -277,8 +275,9 @@ func saveConfig(token string, cliPort int) error {
 	}
 
 	cfg := map[string]any{
-		"token":   token,
-		"api_url": apiVal,
+		"token":        token,
+		"api_url":      apiVal,
+		"workspace_id": workspaceID,
 	}
 	if cliPort != defaultCLIPort {
 		cfg["cli_port"] = cliPort
@@ -290,23 +289,6 @@ func saveConfig(token string, cliPort int) error {
 	}
 	defer f.Close()
 	return yaml.NewEncoder(f).Encode(cfg)
-}
-
-// printWelcome is available for future use by other commands.
-func printWelcome(token string) {
-	client := v1connect.NewUserServiceClient(newHTTPClient(), apiURL(), connect.WithGRPC())
-	req := withToken(connect.NewRequest(&v1.GetMeRequest{}), token)
-	resp, err := client.GetMe(context.Background(), req)
-	if err != nil {
-		fmt.Println("Logged in. Run `flux whoami` to verify.")
-		return
-	}
-	u := resp.Msg.GetUser()
-	name := u.GetName()
-	if name == "" {
-		name = u.GetEmail()
-	}
-	fmt.Printf("\nWelcome back, %s!\n", name)
 }
 
 // ── Browser ───────────────────────────────────────────────────────────────────

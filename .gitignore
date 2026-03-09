@@ -3,10 +3,14 @@
 Cargo.lock.bak
 
 # ── Go ────────────────────────────────────────────────────────────────────────
-# Compiled binaries
-web/web
+# Compiled binaries — Go outputs a binary named after the module/dir by default
+cli/cli
 cli/flux
+web/web
 cli/tmp/
+
+# Wasm artifacts
+*.wasm
 
 # air hot-reload temp dir
 web/tmp/

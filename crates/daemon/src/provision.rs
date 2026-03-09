@@ -1,4 +1,4 @@
-use crate::{deprovision, storage, verify, wasm};
+use crate::{deprovision, storage, verify, wasm_http};
 use anyhow::{Context, Result};
 use common::events::{Engine, EngineSpec, ProvisionEvent};
 use std::path::PathBuf;
@@ -255,11 +255,16 @@ async fn provision_liquid(
 
     tracing::info!(service_id = %id, app = event.app_name, "provisioning liquid (wasm)");
 
-    wasm::execute(&wasm_path, &event.app_name)
+    // Compile the module once and start a per-request HTTP shim on a free port.
+    // Pingora routes to 127.0.0.1:{port} as upstream_addr.
+    let port = wasm_http::serve(wasm_path, event.app_name.clone())
         .await
-        .context("wasm execution")?;
+        .context("starting wasm HTTP shim")?;
 
-    Ok(ProvisionedService { id, engine: Engine::Liquid, upstream_addr: None })
+    let upstream_addr = format!("127.0.0.1:{port}");
+    tracing::info!(service_id = %id, %upstream_addr, "liquid wasm ready");
+
+    Ok(ProvisionedService { id, engine: Engine::Liquid, upstream_addr: Some(upstream_addr) })
 }
 
 #[cfg(target_os = "linux")]
