@@ -41,7 +41,13 @@ func init() {
 	viper.BindPFlag("workos_client_id", rootCmd.PersistentFlags().Lookup("client-id"))
 	viper.BindPFlag("cli_port",         rootCmd.PersistentFlags().Lookup("cli-port"))
 
-	rootCmd.AddCommand(loginCmd, whoamiCmd, statusCmd, logsCmd, deployCmd)
+	// Hide internal/dev override flags from end-user help output.
+	// They still work when passed explicitly — just not shown by default.
+	rootCmd.PersistentFlags().MarkHidden("client-id")
+	rootCmd.PersistentFlags().MarkHidden("cli-port")
+	rootCmd.PersistentFlags().MarkHidden("api-url")
+
+	rootCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd, statusCmd, logsCmd, deployCmd)
 }
 
 func initConfig() {

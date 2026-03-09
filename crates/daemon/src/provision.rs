@@ -175,6 +175,10 @@ async fn provision_metal(
             .await
             .context("cpuset pin")?;
 
+        cpu::offline_smt_sibling(cpu_core, ctx.cfg.physical_cores)
+            .await
+            .context("offline SMT sibling")?;
+
         firecracker::start_vm(&firecracker::VmConfig {
             sock_path:   &sock_path,
             vcpu:        spec.vcpu,
@@ -190,7 +194,14 @@ async fn provision_metal(
         // Register in-memory for deprovision
         ctx.registry.lock().await.insert(
             event.service_id.clone(),
-            deprovision::VmHandle { tap_name: tap.clone(), fc_pid, cpu_core },
+            deprovision::VmHandle {
+                tap_name:    tap.clone(),
+                fc_pid,
+                cpu_core,
+                vm_id:       vm_id.to_string(),
+                use_jailer:  ctx.cfg.use_jailer,
+                chroot_base: ctx.cfg.chroot_base.clone(),
+            },
         );
 
         // Persist tap_name to DB for post-restart recovery

@@ -26,7 +26,7 @@ func runLogs(_ *cobra.Command, args []string) error {
 	t := requireToken()
 	serviceID := args[0]
 
-	client := v1connect.NewServiceServiceClient(newHTTPClient(), apiURL())
+	client := v1connect.NewServiceServiceClient(newHTTPClient(), apiURL(), connect.WithGRPC())
 	req := withToken(connect.NewRequest(&v1.GetServiceLogsRequest{
 		ServiceId: serviceID,
 		Limit:     logsLimit,

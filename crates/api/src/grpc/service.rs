@@ -6,6 +6,7 @@ use crate::proto::liquidmetal::v1::{
     GetUploadUrlRequest, GetUploadUrlResponse, ListServicesRequest, ListServicesResponse, LogLine,
     Service, ServiceStatus, service_service_server::ServiceService,
 };
+use common::{EngineSpec, LiquidSpec, MetalSpec, ProvisionEvent};
 use aws_sdk_s3::presigning::PresigningConfig;
 use std::sync::Arc;
 use std::time::Duration;
@@ -133,11 +134,28 @@ impl ServiceService for ServiceServiceImpl {
             _              => return Err(Status::invalid_argument("invalid engine")),
         };
 
-        let (vcpu, memory_mb, port) = match req.spec {
+        let engine_spec = match req.spec {
             Some(crate::proto::liquidmetal::v1::deploy_request::Spec::Metal(m)) => {
-                (m.vcpu, m.memory_mb, m.port)
+                EngineSpec::Metal(MetalSpec {
+                    vcpu:             m.vcpu as u32,
+                    memory_mb:        m.memory_mb as u32,
+                    port:             m.port as u16,
+                    artifact_key:     req.artifact_key.clone(),
+                    artifact_sha256:  if req.sha256.is_empty() { None } else { Some(req.sha256.clone()) },
+                    quota:            Default::default(),
+                })
             }
-            _ => (0, 0, 0),
+            Some(crate::proto::liquidmetal::v1::deploy_request::Spec::Liquid(_)) | None => {
+                EngineSpec::Liquid(LiquidSpec {
+                    artifact_key:    req.artifact_key.clone(),
+                    artifact_sha256: if req.sha256.is_empty() { None } else { Some(req.sha256.clone()) },
+                })
+            }
+        };
+
+        let (vcpu, memory_mb, port) = match &engine_spec {
+            EngineSpec::Metal(m) => (m.vcpu, m.memory_mb, m.port as i32),
+            EngineSpec::Liquid(_) => (0, 0, 0),
         };
 
         db.execute(
@@ -147,7 +165,7 @@ impl ServiceService for ServiceServiceImpl {
             &[
                 &service_id, &pid, &workspace_id,
                 &req.name, &slug, &engine_str,
-                &req.sha256, &vcpu, &memory_mb, &port,
+                &req.sha256, &(vcpu as i32), &(memory_mb as i32), &port,
             ],
         )
         .await
@@ -155,6 +173,24 @@ impl ServiceService for ServiceServiceImpl {
             tracing::error!(error = %e, "service insert failed");
             Status::internal("database error")
         })?;
+
+        let event = ProvisionEvent {
+            tenant_id:  workspace_id.to_string(),
+            service_id: service_id.to_string(),
+            app_name:   req.name.clone(),
+            engine:     match Engine::try_from(req.engine).unwrap_or(Engine::Unspecified) {
+                Engine::Metal => common::Engine::Metal,
+                _             => common::Engine::Liquid,
+            },
+            spec: engine_spec,
+        };
+
+        crate::nats::publish_provision(&self.state.nats, &event)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "nats publish failed");
+                Status::internal("failed to queue provisioning")
+            })?;
 
         Ok(Response::new(DeployResponse {
             service: Some(Service {

@@ -22,20 +22,20 @@ import (
 
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
-	Short: "Compile and deploy a service from machine.toml",
+	Short: "Compile and deploy a service from flux.toml",
 	RunE:  runDeploy,
 }
 
 func runDeploy(_ *cobra.Command, _ []string) error {
 	t := requireToken()
 
-	// 1. Parse machine.toml
+	// 1. Parse flux.toml
 	cfg := viper.New()
-	cfg.SetConfigName("machine")
+	cfg.SetConfigName("flux")
 	cfg.SetConfigType("toml")
 	cfg.AddConfigPath(".")
 	if err := cfg.ReadInConfig(); err != nil {
-		return fmt.Errorf("read machine.toml: %w (run from your project directory)", err)
+		return fmt.Errorf("read flux.toml: %w (run from your project directory)", err)
 	}
 
 	name := cfg.GetString("service.name")
@@ -43,10 +43,10 @@ func runDeploy(_ *cobra.Command, _ []string) error {
 	projectID := cfg.GetString("service.project_id") // Required for the new workspace hierarchy
 
 	if name == "" {
-		return fmt.Errorf("machine.toml: [service].name is required")
+		return fmt.Errorf("flux.toml: [service].name is required")
 	}
 	if projectID == "" {
-		return fmt.Errorf("machine.toml: [service].project_id is required")
+		return fmt.Errorf("flux.toml: [service].project_id is required")
 	}
 
 	if engineStr != "liquid" {
@@ -80,7 +80,7 @@ func runDeploy(_ *cobra.Command, _ []string) error {
 	deployID := uuid.New().String()
 	fmt.Printf("=> Artifact built: %s (SHA256: %s...)\n", wasmFile, sha256Hex[:8])
 
-	client := v1connect.NewServiceServiceClient(newHTTPClient(), apiURL())
+	client := v1connect.NewServiceServiceClient(newHTTPClient(), apiURL(), connect.WithGRPC())
 
 	// 4. Request Pre-signed Upload URL
 	fmt.Println("=> Requesting upload destination...")

@@ -8,7 +8,7 @@ name = "api"
 path = "src/lib.rs"
 
 [[bin]]
-name = "machinename-api"
+name = "liquid-metal-api"
 path = "src/main.rs"
 
 [dependencies]

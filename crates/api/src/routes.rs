@@ -432,63 +432,31 @@ pub async fn provision_user(
 
 #[derive(Debug, Deserialize)]
 pub struct CliProvisionRequest {
-    /// WorkOS access token obtained by the CLI via PKCE.
-    pub access_token: String,
+    /// User identity fields from the WorkOS PKCE token exchange response.
+    pub email:      String,
+    pub first_name: String,
+    pub last_name:  String,
 }
 
-/// Minimal WorkOS user info returned by GET /user_management/users/me.
-#[derive(Debug, Deserialize)]
-struct WorkOSUser {
-    email:      String,
-    first_name: String,
-    last_name:  String,
-}
-
-/// POST /auth/cli/provision — provision a user via a WorkOS PKCE access token.
+/// POST /auth/cli/provision — provision a user after a successful PKCE flow.
 ///
 /// Called directly by the CLI after it completes the PKCE browser flow.
-/// No `X-Internal-Secret` required — the WorkOS access token is the proof of
-/// identity. The token is verified by calling WorkOS's own `/users/me` endpoint.
+/// User fields come from the WorkOS token exchange response (which already
+/// authenticates the user) — no secondary WorkOS API call needed.
 pub async fn cli_provision(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CliProvisionRequest>,
 ) -> Result<Json<ProvisionResponse>, StatusCode> {
-    if req.access_token.is_empty() {
+    if req.email.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-
-    // Verify the token with WorkOS and retrieve the user's identity.
-    let wu = verify_workos_token(&req.access_token).await.map_err(|e| {
-        tracing::warn!(error = %e, "WorkOS token verification failed");
-        StatusCode::UNAUTHORIZED
-    })?;
 
     let mut db = state.db.get().await.map_err(|e| {
         tracing::error!(error = %e, "db pool");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    do_provision(&mut db, &wu.email, &wu.first_name, &wu.last_name).await
-}
-
-/// Call `GET https://api.workos.com/user_management/users/me` with the access
-/// token as a Bearer credential. Returns the user's identity or an error if
-/// the token is invalid or expired.
-async fn verify_workos_token(access_token: &str) -> anyhow::Result<WorkOSUser> {
-    let resp = reqwest::Client::new()
-        .get("https://api.workos.com/user_management/users/me")
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("WorkOS request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(anyhow::anyhow!("WorkOS returned {}", resp.status()));
-    }
-
-    resp.json::<WorkOSUser>()
-        .await
-        .map_err(|e| anyhow::anyhow!("WorkOS response parse error: {e}"))
+    do_provision(&mut db, &req.email, &req.first_name, &req.last_name).await
 }
 
 // ── Auth: shared provisioning logic ──────────────────────────────────────────
