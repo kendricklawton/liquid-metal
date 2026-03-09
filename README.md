@@ -1,4 +1,4 @@
-# liquid-metal
+# Liquid Metal
 
 > **Experimental** — work in progress. Built to learn by doing. Not production-ready.
 
@@ -26,14 +26,16 @@ port   = 8080
 [metal]
 vcpu      = 1
 memory_mb = 128
+
 ```
 
 ### Liquid — WebAssembly
+
 Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, in-process execution, memory-only. No disk, no TAP, no VM overhead.
 
-- **Isolation**: Wasmtime Wasm sandbox
-- **Cold start**: <1ms
-- **Execution**: In-process, WASI VFS
+* **Isolation**: Wasmtime Wasm sandbox
+* **Cold start**: <1ms
+* **Execution**: In-process, WASI VFS
 
 ```toml
 # liquid-metal.toml
@@ -41,80 +43,23 @@ Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, in-process exec
 name   = "my-fn"
 engine = "liquid"
 
-[liquid]
-wasm = "main.wasm"
+[build]
+command = "GOOS=wasip1 GOARCH=wasm go build -o main.wasm ."
+output  = "main.wasm"
+
 ```
 
 ---
 
-## Architecture
-
-```
-Internet
-    │
-    ▼
-Pingora Edge Proxy  (:80/:443)
-*.machinename.dev → slug lookup → upstream_addr
-    │
-    ├──────────────────────────┐
-    ▼                          ▼
-engine: metal             engine: liquid
-Firecracker microVM       Wasmtime executor
-TAP → br0                 in-process, <1ms
-~100–250ms cold start     no disk, no TAP
-```
-
-**Stack:**
-- **Proxy**: Pingora (Rust) — slug → upstream_addr routing
-- **API**: Axum + tonic (Rust) — service CRUD, ConnectRPC over h2c
-- **Daemon**: NATS consumer (Rust) — provisions VMs and Wasm
-- **Web**: chi + Templ + HTMX (Go) — dashboard UI on :3000
-- **CLI**: Cobra + Viper (Go) — `flux` developer tool
-- **Event bus**: NATS JetStream 3-node Raft
-- **State**: PostgreSQL — raw SQL, refinery migrations
-- **Artifacts**: Vultr Object Storage (S3-compatible) — rootfs images + wasm binaries
-
----
-
-## Repository Layout
-
-```
-liquid-metal/
-├── go.work             Go workspace (web, cli, gen/go)
-├── Cargo.toml          Rust workspace
-│
-├── crates/
-│   ├── common/         Shared types: Engine, ProvisionEvent, config helpers
-│   ├── api/            Axum + tonic — ConnectRPC server :7070, publishes to NATS
-│   ├── proxy/          Pingora edge router — slug → upstream_addr
-│   ├── daemon/         NATS consumer — Firecracker + Wasmtime provision loop
-│   └── ebpf-programs/  TC egress classifier — cross-tenant VM isolation (BPF)
-│
-├── web/                Go module — dashboard (chi + Templ + HTMX) on :3000
-│   ├── cmd/web/        Server entry point
-│   └── internal/
-│       ├── config/     Config loading from env vars
-│       ├── handler/    HTMX request handlers
-│       └── ui/         Templ components + pages
-│
-├── cli/                Go module — flux CLI (Cobra + Viper)
-│   ├── main.go         Entry point
-│   └── cmd/            Commands: login, whoami, deploy, status, logs
-│
-├── proto/              Protobuf definitions
-├── gen/go/             buf-generated Go stubs (ConnectRPC)
-└── migrations/         PostgreSQL migrations (refinery)
-```
-
----
-
-## Deploy in 3 Commands
+## Getting Started
 
 ```bash
 flux login      # authenticate via browser (WorkOS)
-flux deploy     # reads liquid-metal.toml → ships to node
+flux init       # create project + write liquid-metal.toml
+flux deploy     # build locally → upload → provision
 flux status     # list your services
-# → live at <name>.machinename.dev
+# → live at <name>.liquidmetal.dev
+
 ```
 
 ---
@@ -127,21 +72,31 @@ task dev:api      # Rust API on :7070
 task dev:web      # Go dashboard on :3000 (air hot reload)
 task dev:proxy    # Pingora on :8080
 task dev:daemon   # NATS consumer (Firecracker skipped on macOS)
-task dev:cli -- status   # run flux CLI
+task dev:cli -- login    # flux login
+task dev:cli -- init     # flux init
+task dev:cli -- deploy   # flux deploy
+task dev:cli -- status   # flux status
+
 ```
 
 ### Linux (bare metal, one-time setup)
+
 ```bash
 task metal:setup     # br0 bridge, /run/firecracker, Firecracker binary
 task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
+
 ```
 
 ---
 
 ## What We Don't Use
 
-- No Kubernetes, K3s, or any orchestrator
-- No AWS, GCP, Azure, Vercel, or Heroku
-- No ORMs (raw SQL everywhere)
-- No SPA frameworks (HTMX + Templ only)
-- No container registry (Object Storage is the registry)
+* No Kubernetes, K3s, or any orchestrator
+* No AWS, GCP, Azure, Vercel, or Heroku
+* No ORMs (raw SQL everywhere)
+* No SPA frameworks (HTMX + Templ only)
+* No container registry (Object Storage is the registry)
+
+> For deep-dives into infrastructure topology, eBPF tenant isolation, HA strategy, and data flow see [ARCHITECTURE.md](ARCHITECTURE.md). For codebase layout and contribution rules see [CLAUDE.md](CLAUDE.md).
+
+```
