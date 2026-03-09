@@ -6,7 +6,7 @@ use crate::proto::liquidmetal::v1::{
     GetUploadUrlRequest, GetUploadUrlResponse, ListServicesRequest, ListServicesResponse, LogLine,
     Service, ServiceStatus, service_service_server::ServiceService,
 };
-use common::{EngineSpec, LiquidSpec, MetalSpec, ProvisionEvent};
+use common::{EngineSpec, LiquidSpec, MetalSpec, ProvisionEvent, slugify};
 use aws_sdk_s3::presigning::PresigningConfig;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,27 +22,6 @@ pub struct ServiceServiceImpl {
     pub state: Arc<AppState>,
 }
 
-fn slugify(name: &str) -> String {
-    let s: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect();
-    let mut slug = String::new();
-    let mut prev_dash = false;
-    for c in s.chars() {
-        if c == '-' {
-            if !prev_dash {
-                slug.push(c);
-            }
-            prev_dash = true;
-        } else {
-            slug.push(c);
-            prev_dash = false;
-        }
-    }
-    slug.trim_matches('-').to_string()
-}
 
 #[tonic::async_trait]
 impl ServiceService for ServiceServiceImpl {
@@ -215,19 +194,37 @@ impl ServiceService for ServiceServiceImpl {
         let caller = extract_user_id(&request)?;
         let req    = request.into_inner();
 
-        let pid: Uuid = req
-            .project_id
-            .parse()
-            .map_err(|_| Status::invalid_argument("invalid project_id"))?;
-
         let db = self.state.db.get().await.map_err(|e| {
             tracing::error!(error = %e, "db pool error");
             Status::internal("db pool error")
         })?;
 
         // Membership is enforced inside the query via JOIN — returns empty set if not a member.
-        let rows = db
-            .query(
+        // When project_id is empty, list all services across all of the caller's workspaces.
+        let rows = if req.project_id.is_empty() {
+            db.query(
+                "SELECT s.id, s.name, s.slug, s.engine, s.status, \
+                        s.upstream_addr, s.commit_sha, s.project_id \
+                 FROM services s \
+                 JOIN projects p ON p.id = s.project_id \
+                 JOIN workspace_members wm \
+                   ON wm.workspace_id = p.workspace_id AND wm.user_id = $1 \
+                 WHERE s.deleted_at IS NULL \
+                 ORDER BY s.created_at DESC \
+                 LIMIT $2",
+                &[&caller, &LIST_SERVICES_LIMIT],
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "list_services query failed");
+                Status::internal("query error")
+            })?
+        } else {
+            let pid: Uuid = req
+                .project_id
+                .parse()
+                .map_err(|_| Status::invalid_argument("invalid project_id"))?;
+            db.query(
                 "SELECT s.id, s.name, s.slug, s.engine, s.status, \
                         s.upstream_addr, s.commit_sha, s.project_id \
                  FROM services s \
@@ -243,7 +240,8 @@ impl ServiceService for ServiceServiceImpl {
             .map_err(|e| {
                 tracing::error!(error = %e, "list_services query failed");
                 Status::internal("query error")
-            })?;
+            })?
+        };
 
         let services = rows
             .iter()
@@ -436,7 +434,7 @@ impl ServiceService for ServiceServiceImpl {
 
         let rows = db
             .query(
-                "SELECT message, created_at \
+                "SELECT content, created_at \
                  FROM build_log_lines \
                  WHERE service_id = $1 \
                  ORDER BY created_at DESC \
@@ -451,7 +449,7 @@ impl ServiceService for ServiceServiceImpl {
 
         let lines = rows
             .iter()
-            .map(|row| LogLine { message: row.get("message"), ts: None })
+            .map(|row| LogLine { message: row.get("content"), ts: None })
             .collect();
 
         Ok(Response::new(GetServiceLogsResponse {

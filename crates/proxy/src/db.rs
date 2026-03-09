@@ -21,7 +21,7 @@ pub async fn lookup_route(pool: &Pool, slug: &str) -> Result<Option<RouteRecord>
     let client = pool.get().await.context("acquiring db connection")?;
     let row = client
         .query_opt(
-            "SELECT engine, upstream_addr FROM services WHERE slug = $1",
+            "SELECT engine, upstream_addr FROM services WHERE slug = $1 AND deleted_at IS NULL",
             &[&slug],
         )
         .await

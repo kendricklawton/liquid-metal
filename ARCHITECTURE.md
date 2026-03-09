@@ -38,7 +38,7 @@ All infrastructure runs in **Vultr Chicago (ORD)**. One vendor, one region, sub-
 | **API**            | Axum + tonic (Rust), :7070              | Active/active on both nodes                        |
 | **Daemon**         | NATS consumer (Rust)                    | Active on both nodes, each owns local KVM          |
 | **Web UI**         | chi + Templ + HTMX (Go), :3000          | Active/active on both nodes                        |
-| **CLI**            | `plat` binary (Rust)                    | init, deploy, status, logs                         |
+| **CLI**            | `flux` binary (Go)                      | login, deploy, status, logs, workspace, project    |
 | **Event bus**      | NATS JetStream — 3-node Raft            | node-a + node-b + NAT VPS, survives 1 failure      |
 | **Database**       | Vultr Managed Postgres — Chicago        | Managed HA, daily backups, standard pg conn string |
 | **Artifact store** | Vultr Object Storage — Chicago          | S3-compatible, rootfs images + .wasm binaries      |
@@ -68,13 +68,19 @@ Everything lives in Vultr Chicago. Bare metal, VPS, Managed Postgres, and Object
 
 ```
 liquid-metal-artifacts/          (bucket name)
-├── rootfs/
+├── base/
+│   └── alpine-3.20-amd64.ext4  # Base rootfs, built by us once
+├── metal/
 │   └── {service_id}/
-│       └── rootfs.ext4          # Metal: ext4 image per service
+│       └── {deploy_id}/
+│           └── app              # User's statically compiled Linux binary
 └── wasm/
     └── {service_id}/
-        └── main.wasm            # Liquid: Wasm module per service
+        └── {deploy_id}/
+            └── main.wasm        # User's compiled Wasm module
 ```
+
+`deploy_id` is a UUID v7 generated at deploy time — each deploy is immutable.
 
 Lifecycle policy: delete artifacts 30 days after service deletion.
 
@@ -363,7 +369,7 @@ policies for cleanup.
 
 ```
 flux deploy
-  1. read flux.toml → engine, name, build command
+  1. read liquid-metal.toml → engine, name, build command
   2. build locally:
        metal:  go build -o app . / cargo build --release
        liquid: GOOS=wasip1 go build -o main.wasm .
@@ -391,33 +397,14 @@ NATS → daemon
 
 ### GitOps — Zero YAML
 
-Users never write workflow files. `flux link` wires everything automatically:
+Users never write workflow files. `flux deploy` handles everything:
 
 ```
-flux init     → creates flux.toml interactively (name, engine, vcpu, memory)
-flux deploy   → first deploy, prints live URL
-flux link     → connects GitHub repo, enables auto-deploy on every push
-git push      → redeploys automatically forever
+flux deploy   → auto-creates liquid-metal.toml + project if missing, builds, deploys
+git push      → run flux deploy again (flux link for auto-deploy is a future feature)
 ```
 
-**What `flux link` does under the hood:**
-
-```
-flux link
-  1. reads git remote -v → detects GitHub repo URL
-  2. opens browser → GitHub OAuth (or prompts for PAT)
-  3. POST /projects/:id/link { repo_url, github_token }
-       → platform calls GitHub API to install webhook on the repo
-       → webhook: POST https://api.machinename.dev/webhooks/github
-  4. prints: "Linked. Every push to main will redeploy automatically."
-
-On every git push:
-  GitHub → POST /webhooks/github (HMAC-verified)
-  → API looks up service by repo_url + branch
-  → triggers same flow as flux deploy (build on platform side or re-use artifact)
-```
-
-**The only file a user ever touches is `flux.toml`.** Config changes:
+**The only file a user ever touches is `liquid-metal.toml`.** Config changes:
 
 ```toml
 # Increase memory → flux deploy → new VM boots with updated spec
@@ -457,19 +444,22 @@ Go web has **zero direct database or NATS access**. All data flows through the R
 ```
 liquid-metal/
 ├── crates/
-│   ├── common/     Shared Rust types (Engine, ProvisionEvent, EngineSpec)
-│   ├── api/        Axum + tonic — REST + ConnectRPC, publishes to NATS
+│   ├── common/     Shared Rust types (Engine, ProvisionEvent, EngineSpec, slugify)
+│   ├── api/        Axum + tonic — ConnectRPC server :7070, publishes to NATS
 │   ├── proxy/      Pingora edge router — slug → upstream_addr
-│   ├── daemon/     NATS consumer — Firecracker + Wasmtime provision loop
-│   └── cli/        flux binary (init, deploy, link, status, logs)
-├── web/
-│   ├── cmd/web/    chi server, ConnectRPC client
+│   └── daemon/     NATS consumer — Firecracker + Wasmtime provision loop
+├── cli/            flux CLI (Go) — login, deploy, status, logs, workspace, project
+│   ├── main.go
+│   └── cmd/        Cobra commands
+├── web/            Go dashboard — chi + Templ + HTMX, ConnectRPC client, :3000
+│   ├── cmd/web/    chi server entry point
 │   └── internal/
 │       ├── handler/ HTMX request handlers
 │       └── ui/      Templ components + pages
-├── proto/          Protobuf definitions — buf generates Rust + Go stubs
-├── migrations/     PostgreSQL migrations (refinery)
-└── architecture.md This file
+├── gen/go/         buf-generated Go protobuf + connect stubs (shared via go.work)
+├── proto/          Protobuf definitions — buf generates Rust (tonic) + Go (connect-go) stubs
+├── migrations/     PostgreSQL migrations (refinery, embedded in api)
+└── ARCHITECTURE.md This file
 ```
 
 ---
@@ -480,7 +470,7 @@ liquid-metal/
 - `buf` generates:
   - Rust stubs (tonic) → consumed by `crates/api`
   - Go stubs (connect-go) → consumed by `web/`
-- Transport: ConnectRPC over h2c (HTTP/2 cleartext, internal WireGuard mesh only)
+- Transport: ConnectRPC over h2c (HTTP/2 cleartext, internal Tailscale mesh only)
 
 ---
 
@@ -489,7 +479,7 @@ liquid-metal/
 | Variable                      | Used by            | Description                                   |
 |-------------------------------|--------------------|-----------------------------------------------|
 | `DATABASE_URL`                | api, proxy, daemon | Vultr Managed Postgres connection string       |
-| `NATS_URL`                    | api, daemon        | NATS JetStream address (WireGuard IP)          |
+| `NATS_URL`                    | api, daemon        | NATS JetStream address (Tailscale IP)          |
 | `BIND_ADDR`                   | api, proxy, web    | Listen address                                 |
 | `API_URL`                     | web                | Rust API ConnectRPC endpoint                   |
 | `OBJECT_STORAGE_ENDPOINT`     | api, daemon        | Vultr Object Storage endpoint (S3-compat)      |
@@ -499,7 +489,7 @@ liquid-metal/
 
 ---
 
-## User Config (flux.toml)
+## User Config (liquid-metal.toml)
 
 ```toml
 # Metal
@@ -519,8 +509,9 @@ memory_mb = 128
 name   = "my-fn"
 engine = "liquid"
 
-[liquid]
-wasm = "main.wasm"
+[build]
+command = "GOOS=wasip1 GOARCH=wasm go build -o main.wasm ."
+output  = "main.wasm"
 ```
 
 ---
@@ -529,7 +520,7 @@ wasm = "main.wasm"
 
 - **No Kubernetes, K3s, or any orchestrator**
 - **No managed compute** — bare metal for all execution (Vultr Managed Postgres + Object Storage are fine)
-- **No ORMs** — tokio-postgres (Rust), sqlc + pgx (Go)
+- **No ORMs** — tokio-postgres with raw SQL (Rust); Go web has zero DB access
 - **No SPA frameworks** — HTMX + Templ only, Alpine.js sparingly
 - **No hardcoded addresses** — all config via env vars
 - **No rounded corners** — `rounded-none` everywhere in UI
@@ -542,11 +533,14 @@ wasm = "main.wasm"
 ## Dev Workflow
 
 ```bash
-task up           # Postgres + NATS via docker compose (local only)
+task up           # Postgres + NATS + RustFS via docker compose (local only)
 task dev:api      # Rust API on :7070
-task dev:web      # Go dashboard on :3000
+task dev:web      # Go dashboard on :3000 (air hot reload)
 task dev:proxy    # Pingora on :8080
 task dev:daemon   # NATS consumer (Firecracker skipped on macOS)
+task dev:cli -- login    # flux login
+task dev:cli -- deploy   # flux deploy (reads ./liquid-metal.toml)
+task dev:cli -- status   # flux status
 ```
 
 In local dev, `DATABASE_URL` points to the docker-compose Postgres. In production, it points to Vultr Managed Postgres. Object storage env vars point to Vultr in all environments.

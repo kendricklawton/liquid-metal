@@ -22,52 +22,85 @@ import (
 
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
-	Short: "Compile and deploy a service from flux.toml",
+	Short: "Build and deploy the service in the current directory",
 	RunE:  runDeploy,
 }
 
 func runDeploy(_ *cobra.Command, _ []string) error {
 	t := requireToken()
 
-	// 1. Parse flux.toml
+	// 1. Parse liquid-metal.toml — auto-init if not present
 	cfg := viper.New()
-	cfg.SetConfigName("flux")
+	cfg.SetConfigName("liquid-metal")
 	cfg.SetConfigType("toml")
 	cfg.AddConfigPath(".")
+
 	if err := cfg.ReadInConfig(); err != nil {
-		return fmt.Errorf("read flux.toml: %w (run from your project directory)", err)
+		if !isConfigNotFound(err) {
+			return fmt.Errorf("read liquid-metal.toml: %w", err)
+		}
+		return fmt.Errorf("no liquid-metal.toml found\n\nRun `flux init` to set up this directory as a Liquid Metal service.")
 	}
 
 	name := cfg.GetString("service.name")
 	engineStr := strings.ToLower(cfg.GetString("service.engine"))
-	projectID := cfg.GetString("service.project_id") // Required for the new workspace hierarchy
+	projectID := cfg.GetString("service.project_id")
 
 	if name == "" {
-		return fmt.Errorf("flux.toml: [service].name is required")
+		return fmt.Errorf("liquid-metal.toml: [service].name is required")
 	}
 	if projectID == "" {
-		return fmt.Errorf("flux.toml: [service].project_id is required")
+		return fmt.Errorf("liquid-metal.toml: [service].project_id is required")
 	}
-
 	if engineStr != "liquid" {
-		// We are building the Tracer Bullet for Wasm today
 		return fmt.Errorf("only 'liquid' engine is supported in this tracer bullet")
 	}
 
 	fmt.Printf("=> Deploying %s (Engine: Liquid)...\n", name)
 
-	// 2. Compile to WebAssembly
-	fmt.Println("=> Compiling Go to WebAssembly (wasip1)...")
-	wasmFile := "main.wasm"
-	buildCmd := exec.Command("go", "build", "-o", wasmFile, ".")
-	buildCmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-
-	if err := buildCmd.Run(); err != nil {
-		return fmt.Errorf("compilation failed: %w", err)
+	// 2. Build the artifact
+	//
+	// If liquid-metal.toml has a [build] section, run the user-supplied command.
+	// Otherwise default to compiling Go → WebAssembly (GOOS=wasip1).
+	//
+	// liquid-metal.toml examples:
+	//   Go (default — no [build] section needed):
+	//     auto: GOOS=wasip1 GOARCH=wasm go build -o main.wasm .
+	//
+	//   Rust:
+	//     [build]
+	//     command = "cargo build --target wasm32-wasip1 --release"
+	//     output  = "target/wasm32-wasip1/release/my_fn.wasm"
+	//
+	//   Any language:
+	//     [build]
+	//     command = "make wasm"
+	//     output  = "dist/handler.wasm"
+	buildCommand := cfg.GetString("build.command")
+	wasmFile := cfg.GetString("build.output")
+	if wasmFile == "" {
+		wasmFile = "main.wasm"
 	}
-	defer os.Remove(wasmFile) // Clean up artifact after deploy
+
+	if buildCommand != "" {
+		fmt.Printf("=> Building (%s)...\n", buildCommand)
+		sh := exec.Command("sh", "-c", buildCommand)
+		sh.Stdout = os.Stdout
+		sh.Stderr = os.Stderr
+		if err := sh.Run(); err != nil {
+			return fmt.Errorf("build failed: %w", err)
+		}
+	} else {
+		fmt.Println("=> Compiling Go to WebAssembly (wasip1)...")
+		goCmd := exec.Command("go", "build", "-o", wasmFile, ".")
+		goCmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+		goCmd.Stdout = os.Stdout
+		goCmd.Stderr = os.Stderr
+		if err := goCmd.Run(); err != nil {
+			return fmt.Errorf("compilation failed: %w", err)
+		}
+	}
+	defer os.Remove(wasmFile)
 
 	// 3. Hash the artifact
 	fileBytes, err := os.ReadFile(wasmFile)
@@ -82,7 +115,7 @@ func runDeploy(_ *cobra.Command, _ []string) error {
 
 	client := v1connect.NewServiceServiceClient(newHTTPClient(), apiURL(), connect.WithGRPC())
 
-	// 4. Request Pre-signed Upload URL
+	// 4. Request pre-signed upload URL
 	fmt.Println("=> Requesting upload destination...")
 	urlReq := withToken(connect.NewRequest(&v1.GetUploadUrlRequest{
 		Slug:      name,
@@ -98,13 +131,12 @@ func runDeploy(_ *cobra.Command, _ []string) error {
 	uploadUrl := urlResp.Msg.GetUploadUrl()
 	artifactKey := urlResp.Msg.GetArtifactKey()
 
-	// 5. Upload the Artifact
+	// 5. Upload the artifact
 	fmt.Println("=> Uploading artifact to object storage...")
 	httpReq, err := http.NewRequest("PUT", uploadUrl, bytes.NewReader(fileBytes))
 	if err != nil {
 		return fmt.Errorf("create upload request: %w", err)
 	}
-	// Object storage requires the exact content length
 	httpReq.ContentLength = int64(len(fileBytes))
 
 	httpResp, err := http.DefaultClient.Do(httpReq)
@@ -117,7 +149,7 @@ func runDeploy(_ *cobra.Command, _ []string) error {
 	}
 	httpResp.Body.Close()
 
-	// 6. Confirm Deployment
+	// 6. Confirm deployment
 	fmt.Println("=> Finalizing deployment...")
 	deployReq := withToken(connect.NewRequest(&v1.DeployRequest{
 		Name:        name,
@@ -127,7 +159,6 @@ func runDeploy(_ *cobra.Command, _ []string) error {
 		DeployId:    deployID,
 		ArtifactKey: artifactKey,
 		Sha256:      sha256Hex,
-		// Using the Protobuf oneof field for Liquid
 		Spec: &v1.DeployRequest_Liquid{
 			Liquid: &v1.LiquidSpec{
 				Entrypoint: "main.wasm",
@@ -147,3 +178,4 @@ func runDeploy(_ *cobra.Command, _ []string) error {
 
 	return nil
 }
+

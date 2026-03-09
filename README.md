@@ -17,7 +17,7 @@ Run any Linux binary in a hardware-isolated VM. KVM-backed, dedicated rootfs, TA
 - **Storage**: Dedicated ext4 rootfs per service
 
 ```toml
-# flux.toml
+# liquid-metal.toml
 [service]
 name   = "my-app"
 engine = "metal"
@@ -36,7 +36,7 @@ Run Wasm modules via Wasmtime/WASI. Sub-millisecond cold starts, in-process exec
 - **Execution**: In-process, WASI VFS
 
 ```toml
-# flux.toml
+# liquid-metal.toml
 [service]
 name   = "my-fn"
 engine = "liquid"
@@ -112,7 +112,7 @@ liquid-metal/
 
 ```bash
 flux login      # authenticate via browser (WorkOS)
-flux deploy     # reads flux.toml → ships to node
+flux deploy     # reads liquid-metal.toml → ships to node
 flux status     # list your services
 # → live at <name>.machinename.dev
 ```

@@ -27,6 +27,6 @@ fn main() -> Result<()> {
     svc.add_tcp(&bind_addr);
     server.add_service(svc);
 
-    tracing::info!(%bind_addr, "machinename-proxy listening");
+    tracing::info!(%bind_addr, "liquid-metal-proxy listening");
     server.run_forever();
 }
