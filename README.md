@@ -97,6 +97,6 @@ task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
 * No SPA frameworks (HTMX + Templ only)
 * No container registry (Object Storage is the registry)
 
-> For deep-dives into infrastructure topology, eBPF tenant isolation, HA strategy, and data flow see [ARCHITECTURE.md](ARCHITECTURE.md). For codebase layout and contribution rules see [CLAUDE.md](CLAUDE.md).
+> For deep-dives into infrastructure topology, eBPF tenant isolation, HA strategy, and data flow see [ARCHITECTURE.md](ARCHITECTURE.md). For codebase layout, dev setup, and contribution rules see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```
