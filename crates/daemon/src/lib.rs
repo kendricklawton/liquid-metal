@@ -4,6 +4,7 @@ pub mod provision;
 pub mod storage;
 pub mod verify;
 pub mod wasm;
+pub mod wasm_http;
 
 #[cfg(target_os = "linux")]
 pub mod cgroup;

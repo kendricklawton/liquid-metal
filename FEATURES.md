@@ -15,7 +15,7 @@ These are table-stakes — users expect them on day one.
 | `flux logs <id>` — tail service logs | Metal + Liquid | daemon → NATS → API → CLI |
 | `flux status` — list services + health | Metal + Liquid | API → CLI |
 | Custom domains + auto TLS | Both | Pingora — ACME via Let's Encrypt |
-| Encrypted secrets (`flux.toml` → env) | Both | API encrypts at rest, daemon injects |
+| Encrypted secrets (`liquid-metal.toml` → env) | Both | API encrypts at rest, daemon injects |
 | Service pause / resume | Both | API sets status, daemon respects it |
 | Rollback to previous deploy | Both | Object Storage — `deploy_id` (uuid_v7) is immutable |
 | Deploy history per service | Both | `services` table + deploy rows |
@@ -48,7 +48,7 @@ Natural fit for both engines — especially Liquid.
 
 | Feature | Notes |
 |---|---|
-| Cron schedule in `flux.toml` | `[cron] schedule = "0 * * * *"` |
+| Cron schedule in `liquid-metal.toml` | `[cron] schedule = "0 * * * *"` |
 | Liquid cron | NATS JetStream scheduled consumer fires `wasm_invoke` message |
 | Metal cron | daemon wakes sleeping VM on schedule, runs, sleeps again |
 | Cron management in dashboard | list, pause, trigger manually |
@@ -66,7 +66,7 @@ Already mostly there — Pingora does this natively.
 | Path rewrites | `routing_rules` table — `{match, rewrite}` — Pingora reads on request |
 | Redirects (301/302) | Same rule engine, different action type |
 | Custom domain routing | Pingora SNI → domain → service lookup |
-| Port routing per service | `flux.toml` declares port, stored in `services.port` |
+| Port routing per service | `liquid-metal.toml` declares port, stored in `services.port` |
 | Middleware (header injection) | Pingora `upstream_request_filter` — inject headers from `service_env_vars` |
 
 ---
@@ -145,7 +145,7 @@ These are things they cannot offer — lean into them.
 
 | Differentiator | Why it matters |
 |---|---|
-| Declared vCPU + RAM in `flux.toml` | No mystery resource pools. You get exactly what you asked for. |
+| Declared vCPU + RAM in `liquid-metal.toml` | No mystery resource pools. You get exactly what you asked for. |
 | Firecracker hardware isolation | Not a container. A real KVM guest. Security story is stronger. |
 | Wasm sub-millisecond cold start | No warm instances needed. Pay per invocation at near-zero cost. |
 | Bare metal bandwidth (10 Gbps) | Vercel charges per GB. You can offer generous transfer limits cheaply. |

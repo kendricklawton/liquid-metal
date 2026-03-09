@@ -47,7 +47,7 @@ func init() {
 	rootCmd.PersistentFlags().MarkHidden("cli-port")
 	rootCmd.PersistentFlags().MarkHidden("api-url")
 
-	rootCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd, statusCmd, logsCmd, deployCmd)
+	rootCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd, statusCmd, logsCmd, initCmd, deployCmd, workspaceCmd, projectCmd)
 }
 
 func initConfig() {
@@ -69,13 +69,6 @@ func apiURL() string {
 		return u
 	}
 	return "http://localhost:7070"
-}
-
-func webURL() string {
-	if u := viper.GetString("web_url"); u != "" {
-		return u
-	}
-	return "http://localhost:3000"
 }
 
 func requireToken() string {

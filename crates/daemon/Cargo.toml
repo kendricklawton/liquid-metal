@@ -8,7 +8,7 @@ name = "daemon"
 path = "src/lib.rs"
 
 [[bin]]
-name = "machinename-daemon"
+name = "liquid-metal-daemon"
 path = "src/main.rs"
 
 [dependencies]

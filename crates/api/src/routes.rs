@@ -1,14 +1,10 @@
-use crate::{AppState, nats};
+use crate::AppState;
 use axum::{
-    Json, Router,
-    extract::{Path, Query, Request, State},
+    Json,
+    extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
-    routing::{delete, get, post},
-};
-use common::events::{
-    DeprovisionEvent, Engine, EngineSpec, LiquidSpec, MetalSpec, ProvisionEvent, ResourceQuota,
 };
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
@@ -101,287 +97,6 @@ pub async fn auth_middleware(
     Ok(next.run(req).await)
 }
 
-// ── Upload URL ────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct UploadUrlQuery {
-    pub engine: String,  // "metal" | "liquid"
-    pub name:   String,  // service name (for key path)
-}
-
-#[derive(Debug, Serialize)]
-pub struct UploadUrlResponse {
-    pub upload_url:   String,
-    pub artifact_key: String,
-    pub deploy_id:    String,
-    pub expires_in:   u64,  // seconds
-}
-
-/// GET /upload-url?engine=metal&name=my-app
-///
-/// Returns a pre-signed PUT URL pointing directly at Vultr Object Storage.
-/// The CLI PUTs the artifact to this URL without routing it through the API,
-/// then calls POST /services with the artifact_key.
-pub async fn upload_url(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<UploadUrlQuery>,
-) -> Result<Json<UploadUrlResponse>, StatusCode> {
-    let deploy_id = Uuid::now_v7().to_string();
-
-    let ext = match q.engine.as_str() {
-        "metal"  => "rootfs.ext4",
-        "liquid" => "main.wasm",
-        _ => return Err(StatusCode::BAD_REQUEST),
-    };
-
-    let artifact_key = format!("{}/{}/{}/{}", q.engine, q.name, deploy_id, ext);
-    let expires_secs = 600u64; // 10 minutes
-
-    let presigned = state
-        .s3
-        .put_object()
-        .bucket(&state.bucket)
-        .key(&artifact_key)
-        .presigned(
-            aws_sdk_s3::presigning::PresigningConfig::expires_in(
-                Duration::from_secs(expires_secs),
-            )
-            .map_err(|e| {
-                tracing::error!(error = %e, "presigning config error");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "presigned PUT URL generation failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    Ok(Json(UploadUrlResponse {
-        upload_url: presigned.uri().to_string(),
-        artifact_key,
-        deploy_id,
-        expires_in: expires_secs,
-    }))
-}
-
-// ── Services CRUD ─────────────────────────────────────────────────────────────
-
-pub fn services_router() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/",    post(create_service))
-        .route("/{id}", get(get_service))
-        .route("/{id}", delete(delete_service))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateServiceRequest {
-    pub workspace_id:  Uuid,
-    pub project_id:    Option<Uuid>,
-    pub name:          String,
-    pub engine:        String,   // "metal" | "liquid"
-    pub artifact_key:  String,   // Object Storage key from /upload-url
-    pub artifact_sha256: Option<String>,
-    // Git context (populated by flux deploy)
-    pub branch:         Option<String>,
-    pub commit_sha:     Option<String>,
-    pub commit_message: Option<String>,
-    // Metal config
-    pub port:      Option<u16>,
-    pub vcpu:      Option<u32>,
-    pub memory_mb: Option<u32>,
-    // Resource quotas (Triple-Lock layers 2 + 3)
-    #[serde(default)]
-    pub quota: ResourceQuota,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ServiceResponse {
-    pub id:            String,
-    pub name:          String,
-    pub slug:          String,
-    pub engine:        String,
-    pub status:        String,
-    pub upstream_addr: Option<String>,
-}
-
-pub async fn create_service(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateServiceRequest>,
-) -> Result<(StatusCode, Json<ServiceResponse>), StatusCode> {
-    let service_id = Uuid::now_v7();
-    let slug       = slugify(&req.name);
-    let port       = req.port.unwrap_or(8080);
-    let vcpu       = req.vcpu.unwrap_or(1);
-    let memory_mb  = req.memory_mb.unwrap_or(128);
-
-    let spec = match req.engine.as_str() {
-        "metal" => EngineSpec::Metal(MetalSpec {
-            vcpu, memory_mb, port,
-            artifact_key:    req.artifact_key.clone(),
-            artifact_sha256: req.artifact_sha256.clone(),
-            quota:           req.quota.clone(),
-        }),
-        "liquid" => EngineSpec::Liquid(LiquidSpec {
-            artifact_key:    req.artifact_key.clone(),
-            artifact_sha256: req.artifact_sha256.clone(),
-        }),
-        _ => return Err(StatusCode::BAD_REQUEST),
-    };
-
-    let engine = match req.engine.as_str() {
-        "metal"  => Engine::Metal,
-        "liquid" => Engine::Liquid,
-        _        => return Err(StatusCode::BAD_REQUEST),
-    };
-
-    let db = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "db pool error");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    db.execute(
-        "INSERT INTO services \
-         (id, workspace_id, project_id, name, slug, engine, \
-          branch, commit_sha, commit_message, \
-          vcpu, memory_mb, port, rootfs_path, wasm_path, \
-          disk_read_bps, disk_write_bps, disk_read_iops, disk_write_iops, \
-          net_ingress_kbps, net_egress_kbps) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
-        &[
-            &service_id,
-            &req.workspace_id,
-            &req.project_id,
-            &req.name,
-            &slug,
-            &req.engine,
-            &req.branch,
-            &req.commit_sha,
-            &req.commit_message,
-            &(vcpu as i32),
-            &(memory_mb as i32),
-            &(port as i32),
-            &req.artifact_key,   // stored in rootfs_path for metal
-            &req.artifact_key,   // stored in wasm_path for liquid
-            &req.quota.disk_read_bps.map(|v| v as i64),
-            &req.quota.disk_write_bps.map(|v| v as i64),
-            &req.quota.disk_read_iops.map(|v| v as i32),
-            &req.quota.disk_write_iops.map(|v| v as i32),
-            &req.quota.net_ingress_kbps.map(|v| v as i32),
-            &req.quota.net_egress_kbps.map(|v| v as i32),
-        ],
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "insert service failed");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let event = ProvisionEvent {
-        tenant_id:  req.workspace_id.to_string(),
-        service_id: service_id.to_string(),
-        app_name:   req.name.clone(),
-        engine,
-        spec,
-    };
-
-    nats::publish_provision(&state.nats, &event)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to publish provision event");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(ServiceResponse {
-            id:           service_id.to_string(),
-            name:         req.name,
-            slug,
-            engine:       req.engine,
-            status:       "provisioning".to_string(),
-            upstream_addr: None,
-        }),
-    ))
-}
-
-pub async fn get_service(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<ServiceResponse>, StatusCode> {
-    let svc_id: Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-
-    let db = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "db pool error");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let row = db
-        .query_opt(
-            "SELECT id, name, slug, engine, status, upstream_addr \
-             FROM services WHERE id = $1 AND deleted_at IS NULL",
-            &[&svc_id],
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "query service failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    Ok(Json(ServiceResponse {
-        id:           row.get::<_, Uuid>("id").to_string(),
-        name:         row.get("name"),
-        slug:         row.get("slug"),
-        engine:       row.get("engine"),
-        status:       row.get("status"),
-        upstream_addr: row.get("upstream_addr"),
-    }))
-}
-
-pub async fn delete_service(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
-    let svc_id: Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-
-    let db = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "db pool error");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let row = db
-        .query_opt(
-            "UPDATE services SET deleted_at = NOW() \
-             WHERE id = $1 AND deleted_at IS NULL \
-             RETURNING engine",
-            &[&svc_id],
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "soft-delete service failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let engine_str: String = row.get("engine");
-    let engine = match engine_str.as_str() {
-        "metal"  => Engine::Metal,
-        "liquid" => Engine::Liquid,
-        _        => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
-
-    // Tell daemon to tear down the VM / Wasm executor
-    let event = DeprovisionEvent { service_id: svc_id.to_string(), engine };
-    if let Err(e) = nats::publish_deprovision(&state.nats, &event).await {
-        tracing::error!(error = %e, service_id = %svc_id, "failed to publish deprovision event");
-        // Don't fail the delete — DB row is already soft-deleted
-    }
-
-    tracing::info!(service_id = %svc_id, "service deleted");
-    Ok(StatusCode::NO_CONTENT)
-}
-
 // ── Auth: shared types ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -393,10 +108,11 @@ pub struct ProvisionRequest {
 
 #[derive(Debug, Serialize)]
 pub struct ProvisionResponse {
-    pub id:   String,
-    pub name: String,
-    pub slug: String,
-    pub tier: String,
+    pub id:           String,
+    pub name:         String,
+    pub slug:         String,
+    pub tier:         String,
+    pub workspace_id: String,
 }
 
 // ── Auth: internal provision (called by Go web BFF) ──────────────────────────
@@ -472,7 +188,7 @@ async fn do_provision(
     // Fast path: return existing user.
     let existing = db
         .query_opt(
-            "SELECT u.id, u.name, u.tier, w.slug \
+            "SELECT u.id, u.name, u.tier, w.id AS workspace_id, w.slug \
              FROM users u \
              LEFT JOIN workspace_members wm ON wm.user_id = u.id AND wm.role = 'owner' \
              LEFT JOIN workspaces w ON w.id = wm.workspace_id \
@@ -487,11 +203,14 @@ async fn do_provision(
 
     if let Some(row) = existing {
         return Ok(Json(ProvisionResponse {
-            id:   row.get::<_, Uuid>("id").to_string(),
-            name: row.get("name"),
-            slug: row.get::<_, Option<String>>("slug").unwrap_or_default(),
-            tier: row.get::<_, Option<String>>("tier")
-                      .unwrap_or_else(|| "free".to_string()),
+            id:           row.get::<_, Uuid>("id").to_string(),
+            name:         row.get("name"),
+            slug:         row.get::<_, Option<String>>("slug").unwrap_or_default(),
+            tier:         row.get::<_, Option<String>>("tier")
+                              .unwrap_or_else(|| "hobby".to_string()),
+            workspace_id: row.get::<_, Option<Uuid>>("workspace_id")
+                              .map(|u| u.to_string())
+                              .unwrap_or_default(),
         }));
     }
 
@@ -540,63 +259,25 @@ async fn do_provision(
     tracing::info!(email, user_id = %user_id, "user provisioned");
 
     Ok(Json(ProvisionResponse {
-        id:   user_id.to_string(),
-        name: full_name,
-        slug: ws_slug,
-        tier: "free".to_string(),
+        id:           user_id.to_string(),
+        name:         full_name,
+        slug:         ws_slug,
+        tier:         "hobby".to_string(),
+        workspace_id: workspace_id.to_string(),
     }))
 }
 
-/// Slugify a display name into a workspace slug.
+/// Append "-workspace" suffix to a slugified display name.
 fn workspace_slug(name: &str) -> String {
-    let s: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect();
-    let mut slug = String::new();
-    let mut prev_dash = false;
-    for c in s.chars() {
-        if c == '-' {
-            if !prev_dash { slug.push(c); }
-            prev_dash = true;
-        } else {
-            slug.push(c);
-            prev_dash = false;
-        }
-    }
-    format!("{}-workspace", slug.trim_matches('-'))
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Lowercase, replace non-alphanumeric with `-`, collapse runs, trim edges.
-fn slugify(name: &str) -> String {
-    let s: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect();
-
-    let mut slug = String::new();
-    let mut prev_dash = false;
-    for c in s.chars() {
-        if c == '-' {
-            if !prev_dash { slug.push(c); }
-            prev_dash = true;
-        } else {
-            slug.push(c);
-            prev_dash = false;
-        }
-    }
-    slug.trim_matches('-').to_string()
+    format!("{}-workspace", common::slugify(name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::slugify;
 
-    // ── slugify ───────────────────────────────────────────────────────────────
+    // ── slugify (via common) ──────────────────────────────────────────────────
 
     #[test]
     fn slugify_lowercase() {
