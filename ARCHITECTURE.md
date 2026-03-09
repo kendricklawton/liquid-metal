@@ -38,7 +38,7 @@ All infrastructure runs in **Vultr Chicago (ORD)**. One vendor, one region, sub-
 | **API**            | Axum + tonic (Rust), :7070              | Active/active on both nodes                        |
 | **Daemon**         | NATS consumer (Rust)                    | Active on both nodes, each owns local KVM          |
 | **Web UI**         | chi + Templ + HTMX (Go), :3000          | Active/active on both nodes                        |
-| **CLI**            | `flux` binary (Go)                      | login, deploy, status, logs, workspace, project    |
+| **CLI**            | `flux` binary (Go)                      | login, init, deploy, status, logs, workspace, project |
 | **Event bus**      | NATS JetStream — 3-node Raft            | node-a + node-b + NAT VPS, survives 1 failure      |
 | **Database**       | Vultr Managed Postgres — Chicago        | Managed HA, daily backups, standard pg conn string |
 | **Artifact store** | Vultr Object Storage — Chicago          | S3-compatible, rootfs images + .wasm binaries      |
@@ -397,10 +397,13 @@ NATS → daemon
 
 ### GitOps — Zero YAML
 
-Users never write workflow files. `flux deploy` handles everything:
+Users never write workflow files. Two commands cover the full lifecycle:
 
 ```
-flux deploy   → auto-creates liquid-metal.toml + project if missing, builds, deploys
+flux init     → creates a project in the workspace + writes liquid-metal.toml
+              → shows service name, project ID, and engine so the dev can review
+flux deploy   → builds locally, uploads artifact, triggers provisioning
+              → errors with "run flux init" if liquid-metal.toml is missing
 git push      → run flux deploy again (flux link for auto-deploy is a future feature)
 ```
 
@@ -448,7 +451,7 @@ liquid-metal/
 │   ├── api/        Axum + tonic — ConnectRPC server :7070, publishes to NATS
 │   ├── proxy/      Pingora edge router — slug → upstream_addr
 │   └── daemon/     NATS consumer — Firecracker + Wasmtime provision loop
-├── cli/            flux CLI (Go) — login, deploy, status, logs, workspace, project
+├── cli/            flux CLI (Go) — login, init, deploy, status, logs, workspace, project
 │   ├── main.go
 │   └── cmd/        Cobra commands
 ├── web/            Go dashboard — chi + Templ + HTMX, ConnectRPC client, :3000
@@ -539,6 +542,7 @@ task dev:web      # Go dashboard on :3000 (air hot reload)
 task dev:proxy    # Pingora on :8080
 task dev:daemon   # NATS consumer (Firecracker skipped on macOS)
 task dev:cli -- login    # flux login
+task dev:cli -- init     # flux init  (creates project + liquid-metal.toml)
 task dev:cli -- deploy   # flux deploy (reads ./liquid-metal.toml)
 task dev:cli -- status   # flux status
 ```
