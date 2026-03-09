@@ -4,37 +4,17 @@
 
 ---
 
-## Products
-
-### Metal — Firecracker MicroVMs
-Hardware-isolated microVMs via AWS Firecracker + KVM. Users ship a Linux binary; we boot it in a VM with a dedicated ext4 rootfs and TAP networking.
-
-- **Isolation**: AWS Firecracker + KVM
-- **Cold start**: ~100–250ms
-- **Networking**: TAP device → br0 bridge → Pingora proxy
-- **Storage**: Dedicated ext4 rootfs per service, artifact pulled from Vultr Object Storage
-
-### Liquid — WebAssembly
-In-process Wasm execution via Wasmtime/WASI. Users ship a `.wasm` file; we execute it directly with no VM overhead.
-
-- **Isolation**: Wasmtime Wasm sandbox
-- **Cold start**: <1ms
-- **Execution**: In-process, WASI VFS
-- **Storage**: `.wasm` artifact pulled from Vultr Object Storage at boot
-
----
-
 ## Infrastructure Stack
 
 All infrastructure runs in **Vultr Chicago (ORD)**. One vendor, one region, sub-millisecond between every layer.
 
 | Layer              | Technology                              | Notes                                              |
 |--------------------|-----------------------------------------|----------------------------------------------------|
-| **Floating IP**    | Vultr VPS — Chicago                     | Holds public IP permanently, HAProxy + Headscale   |
+| **Floating IP**    | Vultr VPS — Chicago                     | Holds public IP permanently, HAProxy + NATS tiebreaker |
 | **Compute**        | 2× Vultr Bare Metal — Chicago           | node-a (primary) + node-b (standby)                |
 | **Proxy**          | Pingora (Rust) on both nodes            | TLS termination, slug → upstream routing           |
 | **Load balancer**  | HAProxy on NAT VPS                      | Health-checks both nodes, routes :80/:443          |
-| **Private mesh**   | Tailscale (Headscale control server)    | Self-hosted Tailscale — VPS + node-a + node-b      |
+| **Private mesh**   | Tailscale                               | Official Tailscale — VPS + node-a + node-b         |
 | **API**            | Axum + tonic (Rust), :7070              | Active/active on both nodes                        |
 | **Daemon**         | NATS consumer (Rust)                    | Active on both nodes, each owns local KVM          |
 | **Web UI**         | chi + Templ + HTMX (Go), :3000          | Active/active on both nodes                        |
@@ -42,7 +22,7 @@ All infrastructure runs in **Vultr Chicago (ORD)**. One vendor, one region, sub-
 | **Event bus**      | NATS JetStream — 3-node Raft            | node-a + node-b + NAT VPS, survives 1 failure      |
 | **Database**       | Vultr Managed Postgres — Chicago        | Managed HA, daily backups, standard pg conn string |
 | **Artifact store** | Vultr Object Storage — Chicago          | S3-compatible, rootfs images + .wasm binaries      |
-| **DNS**            | Cloudflare                              | Wildcard `*.machinename.dev` → NAT VPS floating IP |
+| **DNS**            | Cloudflare                              | Wildcard `*.liquidmetal.dev` → NAT VPS floating IP |
 | **TLS**            | Let's Encrypt via Pingora               | Wildcard cert, auto-renewed                        |
 | **eBPF isolation** | Aya TC classifier per tap{n}            | Tenant isolation at kernel level, no Cilium daemon |
 | **Observability**  | Structured JSON logs → stdout           | Metrics: Prometheus + Grafana (future)             |
@@ -111,12 +91,11 @@ OBJECT_STORAGE_SECRET_KEY=<vultr-secret-key>
 ```
 Internet
     │
-    ▼ DNS: *.machinename.dev → Floating IP (on NAT VPS)
+    ▼ DNS: *.liquidmetal.dev → Floating IP (on NAT VPS)
 ┌──────────────────────────────┐
 │  NAT VPS — Vultr Chicago     │  Cloud Compute VPS, ~$6/mo
 │  Holds the public IP         │  HAProxy: :80/:443 → active node
-│  NATS node (Raft member 3)   │  Headscale control server
-│  Headscale                   │  (self-hosted Tailscale coordination)
+│  NATS node (Raft member 3)   │  Tailscale coordination node
 └────────────┬─────────────────┘
              │ Tailscale mesh (100.x.x.x)
     ┌────────┴────────┐
@@ -129,7 +108,7 @@ NATS (Raft 1)      NATS (Raft 2)
 KVM + Firecracker  KVM + Firecracker
 ```
 
-The NAT VPS holds the public IP permanently — it never moves. HAProxy health-checks both bare metal nodes and routes to whichever is alive. Tailscale (coordinated by Headscale on the VPS) carries all internal traffic between nodes.
+The NAT VPS holds the public IP permanently — it never moves. HAProxy health-checks both bare metal nodes and routes to whichever is alive. Tailscale carries all internal traffic between nodes.
 
 ### Per-Layer HA Strategy
 
@@ -201,8 +180,8 @@ jetstream {
 ```
 Internet
     │
-    ▼ (*.machinename.dev → 1 floating IP on NAT VPS)
-NAT VPS — Vultr Chicago (HAProxy :80/:443, Headscale :443)
+    ▼ (*.liquidmetal.dev → 1 floating IP on NAT VPS)
+NAT VPS — Vultr Chicago (HAProxy :80/:443, Tailscale node)
     │ Tailscale mesh (100.x.x.x CGNAT range)
     ├──────────────────────────────────┐
     ▼                                  ▼
@@ -220,16 +199,15 @@ KVM + br0 + TAP devices             KVM + br0 + TAP devices
         Vultr Object Storage (Chicago)
 ```
 
-**Internal mesh (Tailscale via Headscale):**
-- Headscale runs on the NAT VPS — self-hosted Tailscale coordination server
-- Each node runs the standard `tailscale` client, registered to Headscale
+**Internal mesh (Tailscale):**
+- Official Tailscale — each node joins the same Tailscale network
 - Tailscale assigns 100.x.x.x addresses (CGNAT range) to each node
 - All inter-service traffic (API→NATS, daemon→NATS, Postgres) uses Tailscale IPs
-- No manual key management, no peer config files — Headscale handles it
+- No manual key management, no peer config files — Tailscale handles it
 
 **Exposed ports (NAT VPS only — bare metal nodes have no public ports):**
 - `:80` — HAProxy (redirect to HTTPS)
-- `:443` — HAProxy (user traffic) + Headscale (Tailscale coordination)
+- `:443` — HAProxy (user traffic)
 - `:3478` — STUN (UDP, Tailscale NAT traversal)
 
 **Bare metal nodes — public firewall: all closed.**
@@ -374,14 +352,11 @@ flux deploy
        metal:  go build -o app . / cargo build --release
        liquid: GOOS=wasip1 go build -o main.wasm .
   3. sha256(artifact) + generate deploy_id (uuid_v7)
-  4. GET /services/:slug/upload-url
-       → API returns pre-signed Object Storage PUT URL
+  4. GetUploadUrl RPC → API returns pre-signed Object Storage PUT URL
   5. PUT artifact → Object Storage directly (no API in the upload path)
-  6. POST /services { slug, engine, spec, artifact_key, deploy_id, sha256 }
+  6. Deploy RPC { slug, engine, spec, artifact_key, deploy_id, sha256 }
        → API inserts service row → Managed Postgres
        → API publishes ProvisionEvent → NATS JetStream
-  7. poll GET /services/:slug every 500ms, print progress to stdout
-  8. print → live at https://{slug}.machinename.dev
 
 NATS → daemon
   ├─ metal:  download base-alpine.ext4 from Object Storage (cached locally)
@@ -394,30 +369,6 @@ NATS → daemon
              load into Wasmtime gateway
              UPDATE services SET upstream_addr, status='running'
 ```
-
-### GitOps — Zero YAML
-
-Users never write workflow files. Two commands cover the full lifecycle:
-
-```
-flux init     → creates a project in the workspace + writes liquid-metal.toml
-              → shows service name, project ID, and engine so the dev can review
-flux deploy   → builds locally, uploads artifact, triggers provisioning
-              → errors with "run flux init" if liquid-metal.toml is missing
-git push      → run flux deploy again (flux link for auto-deploy is a future feature)
-```
-
-**The only file a user ever touches is `liquid-metal.toml`.** Config changes:
-
-```toml
-# Increase memory → flux deploy → new VM boots with updated spec
-[metal]
-vcpu      = 2      # was 1
-memory_mb = 256    # was 128
-```
-
-`flux deploy` reads the updated toml, builds, redeploys. The platform handles
-the rest. No YAML, no CI config, no dashboard required after initial setup.
 
 ### Live Request
 
@@ -459,6 +410,7 @@ liquid-metal/
 │   └── internal/
 │       ├── handler/ HTMX request handlers
 │       └── ui/      Templ components + pages
+├── mcp/            MCP server (Go) — exposes Liquid Metal ops as tools for Claude agents
 ├── gen/go/         buf-generated Go protobuf + connect stubs (shared via go.work)
 ├── proto/          Protobuf definitions — buf generates Rust (tonic) + Go (connect-go) stubs
 ├── migrations/     PostgreSQL migrations (refinery, embedded in api)
@@ -472,7 +424,7 @@ liquid-metal/
 - Definitions in `proto/` — the only contract between Go and Rust
 - `buf` generates:
   - Rust stubs (tonic) → consumed by `crates/api`
-  - Go stubs (connect-go) → consumed by `web/`
+  - Go stubs (connect-go) → consumed by `web/` and `cli/`
 - Transport: ConnectRPC over h2c (HTTP/2 cleartext, internal Tailscale mesh only)
 
 ---
@@ -489,33 +441,44 @@ liquid-metal/
 | `OBJECT_STORAGE_BUCKET`       | api, daemon        | Bucket name for artifacts                      |
 | `OBJECT_STORAGE_ACCESS_KEY`   | api, daemon        | Vultr Object Storage access key                |
 | `OBJECT_STORAGE_SECRET_KEY`   | api, daemon        | Vultr Object Storage secret key                |
+| `ANTHROPIC_API_KEY`           | mcp                | Anthropic API key for Claude agent features    |
+| `FLUX_API_KEY`                | mcp, cli           | Liquid Metal API key (X-Api-Key header)        |
 
 ---
 
-## User Config (liquid-metal.toml)
+## MCP Server
 
-```toml
-# Metal
-[service]
-name   = "my-app"
-engine = "metal"
-port   = 8080
+The `mcp/` service exposes Liquid Metal operations as tools for Claude and other MCP-compatible agents. It follows the same architectural constraint as `web/` — no direct database or NATS access, all data flows through the Rust API via ConnectRPC.
 
-[metal]
-vcpu      = 1
-memory_mb = 128
+### Data Flow
+
+```
+Claude / Agent SDK client
+    │ MCP (JSON-RPC over stdio or SSE)
+    ▼
+mcp/        Go MCP server — tool definitions + ConnectRPC client
+    │ ConnectRPC / h2c
+    ▼
+Rust API :7070
+    │
+    ├─→ Managed Postgres
+    └─→ NATS JetStream
 ```
 
-```toml
-# Liquid
-[service]
-name   = "my-fn"
-engine = "liquid"
+### Transport
 
-[build]
-command = "GOOS=wasip1 GOARCH=wasm go build -o main.wasm ."
-output  = "main.wasm"
-```
+| Mode   | Use case                                          |
+|--------|---------------------------------------------------|
+| stdio  | Local dev — Claude Desktop, Claude Code           |
+| SSE    | Production — hosted agent pipelines               |
+
+### Auth
+
+The MCP server authenticates to the Rust API using `X-Api-Key: $FLUX_API_KEY` — the same header used by the CLI. No separate auth layer.
+
+### Constraint: No Destructive Tools Without Confirmation
+
+Tools that modify or delete resources require an explicit `confirm: true` argument. An agent cannot accidentally deprovision a running service.
 
 ---
 
@@ -530,27 +493,3 @@ output  = "main.wasm"
 - **Firecracker + TAP are Linux-only** — gated with `#[cfg(target_os = "linux")]`
 - **Wasmtime runs on all platforms** — safe for local macOS dev
 - **Go web never touches Postgres or NATS directly**
-
----
-
-## Dev Workflow
-
-```bash
-task up           # Postgres + NATS + RustFS via docker compose (local only)
-task dev:api      # Rust API on :7070
-task dev:web      # Go dashboard on :3000 (air hot reload)
-task dev:proxy    # Pingora on :8080
-task dev:daemon   # NATS consumer (Firecracker skipped on macOS)
-task dev:cli -- login    # flux login
-task dev:cli -- init     # flux init  (creates project + liquid-metal.toml)
-task dev:cli -- deploy   # flux deploy (reads ./liquid-metal.toml)
-task dev:cli -- status   # flux status
-```
-
-In local dev, `DATABASE_URL` points to the docker-compose Postgres. In production, it points to Vultr Managed Postgres. Object storage env vars point to Vultr in all environments.
-
-### Linux bare-metal setup (once, as root)
-
-```bash
-task metal:setup  # br0 bridge, /run/firecracker, Firecracker binary
-```
