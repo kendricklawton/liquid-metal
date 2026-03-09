@@ -18,7 +18,7 @@ var whoamiCmd = &cobra.Command{
 func runWhoami(_ *cobra.Command, _ []string) error {
 	t := requireToken()
 
-	client := v1connect.NewUserServiceClient(newHTTPClient(), apiURL())
+	client := v1connect.NewUserServiceClient(newHTTPClient(), apiURL(), connect.WithGRPC())
 	req := withToken(connect.NewRequest(&v1.GetMeRequest{}), t)
 
 	resp, err := client.GetMe(cmdCtx(), req)

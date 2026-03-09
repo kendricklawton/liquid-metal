@@ -19,9 +19,15 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct VmHandle {
-    pub tap_name:  String,
-    pub fc_pid:    u32,
-    pub cpu_core:  u32,
+    pub tap_name:    String,
+    pub fc_pid:      u32,
+    pub cpu_core:    u32,
+    /// UUID string used as the jailer chroot directory name.
+    pub vm_id:       String,
+    /// Whether this VM was launched under the jailer (needs chroot cleanup).
+    pub use_jailer:  bool,
+    /// JAILER_CHROOT_BASE value at provision time.
+    pub chroot_base: String,
 }
 
 /// Global VM registry — service_id → VmHandle.
@@ -75,6 +81,11 @@ pub async fn metal(
     let artifact_path = format!("{}/{}", artifact_dir, service_id);
     if let Err(e) = tokio::fs::remove_dir_all(&artifact_path).await {
         tracing::debug!(service_id, error = %e, "artifact cache cleanup (may not exist)");
+    }
+
+    // 8. Remove jailer chroot directory (no-op if jailer was not used)
+    if handle.use_jailer {
+        crate::jailer::cleanup(&handle.chroot_base, &handle.vm_id).await;
     }
 
     tracing::info!(service_id, "metal VM deprovisioned");

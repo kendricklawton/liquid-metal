@@ -20,7 +20,7 @@ var statusCmd = &cobra.Command{
 func runStatus(_ *cobra.Command, _ []string) error {
 	t := requireToken()
 
-	client := v1connect.NewServiceServiceClient(newHTTPClient(), apiURL())
+	client := v1connect.NewServiceServiceClient(newHTTPClient(), apiURL(), connect.WithGRPC())
 	req := withToken(connect.NewRequest(&v1.ListServicesRequest{}), t)
 
 	resp, err := client.ListServices(cmdCtx(), req)

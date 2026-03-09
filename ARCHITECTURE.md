@@ -363,7 +363,7 @@ policies for cleanup.
 
 ```
 flux deploy
-  1. read machine.toml → engine, name, build command
+  1. read flux.toml → engine, name, build command
   2. build locally:
        metal:  go build -o app . / cargo build --release
        liquid: GOOS=wasip1 go build -o main.wasm .
@@ -394,7 +394,7 @@ NATS → daemon
 Users never write workflow files. `flux link` wires everything automatically:
 
 ```
-flux init     → creates machine.toml interactively (name, engine, vcpu, memory)
+flux init     → creates flux.toml interactively (name, engine, vcpu, memory)
 flux deploy   → first deploy, prints live URL
 flux link     → connects GitHub repo, enables auto-deploy on every push
 git push      → redeploys automatically forever
@@ -417,7 +417,7 @@ On every git push:
   → triggers same flow as flux deploy (build on platform side or re-use artifact)
 ```
 
-**The only file a user ever touches is `machine.toml`.** Config changes:
+**The only file a user ever touches is `flux.toml`.** Config changes:
 
 ```toml
 # Increase memory → flux deploy → new VM boots with updated spec
@@ -499,7 +499,7 @@ liquid-metal/
 
 ---
 
-## User Config (machine.toml)
+## User Config (flux.toml)
 
 ```toml
 # Metal

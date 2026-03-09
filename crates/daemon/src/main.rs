@@ -70,6 +70,39 @@ async fn main() -> Result<()> {
     // Initialize TAP counter from DB to avoid collisions after restart
     provision::init_tap_counter(&pool, &cfg.node_id).await;
 
+    // Re-attach eBPF isolation filters for any VMs still running from a
+    // previous daemon instance (filters are unloaded when the process exits).
+    #[cfg(target_os = "linux")]
+    {
+        use daemon::ebpf;
+        if let Ok(db) = pool.get().await {
+            let rows = db
+                .query(
+                    "SELECT tap_name, id::text FROM services \
+                     WHERE node_id = $1 AND status = 'running' \
+                       AND engine = 'metal' AND deleted_at IS NULL \
+                       AND tap_name IS NOT NULL",
+                    &[&cfg.node_id],
+                )
+                .await
+                .unwrap_or_default();
+
+            let taps: Vec<(String, String)> = rows
+                .iter()
+                .filter_map(|r| {
+                    let tap: Option<String> = r.get(0);
+                    let svc: Option<String> = r.get(1);
+                    tap.zip(svc)
+                })
+                .collect();
+
+            if !taps.is_empty() {
+                tracing::info!(count = taps.len(), "re-attaching eBPF filters for running VMs");
+                ebpf::reattach_all(&taps);
+            }
+        }
+    }
+
     let ctx = Arc::new(ProvisionCtx {
         pool:     pool.clone(),
         cfg:      cfg.clone(),
