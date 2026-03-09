@@ -13,8 +13,8 @@ import (
 func writeTempMachineToml(t *testing.T, content string) func() {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "machine.toml"), []byte(content), 0644); err != nil {
-		t.Fatalf("write machine.toml: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "flux.toml"), []byte(content), 0644); err != nil {
+		t.Fatalf("write flux.toml: %v", err)
 	}
 	orig, _ := os.Getwd()
 	if err := os.Chdir(dir); err != nil {
@@ -26,7 +26,7 @@ func writeTempMachineToml(t *testing.T, content string) func() {
 func parseMachineToml(t *testing.T) (name, engineStr string, engine v1.Engine, port, vcpu, memoryMB int32, err error) {
 	t.Helper()
 	cfg := viper.New()
-	cfg.SetConfigName("machine")
+	cfg.SetConfigName("flux")
 	cfg.SetConfigType("toml")
 	cfg.AddConfigPath(".")
 	if readErr := cfg.ReadInConfig(); readErr != nil {
@@ -118,6 +118,6 @@ func TestDeployFailsWithoutMachineToml(t *testing.T) {
 	cfg.SetConfigType("toml")
 	cfg.AddConfigPath(".")
 	if err := cfg.ReadInConfig(); err == nil {
-		t.Error("expected error reading missing machine.toml, got nil")
+		t.Error("expected error reading missing flux.toml, got nil")
 	}
 }

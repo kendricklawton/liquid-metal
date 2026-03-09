@@ -9,7 +9,7 @@
 **What we sell**:
 - **Compute time** — Firecracker VM-hours (Metal) and Wasm invocations (Liquid)
 - **Network** — egress bandwidth, custom domains, Pingora edge routing
-- **Predictable specs** — developers declare vCPU/RAM in `machine.toml`; no mystery resource pools
+- **Predictable specs** — developers declare vCPU/RAM in `flux.toml`; no mystery resource pools
 
 **Billing model — top-up credits, no surprise charges**:
 Liquid Metal uses a prepaid credit system (like Anthropic's API). Each plan includes a compute credit balance; when exhausted, services pause cleanly. Two recharge options:
@@ -92,7 +92,7 @@ cli/                    go.mod: github.com/kendricklawton/liquid-metal/cli
     ├── whoami.go       flux whoami (GetMe)
     ├── status.go       flux status (ListServices, tabwriter output)
     ├── logs.go         flux logs <id> [--limit N]
-    └── deploy.go       flux deploy (reads machine.toml → CreateService)
+    └── deploy.go       flux deploy (reads flux.toml → CreateService)
 ```
 
 **CLI auth**: `flux login` opens browser to Go web `/auth/cli/login`, captures token via localhost callback, stores in `~/.config/flux/config.yaml`. All subsequent CLI calls go **directly to the Rust API** with `X-Api-Key: {token}` — no Go web involvement.
@@ -105,7 +105,7 @@ cli/                    go.mod: github.com/kendricklawton/liquid-metal/cli
 
 ```
 flux deploy
-  → reads machine.toml
+  → reads flux.toml
   → build binary / .wasm locally
   → upload artifact to Object Storage (pre-signed URL from GET /upload-url)
   → POST /services via ConnectRPC (CreateService)
@@ -153,7 +153,7 @@ Browser (HTMX)
 
 ---
 
-## machine.toml (user config)
+## flux.toml (user config)
 
 ```toml
 # Metal
@@ -216,7 +216,7 @@ task dev:web         # Go dashboard :3000 (air hot reload)
 task dev:proxy       # Pingora :8080
 task dev:daemon      # NATS consumer (Firecracker skipped on macOS)
 task dev:cli -- login    # flux login
-task dev:cli -- deploy   # flux deploy (reads ./machine.toml)
+task dev:cli -- deploy   # flux deploy (reads ./flux.toml)
 task dev:cli -- status   # flux status
 ```
 

@@ -24,6 +24,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// productionClientID is set at build time via -ldflags.
+// Override for local dev via FLUX_WORKOS_CLIENT_ID or --client-id.
+var productionClientID = "client_YOUR_CLIENT_ID_HERE"
+
 const (
 	workosAuthURL  = "https://api.workos.com/user_management/authorize"
 	workosTokenURL = "https://api.workos.com/user_management/authenticate"
@@ -40,14 +44,10 @@ var loginCmd = &cobra.Command{
 }
 
 func runLogin(_ *cobra.Command, _ []string) error {
+	// Prefer --client-id flag / FLUX_WORKOS_CLIENT_ID env → baked-in production ID.
 	clientID := viper.GetString("workos_client_id")
 	if clientID == "" {
-		return fmt.Errorf(
-			"WorkOS client ID not configured\n\n" +
-				"Set it once with:\n" +
-				"  export WORKOS_CLIENT_ID=client_<your-id>\n\n" +
-				"Find your client ID at: https://dashboard.workos.com/",
-		)
+		clientID = productionClientID
 	}
 
 	port := viper.GetInt("cli_port")
@@ -140,9 +140,9 @@ func runLogin(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// ── Exchange code + verifier → WorkOS access token ────────────────────────
+	// ── Exchange code + verifier → WorkOS user ───────────────────────────────
 	fmt.Print("Exchanging code... ")
-	accessToken, err := exchangeCode(clientID, code, verifier, redirectURI)
+	auth, err := exchangeCode(clientID, code, verifier, redirectURI)
 	if err != nil {
 		return fmt.Errorf("token exchange: %w", err)
 	}
@@ -150,13 +150,13 @@ func runLogin(_ *cobra.Command, _ []string) error {
 
 	// ── Provision user in Liquid Metal ────────────────────────────────────────
 	fmt.Print("Provisioning account... ")
-	userID, displayName, err := provisionViaCLI(accessToken)
+	userID, displayName, err := provisionViaCLI(auth)
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}
 	fmt.Println("done.")
 
-	if err := saveConfig(userID, clientID, port); err != nil {
+	if err := saveConfig(userID, port); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
@@ -190,7 +190,15 @@ func newState() (string, error) {
 
 // ── WorkOS token exchange ─────────────────────────────────────────────────────
 
-func exchangeCode(clientID, code, verifier, redirectURI string) (string, error) {
+type workosAuthResponse struct {
+	User struct {
+		Email     string `json:"email"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+	} `json:"user"`
+}
+
+func exchangeCode(clientID, code, verifier, redirectURI string) (*workosAuthResponse, error) {
 	body, _ := json.Marshal(map[string]string{
 		"grant_type":    "authorization_code",
 		"client_id":     clientID,
@@ -201,30 +209,32 @@ func exchangeCode(clientID, code, verifier, redirectURI string) (string, error) 
 
 	resp, err := http.Post(workosTokenURL, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("POST to WorkOS: %w", err)
+		return nil, fmt.Errorf("POST to WorkOS: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("WorkOS returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("WorkOS returned %d", resp.StatusCode)
 	}
 
-	var tr struct {
-		AccessToken string `json:"access_token"`
-	}
+	var tr workosAuthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
-		return "", fmt.Errorf("decode: %w", err)
+		return nil, fmt.Errorf("decode: %w", err)
 	}
-	if tr.AccessToken == "" {
-		return "", fmt.Errorf("empty access_token in WorkOS response")
+	if tr.User.Email == "" {
+		return nil, fmt.Errorf("no user in WorkOS response")
 	}
-	return tr.AccessToken, nil
+	return &tr, nil
 }
 
 // ── Liquid Metal provisioning ─────────────────────────────────────────────────
 
-func provisionViaCLI(accessToken string) (string, string, error) {
-	body, _ := json.Marshal(map[string]string{"access_token": accessToken})
+func provisionViaCLI(auth *workosAuthResponse) (string, string, error) {
+	body, _ := json.Marshal(map[string]string{
+		"email":      auth.User.Email,
+		"first_name": auth.User.FirstName,
+		"last_name":  auth.User.LastName,
+	})
 
 	resp, err := http.Post(apiURL()+"/auth/cli/provision", "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -254,7 +264,7 @@ func provisionViaCLI(accessToken string) (string, string, error) {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-func saveConfig(token, workosClientID string, cliPort int) error {
+func saveConfig(token string, cliPort int) error {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".config", "flux")
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -267,9 +277,8 @@ func saveConfig(token, workosClientID string, cliPort int) error {
 	}
 
 	cfg := map[string]any{
-		"token":            token,
-		"api_url":          apiVal,
-		"workos_client_id": workosClientID,
+		"token":   token,
+		"api_url": apiVal,
 	}
 	if cliPort != defaultCLIPort {
 		cfg["cli_port"] = cliPort
@@ -285,7 +294,7 @@ func saveConfig(token, workosClientID string, cliPort int) error {
 
 // printWelcome is available for future use by other commands.
 func printWelcome(token string) {
-	client := v1connect.NewUserServiceClient(newHTTPClient(), apiURL())
+	client := v1connect.NewUserServiceClient(newHTTPClient(), apiURL(), connect.WithGRPC())
 	req := withToken(connect.NewRequest(&v1.GetMeRequest{}), token)
 	resp, err := client.GetMe(context.Background(), req)
 	if err != nil {

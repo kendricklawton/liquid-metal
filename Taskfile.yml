@@ -69,17 +69,20 @@ tasks:
   dev:cli:
     desc: "Run the flux CLI (usage: task dev:cli -- <args>)"
     dir: cli
-    cmds:
-      - go run . -- {{.CLI_ARGS}}
-
-  dev:web:
-    desc: "Run the Go web dashboard locally (:3000) with hot reload"
-    dir: web
     env:
-      API_URL: "http://localhost:7070"
-      BIND_ADDR: "0.0.0.0:3000"
+      FLUX_API_URL: "{{.FLUX_API_URL | default \"http://localhost:7070\"}}"
+      FLUX_WORKOS_CLIENT_ID: "{{.FLUX_WORKOS_CLIENT_ID}}"
     cmds:
-      - go run github.com/air-verse/air@latest -c .air.toml
+      - go run . {{.CLI_ARGS}}
+
+  # dev:web:
+  #   desc: "Run the Go web dashboard locally (:3000) with hot reload"
+  #   dir: web
+  #   env:
+  #     API_URL: "http://localhost:7070"
+  #     BIND_ADDR: "0.0.0.0:3000"
+  #   cmds:
+  #     - go run github.com/air-verse/air@latest -c .air.toml
 
   dev:
     desc: "Start API + web together; Ctrl+C kills both"
