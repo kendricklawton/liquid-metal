@@ -60,6 +60,18 @@ message DeleteServiceRequest {
 }
 message DeleteServiceResponse {}
 
+message StopServiceRequest {
+  string id = 1;
+}
+message StopServiceResponse {}
+
+message RestartServiceRequest {
+  string id = 1;
+}
+message RestartServiceResponse {
+  Service service = 1;
+}
+
 message GetServiceLogsRequest {
   string service_id = 1;
   int32 limit = 2;
@@ -128,6 +140,8 @@ service ServiceService {
   rpc GetUploadUrl(GetUploadUrlRequest) returns (GetUploadUrlResponse);
   rpc Deploy(DeployRequest) returns (DeployResponse);
 
+  rpc StopService(StopServiceRequest) returns (StopServiceResponse);
+  rpc RestartService(RestartServiceRequest) returns (RestartServiceResponse);
   rpc DeleteService(DeleteServiceRequest) returns (DeleteServiceResponse);
   rpc GetServiceLogs(GetServiceLogsRequest) returns (GetServiceLogsResponse);
 }

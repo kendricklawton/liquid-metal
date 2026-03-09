@@ -47,7 +47,7 @@ func init() {
 	rootCmd.PersistentFlags().MarkHidden("cli-port")
 	rootCmd.PersistentFlags().MarkHidden("api-url")
 
-	rootCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd, statusCmd, logsCmd, initCmd, deployCmd, workspaceCmd, projectCmd)
+	rootCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd, statusCmd, logsCmd, stopCmd, restartCmd, initCmd, deployCmd, workspaceCmd, projectCmd)
 }
 
 func initConfig() {
