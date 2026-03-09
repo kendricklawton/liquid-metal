@@ -67,15 +67,18 @@ flux status     # list your services
 ## Local Dev
 
 ```bash
-task up           # Postgres + NATS + RustFS (docker compose)
-task dev:api      # Rust API on :7070
-task dev:web      # Go dashboard on :3000 (air hot reload)
-task dev:proxy    # Pingora on :8080
-task dev:daemon   # NATS consumer (Firecracker skipped on macOS)
-task dev:cli -- login    # flux login
-task dev:cli -- init     # flux init
-task dev:cli -- deploy   # flux deploy
-task dev:cli -- status   # flux status
+# Start infrastructure
+task up            # Postgres + NATS + RustFS (docker compose)
+task dev:api       # Rust API on :7070
+task dev:proxy     # Pingora on :8080
+task dev:daemon    # NATS consumer (Firecracker skipped on macOS)
+
+# Install the CLI once — then use flux from any directory
+task install:cli   # go install → flux lands in $GOPATH/bin
+flux login
+flux init          # run from your service directory
+flux deploy
+flux status
 
 ```
 
@@ -97,6 +100,6 @@ task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
 * No SPA frameworks (HTMX + Templ only)
 * No container registry (Object Storage is the registry)
 
-> For deep-dives into infrastructure topology, eBPF tenant isolation, HA strategy, and data flow see [ARCHITECTURE.md](ARCHITECTURE.md). For codebase layout, dev setup, and contribution rules see [CONTRIBUTING.md](CONTRIBUTING.md).
+> For deep-dives into infrastructure topology, eBPF tenant isolation, HA strategy, and data flow see [ARCHITECTURE.md](ARCHITECTURE.md). For codebase layout, dev setup, and contribution rules see [CONTRIBUTING.md](CONTRIBUTING.md). For step-by-step local dev and deployment see [RUNBOOK.md](RUNBOOK.md).
 
 ```

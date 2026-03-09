@@ -11,6 +11,17 @@ use crate::proto::liquidmetal::v1::{
     ListWorkspacesResponse, Workspace,
 };
 
+/// Hard cap on rows returned by ListWorkspaces.
+const LIST_WORKSPACES_LIMIT: i64 = 50;
+
+fn billing_tier_from_str(tier: &str) -> BillingTier {
+    match tier {
+        "pro"  => BillingTier::Pro,
+        "team" => BillingTier::Team,
+        _      => BillingTier::Hobby,
+    }
+}
+
 pub struct WorkspaceServiceImpl {
     pub state: Arc<AppState>,
 }
@@ -112,12 +123,14 @@ impl WorkspaceService for WorkspaceServiceImpl {
             })?
             .ok_or_else(|| Status::not_found("workspace not found"))?;
 
+        let tier = billing_tier_from_str(row.get::<_, String>("tier").as_str());
+
         Ok(Response::new(GetWorkspaceResponse {
             workspace: Some(Workspace {
                 id:         row.get::<_, Uuid>("id").to_string(),
                 name:       row.get("name"),
                 slug:       row.get("slug"),
-                tier:       BillingTier::Hobby as i32,
+                tier:       tier as i32,
                 created_at: None,
                 updated_at: None,
             }),
@@ -143,8 +156,9 @@ impl WorkspaceService for WorkspaceServiceImpl {
                  FROM workspaces w \
                  JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1 \
                  WHERE w.deleted_at IS NULL \
-                 ORDER BY w.created_at ASC",
-                &[&caller],
+                 ORDER BY w.created_at ASC \
+                 LIMIT $2",
+                &[&caller, &LIST_WORKSPACES_LIMIT],
             )
             .await
             .map_err(|e| {
@@ -154,13 +168,16 @@ impl WorkspaceService for WorkspaceServiceImpl {
 
         let workspaces = rows
             .iter()
-            .map(|row| Workspace {
-                id:         row.get::<_, Uuid>("id").to_string(),
-                name:       row.get("name"),
-                slug:       row.get("slug"),
-                tier:       BillingTier::Hobby as i32,
-                created_at: None,
-                updated_at: None,
+            .map(|row| {
+                let tier = billing_tier_from_str(row.get::<_, String>("tier").as_str());
+                Workspace {
+                    id:         row.get::<_, Uuid>("id").to_string(),
+                    name:       row.get("name"),
+                    slug:       row.get("slug"),
+                    tier:       tier as i32,
+                    created_at: None,
+                    updated_at: None,
+                }
             })
             .collect();
 

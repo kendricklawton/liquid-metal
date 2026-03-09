@@ -71,12 +71,37 @@ tasks:
     cmds:
       - cargo run -p daemon
 
+  release:cli:
+    desc: "Release flux CLI via GoReleaser (usage: task release:cli -- v0.1.0)"
+    cmds:
+      - git tag {{.CLI_ARGS}}
+      - git push origin {{.CLI_ARGS}}
+      - goreleaser release --clean
+
+  install:cli:
+    desc: "Install flux CLI to $GOPATH/bin (then use 'flux' from any directory)"
+    dir: cli
+    cmds:
+      - go build -o "$(go env GOPATH)/bin/flux" .
+      - |
+        GOBIN="$(go env GOPATH)/bin"
+        if ! echo "$PATH" | grep -q "$GOBIN"; then
+          echo ""
+          echo "⚠  $GOBIN is not in your PATH."
+          echo "   Add this to your ~/.zshrc (or ~/.bashrc):"
+          echo ""
+          echo '   export PATH="$PATH:$(go env GOPATH)/bin"'
+          echo ""
+          echo "   Then run: source ~/.zshrc"
+        else
+          echo "✓ flux installed — $(flux --help 2>&1 | head -1)"
+        fi
+
   dev:cli:
-    desc: "Run the flux CLI (usage: task dev:cli -- <args>)"
+    desc: "Run the flux CLI without installing (usage: task dev:cli -- <args>)"
     dir: cli
     env:
       FLUX_API_URL: '{{.FLUX_API_URL | default "http://localhost:7070"}}'
-      FLUX_WORKOS_CLIENT_ID: "{{.FLUX_WORKOS_CLIENT_ID}}"
     cmds:
       - go run . {{.CLI_ARGS}}
 

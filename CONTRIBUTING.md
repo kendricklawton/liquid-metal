@@ -75,17 +75,23 @@ task up              # Postgres + NATS + RustFS (S3 mock) via docker compose
 
 # Start services
 task dev:api         # Rust API on :7070
-task dev:web         # Go dashboard on :3000 (air hot reload)
 task dev:proxy       # Pingora on :8080
 task dev:daemon      # NATS consumer (Firecracker skipped on macOS)
 task dev:mcp         # MCP server (stdio — for Claude Desktop / agent dev)
 
-# CLI
-task dev:cli -- login
-task dev:cli -- init
-task dev:cli -- deploy
-task dev:cli -- status
+# Install the CLI once — then use flux from any directory
+task install:cli     # go install → flux lands in $GOPATH/bin
+# If flux is not found after install, add Go's bin dir to your PATH:
+#   export PATH="$PATH:$(go env GOPATH)/bin"   ← add to ~/.zshrc
+
+# From your service directory (not the liquid-metal repo)
+flux login
+flux init
+flux deploy
+flux status
 ```
+
+> `task dev:cli -- <cmd>` also works for quick one-off runs inside the liquid-metal repo, but `task install:cli` is the right approach for iterating on real service directories.
 
 ### Linux only (bare metal, one-time setup)
 
