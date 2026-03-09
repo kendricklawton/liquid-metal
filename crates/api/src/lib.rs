@@ -2,6 +2,7 @@ pub mod envelope;
 pub mod grpc;
 pub mod migrations;
 pub mod nats;
+pub mod quota;
 pub mod routes;
 pub mod storage;
 
