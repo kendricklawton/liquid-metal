@@ -45,7 +45,7 @@ impl ProjectService for ProjectServiceImpl {
         })?;
 
         // Verify caller is a member of the workspace.
-        assert_workspace_member(&*db, workspace_id, caller).await?;
+        assert_workspace_member(&db, workspace_id, caller).await?;
 
         let project_id = Uuid::now_v7();
 

@@ -1,32 +1,114 @@
 name: Release
 
+# Requires these GitHub repository variables (Settings → Variables → Actions):
+#   HOMEBREW_TAP  — e.g. "yourname/homebrew-tap"
+#
+# Requires these GitHub repository secrets:
+#   HOMEBREW_TAP_TOKEN — PAT with repo write access to your tap
+
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
   contents: write
 
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTUP_MAX_RETRIES: 10
+
 jobs:
-  release:
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ github.ref_name }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Install cargo-dist
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.22.1/cargo-dist-installer.sh | sh
+      - name: Inject homebrew tap
+        if: vars.HOMEBREW_TAP != ''
+        run: sed -i 's|# tap injected by CI|tap = "${{ vars.HOMEBREW_TAP }}"\npublish-jobs = ["homebrew"]|' Cargo.toml
+      - id: plan
+        run: |
+          cargo dist plan --tag=${{ github.ref_name }} --output-format=json > plan.json
+          cat plan.json
+      - uses: actions/upload-artifact@v4
         with:
-          go-version-file: go.work
+          name: dist-manifest.json
+          path: plan.json
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+  build:
+    needs: plan
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
         with:
-          version: latest
-          args: release --clean
+          fetch-depth: 0
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Install cross-compile tools (aarch64 Linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install cargo-dist (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.22.1/cargo-dist-installer.sh | sh
+      - name: Install cargo-dist (Windows)
+        if: runner.os == 'Windows'
+        run: irm https://github.com/axodotdev/cargo-dist/releases/download/v0.22.1/cargo-dist-installer.ps1 | iex
+        shell: pwsh
+      - name: Build
+        run: cargo dist build --tag=${{ github.ref_name }} --output-format=json --artifacts=local
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: dist/
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install cargo-dist
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.22.1/cargo-dist-installer.sh | sh
+      - name: Inject homebrew tap
+        if: vars.HOMEBREW_TAP != ''
+        run: sed -i 's|# tap injected by CI|tap = "${{ vars.HOMEBREW_TAP }}"\npublish-jobs = ["homebrew"]|' Cargo.toml
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: dist/
+          merge-multiple: true
+      - name: Publish GitHub Release
+        run: cargo dist publish --tag=${{ github.ref_name }} --output-format=json
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

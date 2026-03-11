@@ -70,7 +70,7 @@ impl ServiceService for ServiceServiceImpl {
             .ok_or_else(|| Status::not_found("project not found"))?;
 
         let workspace_id: Uuid = row.get("workspace_id");
-        assert_workspace_member(&*db, workspace_id, caller).await?;
+        assert_workspace_member(&db, workspace_id, caller).await?;
 
         let artifact_name = if req.engine == Engine::Liquid as i32 { "main.wasm" } else { "app" };
         let artifact_key  = format!(
@@ -144,7 +144,7 @@ impl ServiceService for ServiceServiceImpl {
             .ok_or_else(|| Status::not_found("project not found"))?;
 
         let workspace_id: Uuid = row.get("workspace_id");
-        assert_workspace_member(&*db, workspace_id, caller).await?;
+        assert_workspace_member(&db, workspace_id, caller).await?;
 
         // ── Tier + quota enforcement ─────────────────────────────────────────
         let tier_row = db
@@ -458,10 +458,11 @@ impl ServiceService for ServiceServiceImpl {
                 id:           row.get::<_, Uuid>("id").to_string(),
                 name:         row.get("name"),
                 slug:         row.get("slug"),
-                engine:       row.get::<_, String>("engine")
-                                  .eq("metal")
-                                  .then_some(Engine::Metal as i32)
-                                  .unwrap_or(Engine::Liquid as i32),
+                engine:       if row.get::<_, String>("engine") == "metal" {
+                                  Engine::Metal as i32
+                              } else {
+                                  Engine::Liquid as i32
+                              },
                 status:       match row.get::<_, String>("status").as_str() {
                     "running" => ServiceStatus::Running as i32,
                     "failed"  => ServiceStatus::Failed as i32,
