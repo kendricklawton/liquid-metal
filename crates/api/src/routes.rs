@@ -1,7 +1,7 @@
 use crate::AppState;
 use axum::{
     Json,
-    extract::{Request, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
@@ -99,16 +99,22 @@ pub async fn auth_middleware(
 
 // ── Auth: public CLI config ───────────────────────────────────────────────────
 
-/// GET /auth/cli/config — returns the Zitadel domain and client_id for device flow.
+/// GET /auth/cli/config — returns the OIDC endpoints and client_id for device flow.
 ///
-/// Neither value is a secret (both are public OAuth identifiers), so this
-/// endpoint requires no authentication. The CLI fetches them at login time so
-/// no credentials need to be baked into the binary.
+/// None of these values are secrets (standard public OAuth identifiers).
+/// The CLI fetches them at login time so no credentials are baked into the binary,
+/// and swapping auth providers requires only env var changes — no binary rebuild.
 pub async fn cli_config(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "zitadel_domain":    state.zitadel_domain,
-        "zitadel_client_id": state.zitadel_client_id,
-    }))
+    let mut cfg = serde_json::json!({
+        "client_id":       state.oidc_client_id,
+        "device_auth_url": state.oidc_device_auth_url,
+        "token_url":       state.oidc_token_url,
+        "userinfo_url":    state.oidc_userinfo_url,
+    });
+    if let Some(url) = &state.oidc_revoke_url {
+        cfg["revoke_url"] = serde_json::Value::String(url.clone());
+    }
+    Json(cfg)
 }
 
 // ── Auth: shared types ────────────────────────────────────────────────────────
@@ -118,7 +124,7 @@ pub struct ProvisionRequest {
     pub email:       String,
     pub first_name:  String,
     pub last_name:   String,
-    pub zitadel_sub: Option<String>,
+    pub oidc_sub: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,7 +134,7 @@ pub struct ProvisionResponse {
     pub slug:         String,
     pub tier:         String,
     pub workspace_id: String,
-    pub zitadel_sub:  Option<String>,
+    pub oidc_sub:  Option<String>,
 }
 
 // ── Auth: internal provision (called by Go web BFF) ──────────────────────────
@@ -163,7 +169,7 @@ pub async fn provision_user(
         &req.email,
         &req.first_name,
         &req.last_name,
-        req.zitadel_sub.as_deref(),
+        req.oidc_sub.as_deref(),
         None, // web BFF path — no invite required (internal-secret gated)
     ).await
 }
@@ -175,7 +181,7 @@ pub struct CliProvisionRequest {
     pub email:       String,
     pub first_name:  String,
     pub last_name:   String,
-    pub zitadel_sub: Option<String>,
+    pub oidc_sub: Option<String>,
     pub invite_code: Option<String>,
 }
 
@@ -198,7 +204,7 @@ pub async fn cli_provision(
         &req.email,
         &req.first_name,
         &req.last_name,
-        req.zitadel_sub.as_deref(),
+        req.oidc_sub.as_deref(),
         req.invite_code.as_deref(),
     ).await
 }
@@ -213,16 +219,16 @@ async fn do_provision(
     email:       &str,
     first_name:  &str,
     last_name:   &str,
-    zitadel_sub: Option<&str>,
+    oidc_sub: Option<&str>,
     invite_code: Option<&str>,
 ) -> Result<Json<ProvisionResponse>, StatusCode> {
-    // Upsert zitadel_sub on the existing user if provided.
-    if let Some(sub) = zitadel_sub {
+    // Upsert oidc_sub on the existing user if provided.
+    if let Some(sub) = oidc_sub {
         db.execute(
-            "UPDATE users SET zitadel_sub = $1 WHERE email = $2 AND deleted_at IS NULL",
+            "UPDATE users SET oidc_sub = $1 WHERE email = $2 AND deleted_at IS NULL",
             &[&sub, &email],
         ).await.map_err(|e| {
-            tracing::error!(error = %e, "update zitadel_sub");
+            tracing::error!(error = %e, "update oidc_sub");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
@@ -230,7 +236,7 @@ async fn do_provision(
     // Fast path: return existing user (no invite check — they already provisioned).
     let existing = db
         .query_opt(
-            "SELECT u.id, u.name, u.tier, u.zitadel_sub, w.id AS workspace_id, w.slug \
+            "SELECT u.id, u.name, u.tier, u.oidc_sub, w.id AS workspace_id, w.slug \
              FROM users u \
              LEFT JOIN workspace_members wm ON wm.user_id = u.id AND wm.role = 'owner' \
              LEFT JOIN workspaces w ON w.id = wm.workspace_id \
@@ -253,7 +259,7 @@ async fn do_provision(
             workspace_id: row.get::<_, Option<Uuid>>("workspace_id")
                               .map(|u| u.to_string())
                               .unwrap_or_default(),
-            zitadel_sub:  row.get("zitadel_sub"),
+            oidc_sub:  row.get("oidc_sub"),
         }));
     }
 
@@ -296,10 +302,10 @@ async fn do_provision(
     })?;
 
     txn.execute(
-        "INSERT INTO users (id, email, name, zitadel_sub) VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (email) DO UPDATE SET zitadel_sub = EXCLUDED.zitadel_sub \
-         WHERE EXCLUDED.zitadel_sub IS NOT NULL",
-        &[&user_id, &email, &full_name, &zitadel_sub],
+        "INSERT INTO users (id, email, name, oidc_sub) VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (email) DO UPDATE SET oidc_sub = EXCLUDED.oidc_sub \
+         WHERE EXCLUDED.oidc_sub IS NOT NULL",
+        &[&user_id, &email, &full_name, &oidc_sub],
     ).await.map_err(|e| {
         tracing::error!(error = ?e, "insert user");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -346,7 +352,7 @@ async fn do_provision(
         slug:         ws_slug,
         tier:         "hobby".to_string(),
         workspace_id: workspace_id.to_string(),
-        zitadel_sub:  zitadel_sub.map(|s| s.to_string()),
+        oidc_sub:  oidc_sub.map(|s| s.to_string()),
     }))
 }
 
@@ -470,4 +476,674 @@ mod tests {
         let s = workspace_slug("alice@example.com");
         assert!(s.ends_with("-workspace"));
     }
+}
+
+// ── REST: shared auth helper ───────────────────────────────────────────────────
+
+/// Extract the caller's UUID from X-Api-Key or Authorization: Bearer.
+/// The auth_middleware has already validated the UUID exists in the DB,
+/// so here we only need to parse it.
+fn extract_caller(headers: &HeaderMap) -> Result<Uuid, StatusCode> {
+    let raw = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        })
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    raw.parse().map_err(|_| StatusCode::UNAUTHORIZED)
+}
+
+// ── GET /users/me ─────────────────────────────────────────────────────────────
+
+pub async fn get_me(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let row = db
+        .query_opt(
+            "SELECT id, email, name FROM users WHERE id = $1 AND deleted_at IS NULL",
+            &[&caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(serde_json::json!({
+        "id":    row.get::<_, Uuid>("id").to_string(),
+        "email": row.get::<_, String>("email"),
+        "name":  row.get::<_, String>("name"),
+    })))
+}
+
+// ── GET /workspaces ───────────────────────────────────────────────────────────
+
+pub async fn list_workspaces(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = db
+        .query(
+            "SELECT w.id, w.name, w.slug, w.tier \
+             FROM workspaces w \
+             JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1 \
+             WHERE w.deleted_at IS NULL \
+             ORDER BY w.created_at ASC \
+             LIMIT 50",
+            &[&caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let workspaces: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| serde_json::json!({
+            "id":   row.get::<_, Uuid>("id").to_string(),
+            "name": row.get::<_, String>("name"),
+            "slug": row.get::<_, String>("slug"),
+            "tier": row.get::<_, String>("tier"),
+        }))
+        .collect();
+
+    Ok(Json(serde_json::Value::Array(workspaces)))
+}
+
+// ── GET /projects?workspace_id=<uuid> ────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ListProjectsParams {
+    workspace_id: String,
+}
+
+pub async fn list_projects(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<ListProjectsParams>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+    let wid: Uuid = params.workspace_id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = db
+        .query(
+            "SELECT p.id, p.workspace_id, p.name, p.slug \
+             FROM projects p \
+             JOIN workspace_members wm \
+               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             WHERE p.workspace_id = $1 AND p.deleted_at IS NULL \
+             ORDER BY p.created_at DESC \
+             LIMIT 200",
+            &[&wid, &caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let projects: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| serde_json::json!({
+            "id":           row.get::<_, Uuid>("id").to_string(),
+            "workspace_id": row.get::<_, Uuid>("workspace_id").to_string(),
+            "name":         row.get::<_, String>("name"),
+            "slug":         row.get::<_, String>("slug"),
+        }))
+        .collect();
+
+    Ok(Json(serde_json::Value::Array(projects)))
+}
+
+// ── POST /projects ────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CreateProjectBody {
+    workspace_id: String,
+    name: String,
+    slug: String,
+}
+
+pub async fn create_project(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<CreateProjectBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+
+    if body.name.is_empty() || body.slug.is_empty() || body.workspace_id.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let wid: Uuid = body.workspace_id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let member = db
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
+            &[&wid, &caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !member.get::<_, bool>(0) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let project_id = Uuid::now_v7();
+
+    db.execute(
+        "INSERT INTO projects (id, workspace_id, name, slug) VALUES ($1, $2, $3, $4)",
+        &[&project_id, &wid, &body.name, &body.slug],
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "insert project failed");
+        if e.as_db_error()
+            .map(|d| d.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION)
+            .unwrap_or(false)
+        {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "project": {
+            "id":           project_id.to_string(),
+            "workspace_id": wid.to_string(),
+            "name":         body.name,
+            "slug":         body.slug,
+        }
+    })))
+}
+
+// ── GET /services ─────────────────────────────────────────────────────────────
+
+pub async fn list_services(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = db
+        .query(
+            "SELECT s.id, s.name, s.slug, s.engine, s.status, s.upstream_addr \
+             FROM services s \
+             JOIN projects p ON p.id = s.project_id \
+             JOIN workspace_members wm \
+               ON wm.workspace_id = p.workspace_id AND wm.user_id = $1 \
+             WHERE s.deleted_at IS NULL \
+             ORDER BY s.created_at DESC \
+             LIMIT 500",
+            &[&caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let services: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| serde_json::json!({
+            "id":            row.get::<_, Uuid>("id").to_string(),
+            "name":          row.get::<_, String>("name"),
+            "slug":          row.get::<_, String>("slug"),
+            "engine":        row.get::<_, String>("engine"),
+            "status":        row.get::<_, String>("status"),
+            "upstream_addr": row.get::<_, Option<String>>("upstream_addr").unwrap_or_default(),
+        }))
+        .collect();
+
+    Ok(Json(serde_json::Value::Array(services)))
+}
+
+// ── POST /deployments/upload-url ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct UploadUrlBody {
+    engine: String,
+    deploy_id: String,
+    project_id: String,
+}
+
+pub async fn get_upload_url(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<UploadUrlBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+
+    if body.deploy_id.is_empty() || body.project_id.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let pid: Uuid = body.project_id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let row = db
+        .query_opt(
+            "SELECT workspace_id FROM projects WHERE id = $1 AND deleted_at IS NULL",
+            &[&pid],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let wid: Uuid = row.get("workspace_id");
+
+    let member = db
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
+            &[&wid, &caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !member.get::<_, bool>(0) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let (engine_prefix, artifact_name) = match body.engine.as_str() {
+        "liquid" => ("wasm", "main.wasm"),
+        "metal"  => ("metal", "app"),
+        _        => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let artifact_key = format!(
+        "{}/{}/{}/{}",
+        engine_prefix, body.project_id, body.deploy_id, artifact_name
+    );
+
+    let expires = aws_sdk_s3::presigning::PresigningConfig::expires_in(
+        std::time::Duration::from_secs(300),
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let presigned = state
+        .s3
+        .put_object()
+        .bucket(&state.bucket)
+        .key(&artifact_key)
+        .presigned(expires)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "S3 presign failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "upload_url":   presigned.uri().to_string(),
+        "artifact_key": artifact_key,
+    })))
+}
+
+// ── POST /deployments ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct DeployBody {
+    name: String,
+    slug: String,
+    engine: String,
+    project_id: String,
+    artifact_key: String,
+    sha256: String,
+    // Metal-only (optional for liquid deploys)
+    vcpu: Option<u32>,
+    memory_mb: Option<u32>,
+    port: Option<u32>,
+}
+
+pub async fn deploy_service(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<DeployBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+
+    if body.name.is_empty() || body.name.len() > 63 || body.artifact_key.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let pid: Uuid = body.project_id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let row = db
+        .query_opt(
+            "SELECT workspace_id FROM projects WHERE id = $1 AND deleted_at IS NULL",
+            &[&pid],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let wid: Uuid = row.get("workspace_id");
+
+    let member = db
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
+            &[&wid, &caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !member.get::<_, bool>(0) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let tier_row = db
+        .query_one("SELECT tier FROM workspaces WHERE id = $1", &[&wid])
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let tier: String = tier_row.get("tier");
+    let limits = crate::quota::limits_for(&tier);
+
+    let engine_str = match body.engine.as_str() {
+        "liquid" => "liquid",
+        "metal"  => "metal",
+        _        => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let engine_spec = match engine_str {
+        "metal" => {
+            let vcpu      = body.vcpu.unwrap_or(0);
+            let memory_mb = body.memory_mb.unwrap_or(0);
+            let port      = body.port.unwrap_or(0) as u16;
+            if vcpu == 0 || memory_mb < 64 || port == 0 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            if vcpu > limits.max_vcpu {
+                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+            }
+            if memory_mb > limits.max_memory_mb {
+                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+            }
+            common::EngineSpec::Metal(common::MetalSpec {
+                vcpu,
+                memory_mb,
+                port,
+                artifact_key:    body.artifact_key.clone(),
+                artifact_sha256: if body.sha256.is_empty() { None } else { Some(body.sha256.clone()) },
+                quota:           Default::default(),
+            })
+        }
+        _ => common::EngineSpec::Liquid(common::LiquidSpec {
+            artifact_key:    body.artifact_key.clone(),
+            artifact_sha256: if body.sha256.is_empty() { None } else { Some(body.sha256.clone()) },
+        }),
+    };
+
+    let (vcpu_i, memory_mb_i, port_i) = match &engine_spec {
+        common::EngineSpec::Metal(m) => (m.vcpu as i32, m.memory_mb as i32, m.port as i32),
+        common::EngineSpec::Liquid(_) => (0i32, 0i32, 0i32),
+    };
+
+    let service_id = Uuid::now_v7();
+    let slug = if body.slug.is_empty() { common::slugify(&body.name) } else { body.slug.clone() };
+
+    // Advisory lock: serializes concurrent deploys for the same workspace.
+    let lock_key = {
+        let b = wid.as_bytes();
+        i64::from_be_bytes(b[0..8].try_into().unwrap())
+            ^ i64::from_be_bytes(b[8..16].try_into().unwrap())
+    };
+
+    let txn = db
+        .build_transaction()
+        .start()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    txn.execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let svc_count: i64 = txn
+        .query_one(
+            "SELECT COUNT(*) FROM services WHERE workspace_id = $1 AND deleted_at IS NULL",
+            &[&wid],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .get(0);
+
+    if svc_count >= limits.max_services {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    txn.execute(
+        "INSERT INTO services \
+         (id, project_id, workspace_id, name, slug, engine, status, \
+          artifact_key, commit_sha, vcpu, memory_mb, port) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'provisioning', $7, $8, $9, $10, $11)",
+        &[
+            &service_id, &pid, &wid,
+            &body.name, &slug, &engine_str,
+            &body.artifact_key, &body.sha256,
+            &vcpu_i, &memory_mb_i, &port_i,
+        ],
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "service insert failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    txn.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let event = common::ProvisionEvent {
+        tenant_id:  wid.to_string(),
+        service_id: service_id.to_string(),
+        app_name:   body.name.clone(),
+        engine:     if engine_str == "metal" { common::Engine::Metal } else { common::Engine::Liquid },
+        spec:       engine_spec,
+    };
+
+    crate::nats::publish_provision(&state.nats, &event)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "nats publish failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "service": {
+            "id":     service_id.to_string(),
+            "name":   body.name,
+            "slug":   slug,
+            "status": "provisioning",
+        }
+    })))
+}
+
+// ── GET /services/:id/logs ────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct LogsParams {
+    limit: Option<i64>,
+}
+
+pub async fn get_service_logs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<LogsParams>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+    let service_id: Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let ok = db
+        .query_one(
+            "SELECT EXISTS(\
+               SELECT 1 FROM services s \
+               JOIN projects p ON p.id = s.project_id \
+               JOIN workspace_members wm \
+                 ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+               WHERE s.id = $1 AND s.deleted_at IS NULL\
+             )",
+            &[&service_id, &caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !ok.get::<_, bool>(0) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let rows = db
+        .query(
+            "SELECT content \
+             FROM build_log_lines \
+             WHERE service_id = $1 \
+               AND created_at > NOW() - INTERVAL '30 days' \
+             ORDER BY created_at DESC \
+             LIMIT $2",
+            &[&service_id, &limit],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let lines: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| serde_json::json!({
+            "ts":      serde_json::Value::Null,
+            "message": row.get::<_, String>("content"),
+        }))
+        .collect();
+
+    Ok(Json(serde_json::Value::Array(lines)))
+}
+
+// ── POST /services/:id/stop ───────────────────────────────────────────────────
+
+pub async fn stop_service(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let caller = extract_caller(&headers)?;
+    let service_id: Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let row = db
+        .query_opt(
+            "UPDATE services s \
+             SET status = 'stopped', upstream_addr = NULL \
+             FROM projects p, workspace_members wm \
+             WHERE s.id = $1 \
+               AND s.deleted_at IS NULL \
+               AND s.status != 'stopped' \
+               AND s.project_id = p.id \
+               AND wm.workspace_id = p.workspace_id \
+               AND wm.user_id = $2 \
+             RETURNING s.engine",
+            &[&service_id, &caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let row = row.ok_or(StatusCode::NOT_FOUND)?;
+    let engine_str: String = row.get("engine");
+
+    let event = common::events::DeprovisionEvent {
+        service_id: service_id.to_string(),
+        engine: if engine_str == "metal" { common::Engine::Metal } else { common::Engine::Liquid },
+    };
+    crate::nats::publish_deprovision(&state.nats, &event)
+        .await
+        .map_err(|e| tracing::error!(error = %e, "nats deprovision publish failed"))
+        .ok();
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── POST /services/:id/restart ────────────────────────────────────────────────
+
+pub async fn restart_service(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let caller = extract_caller(&headers)?;
+    let service_id: Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let row = db
+        .query_opt(
+            "SELECT s.id, s.name, s.slug, s.engine, s.workspace_id, \
+                    s.vcpu, s.memory_mb, s.port, s.artifact_key, s.commit_sha \
+             FROM services s \
+             JOIN projects p ON p.id = s.project_id \
+             JOIN workspace_members wm \
+               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             WHERE s.id = $1 \
+               AND s.deleted_at IS NULL \
+               AND s.status IN ('stopped', 'failed')",
+            &[&service_id, &caller],
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let engine_str: String = row.get("engine");
+    let wid: Uuid           = row.get("workspace_id");
+    let name: String        = row.get("name");
+    let slug: String        = row.get("slug");
+    let artifact_key: String = row.get::<_, Option<String>>("artifact_key").unwrap_or_default();
+
+    let spec = match engine_str.as_str() {
+        "metal" => common::EngineSpec::Metal(common::MetalSpec {
+            vcpu:            row.get::<_, i32>("vcpu") as u32,
+            memory_mb:       row.get::<_, i32>("memory_mb") as u32,
+            port:            row.get::<_, i32>("port") as u16,
+            artifact_key:    artifact_key,
+            artifact_sha256: None,
+            quota:           Default::default(),
+        }),
+        _ => common::EngineSpec::Liquid(common::LiquidSpec {
+            artifact_key:    artifact_key,
+            artifact_sha256: None,
+        }),
+    };
+
+    db.execute(
+        "UPDATE services SET status = 'provisioning', upstream_addr = NULL WHERE id = $1",
+        &[&service_id],
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let event = common::ProvisionEvent {
+        tenant_id:  wid.to_string(),
+        service_id: service_id.to_string(),
+        app_name:   name.clone(),
+        engine:     if engine_str == "metal" { common::Engine::Metal } else { common::Engine::Liquid },
+        spec,
+    };
+
+    crate::nats::publish_provision(&state.nats, &event)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "nats provision publish failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "service": {
+            "id":     service_id.to_string(),
+            "name":   name,
+            "slug":   slug,
+            "status": "provisioning",
+        }
+    })))
 }

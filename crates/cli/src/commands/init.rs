@@ -40,7 +40,7 @@ struct LiquidMetalConfig<'a> {
     build: BuildSection,
 }
 
-pub async fn run(config: &Config) -> Result<()> {
+pub async fn run(config: &Config, name_override: Option<String>) -> Result<()> {
     let token = config.require_token()?;
     let workspace_id = config
         .workspace_id
@@ -52,11 +52,15 @@ pub async fn run(config: &Config) -> Result<()> {
     }
 
     let cwd = std::env::current_dir()?;
-    let name = to_slug(
-        cwd.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("service"),
-    );
+    let name = name_override.unwrap_or_else(|| {
+        common::slugify(
+            cwd.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("service"),
+        )
+    });
+
+    let build = detect_language()?;
 
     println!(
         "Initializing service {:?} in workspace {}...\n",
@@ -84,8 +88,8 @@ pub async fn run(config: &Config) -> Result<()> {
             project_id: &project_id,
         },
         build: BuildSection {
-            command: "cargo build --target wasm32-wasip1 --release".to_string(),
-            output: "target/wasm32-wasip1/release/main.wasm".to_string(),
+            command: build.command.clone(),
+            output: build.output.clone(),
         },
     };
 
@@ -94,16 +98,68 @@ pub async fn run(config: &Config) -> Result<()> {
     println!("Created liquid-metal.toml");
     println!("  service: {}", name);
     println!("  project: {}", project_id);
-    println!("  engine:  liquid\n");
-    println!("Edit liquid-metal.toml if needed, then run:\n\n  flux deploy");
+    println!("  engine:  liquid");
+    println!("  build:   {}", build.command);
+    println!("  output:  {}\n", build.output);
+    println!("Run `flux deploy` when ready.");
     Ok(())
 }
 
-fn to_slug(s: &str) -> String {
-    let s = s.to_lowercase();
-    let s: String = s
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect();
-    s.trim_matches('-').to_string()
+struct DetectedBuild {
+    command: String,
+    output: String,
 }
+
+fn detect_language() -> Result<DetectedBuild> {
+    if std::path::Path::new("go.mod").exists() {
+        return Ok(DetectedBuild {
+            command: "GOOS=wasip1 GOARCH=wasm go build -o main.wasm .".to_string(),
+            output: "main.wasm".to_string(),
+        });
+    }
+
+    if std::path::Path::new("Cargo.toml").exists() {
+        let bin_name = parse_rust_bin_name()?;
+        return Ok(DetectedBuild {
+            command: "cargo build --target wasm32-wasip1 --release".to_string(),
+            output: format!("target/wasm32-wasip1/release/{bin_name}.wasm"),
+        });
+    }
+
+    if std::path::Path::new("build.zig").exists() {
+        return Ok(DetectedBuild {
+            command: "zig build -Dtarget=wasm32-wasi".to_string(),
+            output: "zig-out/bin/main.wasm".to_string(),
+        });
+    }
+
+    bail!(
+        "could not detect language — no go.mod, Cargo.toml, or build.zig found.\n\
+         Create one of those files or edit liquid-metal.toml manually."
+    )
+}
+
+fn parse_rust_bin_name() -> Result<String> {
+    let contents = std::fs::read_to_string("Cargo.toml")?;
+    let doc: toml::Value = contents.parse()?;
+
+    // [[bin]] name takes priority over [package] name
+    if let Some(bins) = doc.get("bin").and_then(|v| v.as_array()) {
+        if let Some(first_bin) = bins.first() {
+            if let Some(name) = first_bin.get("name").and_then(|v| v.as_str()) {
+                return Ok(name.to_string());
+            }
+        }
+    }
+
+    if let Some(name) = doc
+        .get("package")
+        .and_then(|p| p.get("name"))
+        .and_then(|v| v.as_str())
+    {
+        return Ok(name.to_string());
+    }
+
+    bail!("could not determine binary name from Cargo.toml")
+}
+

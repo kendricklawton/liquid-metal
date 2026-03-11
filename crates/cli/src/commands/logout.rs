@@ -18,17 +18,17 @@ pub async fn run(config: &mut Config) -> Result<()> {
 }
 
 async fn revoke_token(config: &Config) {
-    let (domain, client_id, token) = match (
-        config.zitadel_domain.as_deref(),
-        config.zitadel_client_id.as_deref(),
+    let (revoke_url, client_id, token) = match (
+        config.oidc_revoke_url.as_deref(),
+        config.oidc_client_id.as_deref(),
         config.access_token.as_deref(),
     ) {
-        (Some(d), Some(c), Some(t)) => (d, c, t),
-        _ => return,
+        (Some(u), Some(c), Some(t)) => (u, c, t),
+        _ => return, // revocation is best-effort; skip if any value is missing
     };
 
     let _ = Client::new()
-        .post(format!("https://{}/oauth/v2/revoke", domain))
+        .post(revoke_url)
         .form(&[("token", token), ("client_id", client_id)])
         .send()
         .await;
