@@ -1,4 +1,3 @@
-pub mod envelope;
 pub mod grpc;
 pub mod migrations;
 pub mod nats;
@@ -43,6 +42,9 @@ pub struct AppState {
     pub s3: aws_sdk_s3::Client,
     pub bucket: String,
     pub internal_secret: String,
+    pub zitadel_domain: String,
+    pub zitadel_client_id: String,
+    pub features: common::Features,
 }
 
 /// Assemble the full Axum + tonic application router.
@@ -50,18 +52,21 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     // ─── PUBLIC ROUTES ────────────────────────────────────────────────────────
     // Routes that require zero authentication (health checks, etc.)
     let public = Router::new()
-        .route("/healthz", get(routes::health))
+        .route("/healthz",        get(routes::health))
+        .route("/auth/cli/config", get(routes::cli_config))
         .with_state(state.clone());
 
     // ─── INTERNAL ROUTES (BFF / Web UI only) ──────────────────────────────────
-    // Routes used by your Go dashboard or internal services
+    // Routes used by your Go dashboard or internal services.
+    // All protected by X-Internal-Secret — never exposed to end users.
     let internal = Router::new()
         .route("/auth/provision", post(routes::provision_user))
+        .route("/admin/invites",  post(routes::create_invites))
         .with_state(state.clone());
 
     // ─── CLI AUTH ROUTES ───────────────────────────────────────────────────────
-    // Called directly by the CLI after PKCE authentication with WorkOS.
-    // No internal secret — the WorkOS access token is the proof of identity.
+    // Called by the CLI during device flow login. No auth required —
+    // the Zitadel device flow itself is the proof of identity.
     let cli_auth = Router::new()
         .route("/auth/cli/provision", post(routes::cli_provision))
         .with_state(state.clone());

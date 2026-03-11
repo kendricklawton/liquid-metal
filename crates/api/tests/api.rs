@@ -52,6 +52,9 @@ async fn try_build_state() -> Option<Arc<AppState>> {
         s3,
         bucket,
         internal_secret,
+        zitadel_domain:    std::env::var("ZITADEL_DOMAIN").unwrap_or_default(),
+        zitadel_client_id: std::env::var("ZITADEL_CLIENT_ID").unwrap_or_default(),
+        features:          common::Features::from_env(),
     }))
 }
 
@@ -161,7 +164,7 @@ async fn provision_creates_user_and_is_idempotent() {
         v1["slug"].as_str().unwrap().ends_with("-workspace"),
         "slug should end with -workspace"
     );
-    assert_eq!(v1["tier"], "free");
+    assert_eq!(v1["tier"], "hobby");
 
     // ── Second call: idempotent — same user_id returned ───────────────────────
     let resp2 = app.oneshot(make_request()).await.unwrap();

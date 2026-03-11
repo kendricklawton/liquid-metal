@@ -8,22 +8,19 @@ Operational reference for local development. Follow top to bottom on a fresh ses
 
 ### Tools
 ```bash
-brew install go rustup go-task goreleaser
+brew install rustup go-task
 rustup default stable
-```
-
-### Go PATH (add to ~/.zshrc permanently)
-```bash
-echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.zshrc
-source ~/.zshrc
+cargo install cargo-release
 ```
 
 ### Install the flux CLI (rebuild after CLI changes)
 ```bash
-cd ~/repos/liquid-metal/cli
-go build -o $(go env GOPATH)/bin/flux .
+cd ~/repos/liquid-metal
+cargo install --path crates/cli
 flux --help  # verify
 ```
+
+> `~/.cargo/bin` must be on your `PATH`. Rustup adds this automatically; if not, add `export PATH="$PATH:$HOME/.cargo/bin"` to `~/.zshrc`.
 
 ---
 
@@ -75,7 +72,7 @@ flux whoami
 Using the markdown-renderer example:
 
 ```bash
-cd ~/repos/liquid-metal-templates/go/liquid/markdown-renderer
+cd ~/repos/liquid-metal-templates/rust/liquid/markdown-renderer
 flux init      # creates project in API, writes project_id into liquid-metal.toml
 flux deploy    # builds main.wasm → uploads to RustFS → API → NATS → daemon runs it
 ```
@@ -83,7 +80,7 @@ flux deploy    # builds main.wasm → uploads to RustFS → API → NATS → dae
 Expected deploy output:
 ```
 => Deploying markdown-renderer (Engine: Liquid)...
-=> Compiling Go to WebAssembly (wasip1)...
+=> Compiling to WebAssembly...
 => Artifact built: main.wasm (SHA256: xxxxxxxx...)
 => Requesting upload destination...
 => Uploading artifact to object storage...
@@ -117,11 +114,6 @@ markdown-renderer   liquid   running   127.0.0.1:XXXXX
 ```bash
 # Replace PORT with the value from flux status UPSTREAM column
 curl http://127.0.0.1:PORT/
-# → returns HTMX live-preview HTML form
-
-curl -X POST http://127.0.0.1:PORT/ \
-  --data-binary "# Hello\n\n**world**"
-# → returns rendered HTML
 ```
 
 ---
@@ -151,6 +143,61 @@ flux project use <slug>      # set project_id in ./liquid-metal.toml
 
 ---
 
+## Testing
+
+### Compile check (no infra needed)
+```bash
+cargo check --workspace
+```
+
+### Unit tests (no infra needed)
+```bash
+cargo test --workspace
+```
+
+### Integration tests (requires `task up` + `task dev:api`)
+```bash
+cargo test -p api --test api
+```
+
+### API smoke tests (requires `task up` + `task dev:api`)
+```bash
+# Health check
+curl -s http://localhost:7070/healthz | jq
+
+# Provision a test user
+curl -s -X POST http://localhost:7070/auth/cli/provision \
+  -H "X-Internal-Secret: $(grep INTERNAL_SECRET .env | cut -d= -f2)" \
+  -H "Content-Type: application/json" \
+  -d '{"sub":"test-001","email":"test@example.com","name":"Test User"}' | jq
+```
+
+---
+
+## Releasing
+
+Versioning is controlled by `version` in `[workspace.package]` in the root `Cargo.toml`. All crates share one version. Tagging triggers the GitHub Actions release workflow (cargo-dist builds all targets + updates Homebrew tap).
+
+```bash
+# Preview what a release would do — no changes made
+task release:dry-run
+
+# Bump and release
+task release:patch   # bug fixes          0.1.0 → 0.1.1
+task release:minor   # new features       0.1.0 → 0.2.0
+task release:major   # breaking changes   0.1.0 → 1.0.0
+```
+
+Each task runs `cargo release`, which:
+1. Bumps the version in `Cargo.toml`
+2. Commits: `chore: release vX.Y.Z`
+3. Tags: `vX.Y.Z`
+4. Pushes commit + tag → GitHub Actions takes it from there
+
+> Set `verify = true` in `release.toml` before real releases to enforce a clean working tree.
+
+---
+
 ## Stopping the Dev Environment
 
 ```bash
@@ -167,13 +214,12 @@ task down
 
 ```bash
 # After changing CLI source
-cd ~/repos/liquid-metal/cli
-go build -o $(go env GOPATH)/bin/flux .
+cargo install --path ~/repos/liquid-metal/crates/cli
 
 # After changing API or daemon source — restart the relevant tab (Ctrl+C, then task dev:api / task dev:daemon)
 
 # Re-deploy a service
-cd ~/repos/liquid-metal-templates/go/liquid/markdown-renderer
+cd ~/repos/liquid-metal-templates/rust/liquid/markdown-renderer
 flux deploy    # liquid-metal.toml already has project_id from flux init
 ```
 
@@ -183,7 +229,7 @@ flux deploy    # liquid-metal.toml already has project_id from flux init
 
 | Symptom | Check |
 |---------|-------|
-| `flux: command not found` | `export PATH="$PATH:$(go env GOPATH)/bin"` and rebuild |
+| `flux: command not found` | `export PATH="$PATH:$HOME/.cargo/bin"` and reinstall |
 | `flux login` fails | `FLUX_WORKOS_CLIENT_ID` in `.env`, confirm `task up` is running |
 | `flux init` fails | API running? (`task dev:api`) |
 | `flux deploy` upload fails | RustFS running? (`task up`) Check `http://localhost:9001` |

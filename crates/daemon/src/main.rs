@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use async_nats::jetstream::AckKind;
 use async_nats::jetstream::stream::Config as StreamConfig;
-use common::config::{env_or, require_env};
-use common::events::{DeprovisionEvent, ProvisionEvent, STREAM_NAME, SUBJECT_DEPROVISION, SUBJECT_PROVISION};
+use common::{Features, config::{env_or, require_env}};
+use common::events::{DeprovisionEvent, Engine, ProvisionEvent, STREAM_NAME, SUBJECT_DEPROVISION, SUBJECT_PROVISION};
 use daemon::deprovision;
 use daemon::provision::{self, ProvisionConfig, ProvisionCtx};
 use daemon::storage;
@@ -111,9 +111,12 @@ async fn main() -> Result<()> {
         registry: registry.clone(),
     });
 
+    let features = Features::from_env();
+    features.log_summary();
+
     tracing::info!(
         %nats_url,
-        node_id   = cfg.node_id,
+        node_id    = cfg.node_id,
         use_jailer = cfg.use_jailer,
         "daemon starting"
     );
@@ -202,6 +205,21 @@ async fn main() -> Result<()> {
                     engine = ?event.engine,
                     "provision event received"
                 );
+
+                let engine_enabled = match event.engine {
+                    Engine::Metal  => features.enable_metal,
+                    Engine::Liquid => features.enable_liquid,
+                };
+                if !engine_enabled || features.maintenance_mode {
+                    tracing::warn!(
+                        app    = event.app_name,
+                        engine = ?event.engine,
+                        maintenance_mode = features.maintenance_mode,
+                        "provision rejected by feature flag — NACKing"
+                    );
+                    msg.ack_with(AckKind::Nak(None)).await.ok();
+                    continue;
+                }
 
                 let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
                 let ctx2   = ctx.clone();

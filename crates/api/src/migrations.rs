@@ -25,10 +25,19 @@ pub async fn run_with_url(url: &str) -> Result<()> {
         }
     });
 
-    migrations::runner()
+    let report = migrations::runner()
         .run_async(&mut client)
         .await
         .context("running migrations")?;
+
+    let applied = report.applied_migrations();
+    if applied.is_empty() {
+        tracing::info!("migrations: up to date");
+    } else {
+        for m in applied {
+            tracing::info!(version = m.version(), name = m.name(), "migration applied");
+        }
+    }
 
     Ok(())
 }

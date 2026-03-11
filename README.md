@@ -9,7 +9,7 @@ Bare-metal hosting platform. No Kubernetes. No managed cloud. Two products built
 ## Products
 
 ### Metal — Firecracker MicroVMs
-Run any Linux binary in a hardware-isolated VM. KVM-backed, dedicated rootfs, TAP networking. Ship a Go binary, an HTMX app, anything that compiles.
+Run any Linux binary in a hardware-isolated VM. KVM-backed, dedicated rootfs, TAP networking. Ship a Rust binary, a compiled app, anything that targets Linux.
 
 - **Isolation**: AWS Firecracker + KVM
 - **Cold start**: ~100–250ms
@@ -26,7 +26,6 @@ port   = 8080
 [metal]
 vcpu      = 1
 memory_mb = 128
-
 ```
 
 ### Liquid — WebAssembly
@@ -44,9 +43,8 @@ name   = "my-fn"
 engine = "liquid"
 
 [build]
-command = "GOOS=wasip1 GOARCH=wasm go build -o main.wasm ."
-output  = "main.wasm"
-
+command = "cargo build --target wasm32-wasip1 --release"
+output  = "target/wasm32-wasip1/release/my-fn.wasm"
 ```
 
 ---
@@ -59,7 +57,6 @@ flux init       # create project + write liquid-metal.toml
 flux deploy     # build locally → upload → provision
 flux status     # list your services
 # → live at <name>.liquidmetal.dev
-
 ```
 
 ---
@@ -74,12 +71,11 @@ task dev:proxy     # Pingora on :8080
 task dev:daemon    # NATS consumer (Firecracker skipped on macOS)
 
 # Install the CLI once — then use flux from any directory
-task install:cli   # go install → flux lands in $GOPATH/bin
+task install:cli   # cargo install → flux lands in ~/.cargo/bin
 flux login
 flux init          # run from your service directory
 flux deploy
 flux status
-
 ```
 
 ### Linux (bare metal, one-time setup)
@@ -87,7 +83,6 @@ flux status
 ```bash
 task metal:setup     # br0 bridge, /run/firecracker, Firecracker binary
 task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
-
 ```
 
 ---
@@ -97,9 +92,6 @@ task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
 * No Kubernetes, K3s, or any orchestrator
 * No AWS, GCP, Azure, Vercel, or Heroku
 * No ORMs (raw SQL everywhere)
-* No SPA frameworks (HTMX + Templ only)
 * No container registry (Object Storage is the registry)
 
 > For deep-dives into infrastructure topology, eBPF tenant isolation, HA strategy, and data flow see [ARCHITECTURE.md](ARCHITECTURE.md). For codebase layout, dev setup, and contribution rules see [CONTRIBUTING.md](CONTRIBUTING.md). For step-by-step local dev and deployment see [RUNBOOK.md](RUNBOOK.md).
-
-```
