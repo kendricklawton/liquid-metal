@@ -1,0 +1,22 @@
+# cargo-release configuration
+# Usage: cargo release minor   (or patch / major)
+# Docs:  https://github.com/crate-ci/cargo-release
+
+# All crates in the workspace share one version — bump them together
+shared-version = true
+
+# Match the tag pattern cargo-dist triggers on
+tag-name = "v{{version}}"
+
+# Commit message written before tagging
+pre-release-commit-message = "chore: release v{{version}}"
+
+# Don't publish to crates.io — this is a private platform tool
+publish = false
+
+# Push the commit + tag to origin automatically
+push = true
+
+# Don't require a clean working tree (allows running from any state)
+# Set to true before actual releases to catch accidental uncommitted changes
+verify = false

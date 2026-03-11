@@ -45,16 +45,18 @@ tasks:
     cmds:
       - cargo check --workspace
 
-  # ── Run individual services ───────────────────────────────────────────────
+  # ── Run Individual Rust Services ───────────────────────────────────────────────
   dev:api:
     desc: "Run the API server locally"
+    ignore_error: true
     env:
-      RUST_LOG: "api=debug"
+      RUST_LOG: "api=debug,refinery_core=info"
     cmds:
       - cargo run -p api
 
   dev:proxy:
     desc: "Run the Pingora edge proxy locally"
+    ignore_error: true
     env:
       BIND_ADDR: "0.0.0.0:8080"
       CLOUD_UPSTREAM: "127.0.0.1:7070"
@@ -64,6 +66,7 @@ tasks:
 
   dev:daemon:
     desc: "Run the daemon locally (requires NATS; TAP/Firecracker/cgroup requires Linux)"
+    ignore_error: true
     env:
       NATS_URL: "nats://127.0.0.1:4222"
       ROOTFS_DEVICE: "8:0" # override in .env for your node
@@ -71,64 +74,40 @@ tasks:
     cmds:
       - cargo run -p daemon
 
-  release:cli:
-    desc: "Release flux CLI via GoReleaser (usage: task release:cli -- v0.1.0)"
+  # ── Release ───────────────────────────────────────────────────────────────
+  release:patch:
+    desc: "Release a patch version bump (0.1.0 → 0.1.1)"
     cmds:
-      - git tag {{.CLI_ARGS}}
-      - git push origin {{.CLI_ARGS}}
-      - goreleaser release --clean
+      - cargo release patch
 
-  install:cli:
-    desc: "Install flux CLI to $GOPATH/bin (then use 'flux' from any directory)"
-    dir: cli
+  release:minor:
+    desc: "Release a minor version bump (0.1.0 → 0.2.0)"
     cmds:
-      - go build -o "$(go env GOPATH)/bin/flux" .
-      - |
-        GOBIN="$(go env GOPATH)/bin"
-        if ! echo "$PATH" | grep -q "$GOBIN"; then
-          echo ""
-          echo "⚠  $GOBIN is not in your PATH."
-          echo "   Add this to your ~/.zshrc (or ~/.bashrc):"
-          echo ""
-          echo '   export PATH="$PATH:$(go env GOPATH)/bin"'
-          echo ""
-          echo "   Then run: source ~/.zshrc"
-        else
-          echo "✓ flux installed — $(flux --help 2>&1 | head -1)"
-        fi
+      - cargo release minor
+
+  release:major:
+    desc: "Release a major version bump (0.1.0 → 1.0.0)"
+    cmds:
+      - cargo release major
+
+  release:dry-run:
+    desc: "Preview what the next minor release would do (no changes made)"
+    cmds:
+      - cargo release minor --dry-run
+
+  # ── Rust CLI ──────────────────────────────────────────────────────────────
+  install:cli:
+    desc: "Build and install Rust flux CLI to ~/.cargo/bin"
+    cmds:
+      - cargo install --path crates/cli
+      - echo "flux (Rust) installed — $(flux --help 2>&1 | head -1)"
 
   dev:cli:
-    desc: "Run the flux CLI without installing (usage: task dev:cli -- <args>)"
-    dir: cli
+    desc: "Run Rust flux CLI without installing (usage: task dev:cli -- <args>)"
     env:
       FLUX_API_URL: '{{.FLUX_API_URL | default "http://localhost:7070"}}'
     cmds:
-      - go run . {{.CLI_ARGS}}
-
-  # dev:web:
-  #   desc: "Run the Go web dashboard locally (:3000) with hot reload"
-  #   dir: web
-  #   env:
-  #     API_URL: "http://localhost:7070"
-  #     BIND_ADDR: "0.0.0.0:3000"
-  #   cmds:
-  #     - go run github.com/air-verse/air@latest -c .air.toml
-
-  dev:
-    desc: "Start API + web together; Ctrl+C kills both"
-    deps: []
-    cmds:
-      - |
-        bash <<'BASH'
-        trap 'kill $API_PID $WEB_PID 2>/dev/null; wait $API_PID $WEB_PID 2>/dev/null' INT TERM
-        RUST_LOG=api=debug cargo run -p api &
-        API_PID=$!
-        until curl -sf http://localhost:7070/healthz > /dev/null 2>&1; do sleep 0.2; done
-        cd web && API_URL=http://localhost:7070 BIND_ADDR=0.0.0.0:3000 \
-          go run github.com/air-verse/air@latest -c .air.toml &
-        WEB_PID=$!
-        wait $API_PID $WEB_PID
-        BASH
+      - cargo run -p cli -- {{.CLI_ARGS}}
 
   # ── T480 / Linux one-time setup ───────────────────────────────────────────
   security:setup:

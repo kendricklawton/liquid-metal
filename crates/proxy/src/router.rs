@@ -14,7 +14,7 @@ pub struct MachineRouter {
 #[async_trait]
 impl ProxyHttp for MachineRouter {
     type CTX = ();
-    fn new_ctx(&self) -> () {}
+    fn new_ctx(&self) {}
 
     async fn upstream_peer(
         &self,
