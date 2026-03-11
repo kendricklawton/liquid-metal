@@ -11,6 +11,7 @@ path = "src/main.rs"
 dist = true
 
 [dependencies]
+common     = { path = "../common" }
 clap       = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
@@ -18,8 +19,6 @@ serde_yaml = "0.9"
 toml       = { workspace = true }
 anyhow     = { workspace = true }
 tokio      = { workspace = true }
-sha2       = { workspace = true }
-hex        = { workspace = true }
 uuid       = { workspace = true }
 dirs       = "5"
 reqwest    = { version = "0.12", features = ["json"] }

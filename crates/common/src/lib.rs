@@ -1,6 +1,8 @@
+pub mod artifact;
 pub mod config;
 pub mod events;
 pub mod features;
+pub mod networking;
 
 pub use events::{Engine, EngineSpec, LiquidSpec, MetalSpec, ProvisionEvent};
 pub use features::Features;

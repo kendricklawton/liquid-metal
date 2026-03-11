@@ -52,7 +52,7 @@ output  = "target/wasm32-wasip1/release/my-fn.wasm"
 ## Getting Started
 
 ```bash
-flux login      # authenticate via browser (WorkOS)
+flux login      # authenticate via Zitadel (OIDC device flow — opens browser)
 flux init       # create project + write liquid-metal.toml
 flux deploy     # build locally → upload → provision
 flux status     # list your services
@@ -67,6 +67,7 @@ flux status     # list your services
 # Start infrastructure
 task up            # Postgres + NATS + RustFS (docker compose)
 task dev:api       # Rust API on :7070
+task dev:web       # Web dashboard on :3000 (planned)
 task dev:proxy     # Pingora on :8080
 task dev:daemon    # NATS consumer (Firecracker skipped on macOS)
 
