@@ -1,6 +1,5 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::client::ApiClient;
 use crate::config::Config;
@@ -107,9 +106,8 @@ pub async fn run(config: &Config) -> Result<()> {
     let file_bytes = std::fs::read(&wasm_file)
         .map_err(|_| anyhow::anyhow!("failed to read artifact: {}", wasm_file))?;
 
-    let hash = Sha256::digest(&file_bytes);
-    let sha256_hex = hex::encode(hash);
-    let deploy_id = uuid::Uuid::new_v4().to_string();
+    let sha256_hex = common::artifact::sha256_hex(&file_bytes);
+    let deploy_id = uuid::Uuid::now_v7().to_string();
 
     println!(
         "=> Artifact built: {} (SHA256: {}...)",

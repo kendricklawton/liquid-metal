@@ -18,28 +18,44 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Authenticate via Zitadel OIDC device flow
     Login {
         #[arg(long, short)]
         invite: Option<String>,
     },
+    /// Clear stored credentials
     Logout,
+    /// Show the authenticated user
     Whoami,
+    /// List services in the active workspace
     Status,
+    /// Stream logs for a service
     Logs {
         service_id: String,
         #[arg(long, default_value_t = 100)]
         limit: i32,
     },
+    /// Stop a running service
     Stop {
         service_id: String,
     },
+    /// Restart a service
     Restart {
         service_id: String,
     },
-    Init,
+    /// Create a project and write liquid-metal.toml (auto-detects language)
+    Init {
+        /// Override the detected service name
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Build and deploy the current service
     Deploy,
+    /// Manage workspaces
     Workspace(WorkspaceArgs),
+    /// Manage projects
     Project(ProjectArgs),
+    /// Manage invite codes
     Invite(InviteArgs),
 }
 
@@ -103,7 +119,7 @@ async fn main() {
         }
         Commands::Stop { service_id } => commands::stop::run(&config, &service_id).await,
         Commands::Restart { service_id } => commands::restart::run(&config, &service_id).await,
-        Commands::Init => commands::init::run(&config).await,
+        Commands::Init { name } => commands::init::run(&config, name).await,
         Commands::Deploy => commands::deploy::run(&config).await,
         Commands::Workspace(args) => match args.command {
             WorkspaceCommands::List => commands::workspace::run_list(&config).await,

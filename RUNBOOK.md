@@ -2,20 +2,21 @@
 
 Operational reference for local development. Follow top to bottom on a fresh session.
 
+> `go-task` (Taskfile) is optional. Every section below shows both the `task` shorthand and the raw command.
+
 ---
 
 ## Prerequisites (one-time)
 
 ### Tools
 ```bash
-brew install rustup go-task
+brew install rustup go-task   # go-task is optional
 rustup default stable
 cargo install cargo-release
 ```
 
 ### Install the flux CLI (rebuild after CLI changes)
 ```bash
-cd ~/repos/liquid-metal
 cargo install --path crates/cli
 flux --help  # verify
 ```
@@ -30,22 +31,31 @@ Open 3 terminal tabs.
 
 ### Tab 1 — Infrastructure (Docker)
 ```bash
-cd ~/repos/liquid-metal
+# With Taskfile
 task up
+
+# Without Taskfile
+docker compose up -d
 ```
 Starts: Postgres (:5432), NATS (:4222), RustFS S3 mock (:9000, console :9001)
 
 ### Tab 2 — Rust API
 ```bash
-cd ~/repos/liquid-metal
+# With Taskfile
 task dev:api
+
+# Without Taskfile
+RUST_LOG="api=debug,refinery_core=info" cargo run -p api
 ```
 Waits for: `Listening on 0.0.0.0:7070`
 
 ### Tab 3 — Daemon
 ```bash
-cd ~/repos/liquid-metal
+# With Taskfile
 task dev:daemon
+
+# Without Taskfile
+NATS_URL="nats://127.0.0.1:4222" RUST_LOG="daemon=debug" cargo run -p daemon
 ```
 Waits for: `TAP counter initialized from DB`
 
@@ -155,12 +165,12 @@ cargo check --workspace
 cargo test --workspace
 ```
 
-### Integration tests (requires `task up` + `task dev:api`)
+### Integration tests (requires infra + API running)
 ```bash
 cargo test -p api --test api
 ```
 
-### API smoke tests (requires `task up` + `task dev:api`)
+### API smoke tests (requires infra + API running)
 ```bash
 # Health check
 curl -s http://localhost:7070/healthz | jq
@@ -181,29 +191,54 @@ Versioning is controlled by `version` in `[workspace.package]` in the root `Carg
 ```bash
 # Preview what a release would do — no changes made
 task release:dry-run
+# or: cargo release minor --dry-run
 
 # Bump and release
-task release:patch   # bug fixes          0.1.0 → 0.1.1
-task release:minor   # new features       0.1.0 → 0.2.0
-task release:major   # breaking changes   0.1.0 → 1.0.0
+task release:patch   # or: cargo release patch    0.1.0 → 0.1.1
+task release:minor   # or: cargo release minor    0.1.0 → 0.2.0
+task release:major   # or: cargo release major    0.1.0 → 1.0.0
 ```
 
-Each task runs `cargo release`, which:
-1. Bumps the version in `Cargo.toml`
-2. Commits: `chore: release vX.Y.Z`
-3. Tags: `vX.Y.Z`
-4. Pushes commit + tag → GitHub Actions takes it from there
+`cargo release` will:
+1. Bump the version in `Cargo.toml`
+2. Commit: `chore: release vX.Y.Z`
+3. Tag: `vX.Y.Z`
+4. Push commit + tag → GitHub Actions takes it from there
 
 > Set `verify = true` in `release.toml` before real releases to enforce a clean working tree.
+
+---
+
+## Production Deploy Order
+
+Schema migrations are a separate step from serving traffic — run them before rolling the new binary so the DB is ready before any instance starts.
+
+```bash
+# 1. Run migrations (exits when done — no server started)
+DATABASE_URL="$DATABASE_URL" ./liquid-metal-api --migrate
+
+# 2. Start (or restart) the API server
+./liquid-metal-api
+```
+
+`MIGRATIONS_DATABASE_URL` can be set to a separate owner-privilege connection string if your app role doesn't have DDL rights:
+
+```bash
+MIGRATIONS_DATABASE_URL="postgres://lm_owner:...@host/liquidmetal" \
+DATABASE_URL="postgres://lm_app:...@host/liquidmetal" \
+./liquid-metal-api --migrate
+```
 
 ---
 
 ## Stopping the Dev Environment
 
 ```bash
-# Stop docker services
-cd ~/repos/liquid-metal
+# With Taskfile
 task down
+
+# Without Taskfile
+docker compose down
 
 # Kill API and daemon with Ctrl+C in their respective terminals
 ```
@@ -214,9 +249,9 @@ task down
 
 ```bash
 # After changing CLI source
-cargo install --path ~/repos/liquid-metal/crates/cli
+cargo install --path crates/cli
 
-# After changing API or daemon source — restart the relevant tab (Ctrl+C, then task dev:api / task dev:daemon)
+# After changing API or daemon source — restart the relevant tab (Ctrl+C, then rerun)
 
 # Re-deploy a service
 cd ~/repos/liquid-metal-templates/rust/liquid/markdown-renderer
@@ -230,8 +265,8 @@ flux deploy    # liquid-metal.toml already has project_id from flux init
 | Symptom | Check |
 |---------|-------|
 | `flux: command not found` | `export PATH="$PATH:$HOME/.cargo/bin"` and reinstall |
-| `flux login` fails | `FLUX_WORKOS_CLIENT_ID` in `.env`, confirm `task up` is running |
-| `flux init` fails | API running? (`task dev:api`) |
-| `flux deploy` upload fails | RustFS running? (`task up`) Check `http://localhost:9001` |
-| Status stuck at `provisioning` | Check daemon tab for errors |
+| `flux login` fails | `FLUX_WORKOS_CLIENT_ID` in `.env`, confirm Docker infra is running |
+| `flux init` fails | API running? (`cargo run -p api` or `task dev:api`) |
+| `flux deploy` upload fails | RustFS running? (`docker compose up -d rustfs`) Check `http://localhost:9001` |
+| Status stuck at `provisioning` | Check daemon logs for errors |
 | `GetUploadUrl` error | API can't reach RustFS — check `.env` S3 vars |

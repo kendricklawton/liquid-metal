@@ -19,9 +19,12 @@ pub struct Config {
     pub token: Option<String>,
     pub api_url: Option<String>,
     pub workspace_id: Option<String>,
-    pub zitadel_sub: Option<String>,
-    pub zitadel_domain: Option<String>,
-    pub zitadel_client_id: Option<String>,
+    pub oidc_sub: Option<String>,
+    pub oidc_client_id: Option<String>,
+    pub oidc_device_auth_url: Option<String>,
+    pub oidc_token_url: Option<String>,
+    pub oidc_userinfo_url: Option<String>,
+    pub oidc_revoke_url: Option<String>,
     pub access_token: Option<String>,
 }
 

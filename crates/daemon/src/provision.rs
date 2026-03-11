@@ -109,8 +109,8 @@ async fn provision_metal(
 ) -> Result<ProvisionedService> {
     let vm_id   = Uuid::now_v7();
     let tap_idx = TAP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let tap     = format!("tap{}", tap_idx);
-    let ip      = guest_ip(tap_idx);
+    let tap     = common::networking::tap_name(tap_idx);
+    let ip      = common::networking::guest_ip(tap_idx);
     let upstream_addr = format!("{}:{}", ip, spec.port);
 
     // Download rootfs artifact from Object Storage
@@ -291,6 +291,3 @@ async fn spawn_firecracker_direct(fc_bin: &str, vm_id: &str, sock_path: &str) ->
     }
 }
 
-fn guest_ip(tap_idx: u32) -> String {
-    format!("172.16.{}.{}", tap_idx / 63, (tap_idx % 63) * 4 + 2)
-}

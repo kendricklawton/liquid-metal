@@ -52,9 +52,12 @@ async fn try_build_state() -> Option<Arc<AppState>> {
         s3,
         bucket,
         internal_secret,
-        zitadel_domain:    std::env::var("ZITADEL_DOMAIN").unwrap_or_default(),
-        zitadel_client_id: std::env::var("ZITADEL_CLIENT_ID").unwrap_or_default(),
-        features:          common::Features::from_env(),
+        oidc_client_id:       std::env::var("OIDC_CLIENT_ID").unwrap_or_default(),
+        oidc_device_auth_url: std::env::var("OIDC_DEVICE_AUTH_URL").unwrap_or_default(),
+        oidc_token_url:       std::env::var("OIDC_TOKEN_URL").unwrap_or_default(),
+        oidc_userinfo_url:    std::env::var("OIDC_USERINFO_URL").unwrap_or_default(),
+        oidc_revoke_url:      std::env::var("OIDC_REVOKE_URL").ok(),
+        features:             common::Features::from_env(),
     }))
 }
 
@@ -175,43 +178,24 @@ async fn provision_creates_user_and_is_idempotent() {
     assert_eq!(v1["slug"], v2["slug"], "workspace slug must be stable");
 }
 
-// ── /services/:id (GET) ───────────────────────────────────────────────────────
+// ── /services (GET — requires auth) ──────────────────────────────────────────
 
 #[tokio::test]
 #[ignore = "requires DATABASE_URL + NATS_URL"]
-async fn get_service_not_found() {
-    let state = try_build_state().await.expect("set DATABASE_URL to run integration tests");
-    let app = build_router(state);
-
-    let random_id = uuid::Uuid::now_v7();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/services/{}", random_id))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-#[ignore = "requires DATABASE_URL + NATS_URL"]
-async fn get_service_bad_id_returns_400() {
+async fn list_services_rejects_missing_key() {
     let state = try_build_state().await.expect("set DATABASE_URL to run integration tests");
     let app = build_router(state);
 
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/services/not-a-uuid")
+                .uri("/services")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    // No X-Api-Key → auth middleware returns 401
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
