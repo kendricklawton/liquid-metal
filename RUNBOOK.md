@@ -209,9 +209,71 @@ task release:major   # or: cargo release major    0.1.0 → 1.0.0
 
 ---
 
+## Production Infrastructure
+
+### Provisioning
+
+```bash
+# One-time: create GCS bucket for Terraform state manually
+# Then:
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars   # fill in real values
+terraform init -backend-config="bucket=your-tfstate-bucket"
+terraform plan
+terraform apply
+```
+
+This creates: NAT VPS (HAProxy, Nomad server, NATS, PgBouncer, VictoriaMetrics, VictoriaLogs, Grafana), 2 bare metal nodes (Nomad clients, Promtail, node_exporter), Managed Postgres, Object Storage, Block Storage, GCS backup buckets, Cloudflare DNS records, and Tailscale pre-auth keys.
+
+### Observability Access (Tailscale only)
+
+| Service | URL |
+|---|---|
+| Grafana | `http://{prefix}-nat-vps:3001` (admin / `GRAFANA_ADMIN_PASSWORD`) |
+| VictoriaMetrics | `http://{prefix}-nat-vps:8428` |
+| VictoriaLogs | `http://{prefix}-nat-vps:9428` |
+
+### Backup Schedule (daily, UTC)
+
+| Time | Backup |
+|---|---|
+| 02:00 | certbot renewal check |
+| 03:00 | Postgres pg_dump → GCS, Nomad state → GCS (per node) |
+| 03:30 | VictoriaMetrics snapshot → GCS |
+| 04:00 | VictoriaLogs tar → GCS |
+| 04:30 | S3 artifacts rclone sync → GCS |
+
+---
+
 ## Production Deploy Order
 
 Schema migrations are a separate step from serving traffic — run them before rolling the new binary so the DB is ready before any instance starts.
+
+### Option 1: Nomad batch job (recommended)
+
+```bash
+# Upload migrations to S3, then dispatch the batch job
+nomad job run infra/jobs/migrate.nomad.hcl
+nomad job dispatch migrate
+
+# Then roll the services
+nomad job run infra/jobs/api.nomad.hcl
+nomad job run infra/jobs/proxy.nomad.hcl
+nomad job run infra/jobs/daemon-metal.nomad.hcl
+nomad job run infra/jobs/daemon-liquid.nomad.hcl
+```
+
+### Option 2: Direct psql
+
+```bash
+# 1. Run migrations via psql against PgBouncer
+DATABASE_URL="$PGBOUNCER_URL" psql -f migrations/V*.sql
+
+# 2. Roll services via Nomad
+nomad job run infra/jobs/api.nomad.hcl
+```
+
+### Option 3: Embedded in binary
 
 ```bash
 # 1. Run migrations (exits when done — no server started)
@@ -270,3 +332,17 @@ flux deploy    # liquid-metal.toml already has project_id from flux init
 | `flux deploy` upload fails | RustFS running? (`docker compose up -d rustfs`) Check `http://localhost:9001` |
 | Status stuck at `provisioning` | Check daemon logs for errors |
 | `GetUploadUrl` error | API can't reach RustFS — check `.env` S3 vars |
+
+### Production
+
+| Symptom | Check |
+|---------|-------|
+| Can't reach services externally | HAProxy running? `ssh nat-vps systemctl status haproxy` |
+| TLS cert expired | `ssh nat-vps certbot certificates` — check renewal cron |
+| Deploys not running | Nomad server up? `ssh nat-vps systemctl status nomad` |
+| Events not delivering | NATS up? `ssh nat-vps systemctl status nats` |
+| DB connection errors | PgBouncer up? `ssh nat-vps systemctl status pgbouncer` |
+| No metrics/logs | Check VictoriaMetrics/VictoriaLogs: `ssh nat-vps systemctl status victoriametrics victorialogs` |
+| Grafana inaccessible | `ssh nat-vps systemctl status grafana` — check `:3001` via Tailscale |
+| Backup failed | Check `/var/log/backups/*.log` on the relevant node |
+| Observability disk full | Check `/mnt/observability` usage — consider increasing block storage |

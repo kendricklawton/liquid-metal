@@ -19,6 +19,7 @@ web/tmp/
 # buf.lock is intentionally committed — do not add it here
 
 # ── Environment ───────────────────────────────────────────────────────────────
+.claude
 .env
 .env.local
 .env.*.local
@@ -47,3 +48,16 @@ coverage.out
 FEATURES.md
 PLANS.md
 AI.md
+
+# ── GitHub Actions (not ready for CI/CD yet) ──────────────────────────────────
+.github/
+
+# ── Terraform ─────────────────────────────────────────────────────────────────
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/*.tfplan
+
+# ── GCP service account keys (Terraform state backend) ────────────────────────
+keys/

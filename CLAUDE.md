@@ -12,7 +12,7 @@ Liquid Metal is a **PaaS (not IaaS)** delivering hardware-isolated compute with 
 
 ### Tech Stack & Constraints
 
-* **Languages**: Rust (everything). Zig may be used to cross-compile the CLI for Windows targets.
+* **Languages**: Rust (platform services), Go (tooling). Zig may be used to cross-compile the CLI for Windows targets.
 * **Web**: `crates/web` — Axum + Askama templates + HTMX + Alpine.js (minimal). **No SPAs. No Leptos. No JS framework.**
 * **Database**: PostgreSQL (Raw SQL via `tokio-postgres`, no ORMs).
 * **Messaging**: NATS JetStream (The source of truth for provisioning).
