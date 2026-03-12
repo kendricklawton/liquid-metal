@@ -8,6 +8,25 @@ pub struct ApiClient {
     token: Option<String>,
 }
 
+/// Extract a human-readable error message from an API error response.
+/// Tries to parse `{"error": "...", "message": "..."}` and falls back to
+/// the raw status code if the body isn't structured JSON.
+async fn api_error_message(resp: reqwest::Response, method: &str, path: &str) -> String {
+    let status = resp.status();
+    match resp.json::<serde_json::Value>().await {
+        Ok(body) => {
+            let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let code = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
+            if !msg.is_empty() {
+                format!("{} {} {}: {} ({})", status.as_u16(), method, path, msg, code)
+            } else {
+                format!("{} {} {}", status.as_u16(), method, path)
+            }
+        }
+        Err(_) => format!("{} {} {}", status.as_u16(), method, path),
+    }
+}
+
 impl ApiClient {
     pub fn new(base_url: &str, token: Option<&str>) -> Self {
         Self {
@@ -24,7 +43,7 @@ impl ApiClient {
         }
         let resp = req.send().await?;
         if !resp.status().is_success() {
-            bail!("API error {} on GET {}", resp.status(), path);
+            bail!("{}", api_error_message(resp, "GET", path).await);
         }
         Ok(resp.json().await?)
     }
@@ -36,7 +55,7 @@ impl ApiClient {
         }
         let resp = req.send().await?;
         if !resp.status().is_success() {
-            bail!("API error {} on POST {}", resp.status(), path);
+            bail!("{}", api_error_message(resp, "POST", path).await);
         }
         Ok(resp.json().await?)
     }
@@ -54,11 +73,8 @@ impl ApiClient {
             .header("X-Internal-Secret", secret)
             .send()
             .await?;
-        if resp.status().as_u16() == 403 {
-            bail!("wrong FLUX_ADMIN_SECRET");
-        }
         if !resp.status().is_success() {
-            bail!("API error {} on POST {}", resp.status(), path);
+            bail!("{}", api_error_message(resp, "POST", path).await);
         }
         Ok(resp.json().await?)
     }
@@ -70,7 +86,7 @@ impl ApiClient {
         }
         let resp = req.send().await?;
         if !resp.status().is_success() {
-            bail!("API error {} on POST {}", resp.status(), path);
+            bail!("{}", api_error_message(resp, "POST", path).await);
         }
         Ok(())
     }

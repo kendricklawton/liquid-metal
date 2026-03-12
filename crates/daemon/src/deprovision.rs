@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use tokio::sync::Mutex;
 
 /// In-memory record of a running Metal VM.
@@ -35,6 +36,21 @@ pub struct VmHandle {
 pub type VmRegistry = Arc<Mutex<HashMap<String, VmHandle>>>;
 
 pub fn new_registry() -> VmRegistry {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// In-memory record of a running Liquid (Wasm) service.
+/// The invocation counter is incremented atomically by `wasm_http::dispatch`
+/// and drained by the usage reporter every 60s.
+pub struct LiquidHandle {
+    pub workspace_id: String,
+    pub invocations:  Arc<AtomicU64>,
+}
+
+/// Global Liquid registry — service_id → LiquidHandle.
+pub type LiquidRegistry = Arc<Mutex<HashMap<String, LiquidHandle>>>;
+
+pub fn new_liquid_registry() -> LiquidRegistry {
     Arc::new(Mutex::new(HashMap::new()))
 }
 

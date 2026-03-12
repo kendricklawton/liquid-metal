@@ -1,14 +1,129 @@
-use crate::AppState;
+use std::{sync::Arc, time::Duration};
+
 use axum::{
     Json,
     extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Duration};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
+
+use crate::AppState;
+
+/// Hobby tier capacity gate: reject Metal deploys when live nodes exceed this
+/// fraction of total allocatable RAM. Expressed as a multiplied comparison to
+/// avoid floating point: allocated_mb * 10 > capacity_mb * THRESHOLD_NUMERATOR.
+const HOBBY_CAPACITY_THRESHOLD_NUMERATOR: i64 = 8; // 8/10 = 80%
+
+/// Maximum time to wait for a DB connection from the pool before returning 503.
+/// Prevents cascading failures under burst load — callers get a clear "try again"
+/// instead of queuing indefinitely behind a saturated pool.
+const DB_POOL_TIMEOUT: Duration = Duration::from_secs(5);
+
+// ── Structured API error ─────────────────────────────────────────────────────
+
+/// Structured error response returned by all API handlers.
+///
+/// Serializes to `{"error": "...", "message": "..."}` so clients can
+/// programmatically distinguish error types and show human-readable context.
+#[derive(Debug, Clone)]
+pub struct ApiError {
+    status: StatusCode,
+    error: &'static str,
+    message: String,
+}
+
+impl ApiError {
+    pub(crate) fn new(status: StatusCode, error: &'static str, message: impl Into<String>) -> Self {
+        Self { status, error, message: message.into() }
+    }
+
+    pub(crate) fn bad_request(error: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, error, message)
+    }
+
+    pub(crate) fn unauthorized(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "unauthorized", message)
+    }
+
+    pub(crate) fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, "forbidden", message)
+    }
+
+    pub(crate) fn not_found(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, "not_found", message)
+    }
+
+    pub(crate) fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, "conflict", message)
+    }
+
+    pub(crate) fn unprocessable(error: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNPROCESSABLE_ENTITY, error, message)
+    }
+
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+    }
+
+    pub(crate) fn bad_gateway(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_GATEWAY, "bad_gateway", message)
+    }
+
+    pub(crate) fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "service_unavailable", message)
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let body = serde_json::json!({
+            "error":   self.error,
+            "message": self.message,
+        });
+        (self.status, Json(body)).into_response()
+    }
+}
+
+/// Verify the X-Internal-Secret header using constant-time comparison.
+/// Accepts any of the provided secrets — supports zero-downtime rotation
+/// by setting `INTERNAL_SECRET=new-secret,old-secret` during the rotation window.
+/// Returns 401 if the header is missing/empty, 403 if the value doesn't match.
+fn verify_internal_secret(headers: &HeaderMap, valid_secrets: &[String]) -> Result<(), ApiError> {
+    let secret = headers
+        .get("x-internal-secret")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if secret.is_empty() {
+        return Err(ApiError::unauthorized("missing X-Internal-Secret header"));
+    }
+    let matched = valid_secrets
+        .iter()
+        .any(|s| secret.as_bytes().ct_eq(s.as_bytes()).unwrap_u8() == 1);
+    if !matched {
+        return Err(ApiError::forbidden("invalid internal secret"));
+    }
+    Ok(())
+}
+
+/// Acquire a DB connection with a timeout. Returns 503 Service Unavailable
+/// if the pool is exhausted, giving the caller a clear signal to retry.
+pub(crate) async fn db_conn(pool: &deadpool_postgres::Pool) -> Result<deadpool_postgres::Object, ApiError> {
+    match tokio::time::timeout(DB_POOL_TIMEOUT, pool.get()).await {
+        Ok(Ok(conn)) => Ok(conn),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "db pool error");
+            Err(ApiError::internal("database connection failed"))
+        }
+        Err(_) => {
+            tracing::warn!("db pool timeout — all connections busy");
+            Err(ApiError::unavailable("database connection pool exhausted — try again"))
+        }
+    }
+}
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -54,7 +169,7 @@ pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, ApiError> {
     if state.features.disable_auth {
         return Ok(next.run(req).await);
     }
@@ -71,13 +186,10 @@ pub async fn auth_middleware(
                 .and_then(|v| v.strip_prefix("Bearer "))
         });
 
-    let raw = raw.ok_or(StatusCode::UNAUTHORIZED)?;
-    let user_id: Uuid = raw.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let raw = raw.ok_or_else(|| ApiError::unauthorized("missing X-Api-Key or Authorization header"))?;
+    let user_id: Uuid = raw.parse().map_err(|_| ApiError::unauthorized("malformed API key"))?;
 
-    let db = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "db pool error in auth middleware");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let db = db_conn(&state.db).await?;
 
     let row = db
         .query_one(
@@ -87,11 +199,12 @@ pub async fn auth_middleware(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "user lookup in auth middleware failed");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ApiError::internal("authentication check failed")
         })?;
 
     if !row.get::<_, bool>(0) {
-        return Err(StatusCode::UNAUTHORIZED);
+        tracing::warn!(target: "audit", action = "auth", user_id = %user_id, result = "unauthorized", "unknown or deleted user");
+        return Err(ApiError::unauthorized("unknown or deleted user"));
     }
 
     Ok(next.run(req).await)
@@ -145,25 +258,19 @@ pub async fn provision_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<ProvisionRequest>,
-) -> Result<Json<ProvisionResponse>, StatusCode> {
-    let secret = headers
-        .get("x-internal-secret")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if secret != state.internal_secret {
-        return Err(StatusCode::FORBIDDEN);
+) -> Result<Json<ProvisionResponse>, ApiError> {
+    if let Err(e) = verify_internal_secret(&headers, &state.internal_secrets) {
+        tracing::warn!(target: "audit", action = "provision_user", email = req.email, result = "forbidden", "invalid internal secret");
+        return Err(e);
     }
 
     if req.email.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError::bad_request("missing_email", "email is required"));
     }
 
-    let mut db = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "db pool");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let mut db = db_conn(&state.db).await?;
 
-    do_provision(
+    let resp = do_provision(
         &mut db,
         &state.features,
         &req.email,
@@ -171,7 +278,12 @@ pub async fn provision_user(
         &req.last_name,
         req.oidc_sub.as_deref(),
         None, // web BFF path — no invite required (internal-secret gated)
-    ).await
+    ).await;
+
+    if let Ok(ref r) = resp {
+        tracing::info!(target: "audit", action = "provision_user", user_id = r.id, email = req.email, result = "ok");
+    }
+    resp
 }
 
 // ── Auth: CLI provision (PKCE callback) ──────────────────────────────────────
@@ -190,15 +302,12 @@ pub struct CliProvisionRequest {
 pub async fn cli_provision(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CliProvisionRequest>,
-) -> Result<Json<ProvisionResponse>, StatusCode> {
+) -> Result<Json<ProvisionResponse>, ApiError> {
     if req.email.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError::bad_request("missing_email", "email is required"));
     }
-    let mut db = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "db pool");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    do_provision(
+    let mut db = db_conn(&state.db).await?;
+    let resp = do_provision(
         &mut db,
         &state.features,
         &req.email,
@@ -206,7 +315,13 @@ pub async fn cli_provision(
         &req.last_name,
         req.oidc_sub.as_deref(),
         req.invite_code.as_deref(),
-    ).await
+    ).await;
+
+    match &resp {
+        Ok(r) => tracing::info!(target: "audit", action = "cli_provision", user_id = r.id, email = req.email, result = "ok"),
+        Err(e) => tracing::warn!(target: "audit", action = "cli_provision", email = req.email, status = e.status.as_u16(), result = "denied"),
+    }
+    resp
 }
 
 // ── Auth: shared provisioning logic ──────────────────────────────────────────
@@ -221,7 +336,7 @@ async fn do_provision(
     last_name:   &str,
     oidc_sub: Option<&str>,
     invite_code: Option<&str>,
-) -> Result<Json<ProvisionResponse>, StatusCode> {
+) -> Result<Json<ProvisionResponse>, ApiError> {
     // Upsert oidc_sub on the existing user if provided.
     if let Some(sub) = oidc_sub {
         db.execute(
@@ -229,7 +344,7 @@ async fn do_provision(
             &[&sub, &email],
         ).await.map_err(|e| {
             tracing::error!(error = %e, "update oidc_sub");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ApiError::internal("failed to update OIDC subject")
         })?;
     }
 
@@ -246,7 +361,7 @@ async fn do_provision(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "provision lookup");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ApiError::internal("user lookup failed")
         })?;
 
     if let Some(row) = existing {
@@ -275,16 +390,16 @@ async fn do_provision(
                     .await
                     .map_err(|e| {
                         tracing::error!(error = %e, "invite code lookup");
-                        StatusCode::INTERNAL_SERVER_ERROR
+                        ApiError::internal("invite code lookup failed")
                     })?;
                 if valid.is_none() {
                     tracing::warn!(code, "invalid or already-used invite code");
-                    return Err(StatusCode::FORBIDDEN);
+                    return Err(ApiError::forbidden("invalid or already-used invite code"));
                 }
             }
             None => {
                 tracing::warn!(email, "new user attempted signup without invite code");
-                return Err(StatusCode::FORBIDDEN);
+                return Err(ApiError::forbidden("invite code required for new accounts"));
             }
         }
     }
@@ -298,7 +413,7 @@ async fn do_provision(
 
     let txn = db.transaction().await.map_err(|e| {
         tracing::error!(error = %e, "begin txn");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ApiError::internal("failed to start transaction")
     })?;
 
     txn.execute(
@@ -308,7 +423,7 @@ async fn do_provision(
         &[&user_id, &email, &full_name, &oidc_sub],
     ).await.map_err(|e| {
         tracing::error!(error = ?e, "insert user");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ApiError::internal("failed to create user")
     })?;
 
     txn.execute(
@@ -316,7 +431,7 @@ async fn do_provision(
         &[&workspace_id, &"My Workspace".to_string(), &ws_slug],
     ).await.map_err(|e| {
         tracing::error!(error = %e, "insert workspace");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ApiError::internal("failed to create workspace")
     })?;
 
     txn.execute(
@@ -325,7 +440,7 @@ async fn do_provision(
         &[&workspace_id, &user_id],
     ).await.map_err(|e| {
         tracing::error!(error = %e, "insert workspace member");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ApiError::internal("failed to create workspace membership")
     })?;
 
     // Consume the invite code atomically with user creation.
@@ -335,13 +450,13 @@ async fn do_provision(
             &[&user_id, &code],
         ).await.map_err(|e| {
             tracing::error!(error = %e, "consume invite code");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ApiError::internal("failed to consume invite code")
         })?;
     }
 
     txn.commit().await.map_err(|e| {
         tracing::error!(error = %e, "commit txn");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ApiError::internal("failed to commit user creation")
     })?;
 
     tracing::info!(email, user_id = %user_id, "user provisioned");
@@ -374,20 +489,14 @@ pub async fn create_invites(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<CreateInvitesRequest>,
-) -> Result<Json<CreateInvitesResponse>, StatusCode> {
-    let secret = headers
-        .get("x-internal-secret")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if secret != state.internal_secret {
-        return Err(StatusCode::FORBIDDEN);
+) -> Result<Json<CreateInvitesResponse>, ApiError> {
+    if let Err(e) = verify_internal_secret(&headers, &state.internal_secrets) {
+        tracing::warn!(target: "audit", action = "create_invites", result = "forbidden", "invalid internal secret");
+        return Err(e);
     }
 
     let count = req.count.unwrap_or(1).clamp(1, 50) as usize;
-    let db = state.db.get().await.map_err(|e| {
-        tracing::error!(error = %e, "db pool");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let db = db_conn(&state.db).await?;
 
     let mut codes = Vec::with_capacity(count);
     for _ in 0..count {
@@ -397,12 +506,12 @@ pub async fn create_invites(
             &[&code],
         ).await.map_err(|e| {
             tracing::error!(error = %e, "insert invite code");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ApiError::internal("failed to create invite code")
         })?;
         codes.push(code);
     }
 
-    tracing::info!(count, "invite codes generated");
+    tracing::info!(target: "audit", action = "create_invites", count, result = "ok");
     Ok(Json(CreateInvitesResponse { codes }))
 }
 
@@ -483,7 +592,7 @@ mod tests {
 /// Extract the caller's UUID from X-Api-Key or Authorization: Bearer.
 /// The auth_middleware has already validated the UUID exists in the DB,
 /// so here we only need to parse it.
-fn extract_caller(headers: &HeaderMap) -> Result<Uuid, StatusCode> {
+fn extract_caller(headers: &HeaderMap) -> Result<Uuid, ApiError> {
     let raw = headers
         .get("x-api-key")
         .and_then(|v| v.to_str().ok())
@@ -493,8 +602,8 @@ fn extract_caller(headers: &HeaderMap) -> Result<Uuid, StatusCode> {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "))
         })
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    raw.parse().map_err(|_| StatusCode::UNAUTHORIZED)
+        .ok_or_else(|| ApiError::unauthorized("missing X-Api-Key or Authorization header"))?;
+    raw.parse().map_err(|_| ApiError::unauthorized("malformed API key"))
 }
 
 // ── GET /users/me ─────────────────────────────────────────────────────────────
@@ -502,9 +611,9 @@ fn extract_caller(headers: &HeaderMap) -> Result<Uuid, StatusCode> {
 pub async fn get_me(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = db_conn(&state.db).await?;
 
     let row = db
         .query_opt(
@@ -512,8 +621,8 @@ pub async fn get_me(
             &[&caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| ApiError::internal("user lookup failed"))?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
 
     Ok(Json(serde_json::json!({
         "id":    row.get::<_, Uuid>("id").to_string(),
@@ -527,9 +636,9 @@ pub async fn get_me(
 pub async fn list_workspaces(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = db_conn(&state.db).await?;
 
     let rows = db
         .query(
@@ -542,7 +651,7 @@ pub async fn list_workspaces(
             &[&caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("failed to list workspaces"))?;
 
     let workspaces: Vec<serde_json::Value> = rows
         .iter()
@@ -568,10 +677,10 @@ pub async fn list_projects(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<ListProjectsParams>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
-    let wid: Uuid = params.workspace_id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let wid: Uuid = params.workspace_id.parse().map_err(|_| ApiError::bad_request("invalid_workspace_id", "workspace_id must be a valid UUID"))?;
+    let db = db_conn(&state.db).await?;
 
     let rows = db
         .query(
@@ -585,7 +694,7 @@ pub async fn list_projects(
             &[&wid, &caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("failed to list projects"))?;
 
     let projects: Vec<serde_json::Value> = rows
         .iter()
@@ -613,15 +722,15 @@ pub async fn create_project(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(body): Json<CreateProjectBody>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
 
     if body.name.is_empty() || body.slug.is_empty() || body.workspace_id.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError::bad_request("missing_fields", "name, slug, and workspace_id are required"));
     }
 
-    let wid: Uuid = body.workspace_id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let wid: Uuid = body.workspace_id.parse().map_err(|_| ApiError::bad_request("invalid_workspace_id", "workspace_id must be a valid UUID"))?;
+    let db = db_conn(&state.db).await?;
 
     let member = db
         .query_one(
@@ -629,10 +738,10 @@ pub async fn create_project(
             &[&wid, &caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("workspace membership check failed"))?;
 
     if !member.get::<_, bool>(0) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::forbidden("not a member of this workspace"));
     }
 
     let project_id = Uuid::now_v7();
@@ -648,9 +757,9 @@ pub async fn create_project(
             .map(|d| d.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION)
             .unwrap_or(false)
         {
-            StatusCode::CONFLICT
+            ApiError::conflict("a project with this slug already exists in this workspace")
         } else {
-            StatusCode::INTERNAL_SERVER_ERROR
+            ApiError::internal("failed to create project")
         }
     })?;
 
@@ -669,9 +778,9 @@ pub async fn create_project(
 pub async fn list_services(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = db_conn(&state.db).await?;
 
     let rows = db
         .query(
@@ -686,7 +795,7 @@ pub async fn list_services(
             &[&caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("failed to list services"))?;
 
     let services: Vec<serde_json::Value> = rows
         .iter()
@@ -716,15 +825,15 @@ pub async fn get_upload_url(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(body): Json<UploadUrlBody>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
 
     if body.deploy_id.is_empty() || body.project_id.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError::bad_request("missing_fields", "deploy_id and project_id are required"));
     }
 
-    let pid: Uuid = body.project_id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let pid: Uuid = body.project_id.parse().map_err(|_| ApiError::bad_request("invalid_project_id", "project_id must be a valid UUID"))?;
+    let db = db_conn(&state.db).await?;
 
     let row = db
         .query_opt(
@@ -732,8 +841,8 @@ pub async fn get_upload_url(
             &[&pid],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| ApiError::internal("project lookup failed"))?
+        .ok_or_else(|| ApiError::not_found("project not found"))?;
 
     let wid: Uuid = row.get("workspace_id");
 
@@ -743,16 +852,16 @@ pub async fn get_upload_url(
             &[&wid, &caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("workspace membership check failed"))?;
 
     if !member.get::<_, bool>(0) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::forbidden("not a member of this workspace"));
     }
 
     let (engine_prefix, artifact_name) = match body.engine.as_str() {
         "liquid" => ("wasm", "main.wasm"),
         "metal"  => ("metal", "app"),
-        _        => return Err(StatusCode::BAD_REQUEST),
+        _        => return Err(ApiError::bad_request("invalid_engine", "engine must be 'metal' or 'liquid'")),
     };
 
     let artifact_key = format!(
@@ -760,10 +869,13 @@ pub async fn get_upload_url(
         engine_prefix, body.project_id, body.deploy_id, artifact_name
     );
 
+    // Metal rootfs images can be 500MB+ — give slow connections 30 minutes.
+    // Wasm modules are small; 5 minutes is plenty.
+    let expiry_secs = if body.engine == "metal" { 1800 } else { 300 };
     let expires = aws_sdk_s3::presigning::PresigningConfig::expires_in(
-        std::time::Duration::from_secs(300),
+        std::time::Duration::from_secs(expiry_secs),
     )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|_| ApiError::internal("presign config error"))?;
 
     let presigned = state
         .s3
@@ -774,7 +886,7 @@ pub async fn get_upload_url(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "S3 presign failed");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ApiError::internal("failed to generate upload URL")
         })?;
 
     Ok(Json(serde_json::json!({
@@ -803,15 +915,21 @@ pub async fn deploy_service(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(body): Json<DeployBody>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
 
-    if body.name.is_empty() || body.name.len() > 63 || body.artifact_key.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+    if body.name.is_empty() {
+        return Err(ApiError::bad_request("missing_name", "service name is required"));
+    }
+    if body.name.len() > 63 {
+        return Err(ApiError::bad_request("name_too_long", "service name must be 63 characters or fewer"));
+    }
+    if body.artifact_key.is_empty() {
+        return Err(ApiError::bad_request("missing_artifact_key", "artifact_key is required"));
     }
 
-    let pid: Uuid = body.project_id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-    let mut db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let pid: Uuid = body.project_id.parse().map_err(|_| ApiError::bad_request("invalid_project_id", "project_id must be a valid UUID"))?;
+    let mut db = db_conn(&state.db).await?;
 
     let row = db
         .query_opt(
@@ -819,8 +937,8 @@ pub async fn deploy_service(
             &[&pid],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| ApiError::internal("project lookup failed"))?
+        .ok_or_else(|| ApiError::not_found("project not found"))?;
 
     let wid: Uuid = row.get("workspace_id");
 
@@ -830,38 +948,35 @@ pub async fn deploy_service(
             &[&wid, &caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("workspace membership check failed"))?;
 
     if !member.get::<_, bool>(0) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::forbidden("not a member of this workspace"));
     }
 
     let tier_row = db
         .query_one("SELECT tier FROM workspaces WHERE id = $1", &[&wid])
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("workspace tier lookup failed"))?;
     let tier: String = tier_row.get("tier");
     let limits = crate::quota::limits_for(&tier);
 
-    let engine_str = match body.engine.as_str() {
-        "liquid" => "liquid",
-        "metal"  => "metal",
-        _        => return Err(StatusCode::BAD_REQUEST),
-    };
+    let engine: common::Engine = body.engine.parse()
+        .map_err(|_| ApiError::bad_request("invalid_engine", "engine must be 'metal' or 'liquid'"))?;
 
-    let engine_spec = match engine_str {
-        "metal" => {
+    let engine_spec = match engine {
+        common::Engine::Metal => {
             let vcpu      = body.vcpu.unwrap_or(0);
             let memory_mb = body.memory_mb.unwrap_or(0);
             let port      = body.port.unwrap_or(0) as u16;
             if vcpu == 0 || memory_mb < 64 || port == 0 {
-                return Err(StatusCode::BAD_REQUEST);
+                return Err(ApiError::bad_request("invalid_metal_spec", "metal deploys require vcpu >= 1, memory_mb >= 64, and port >= 1"));
             }
             if vcpu > limits.max_vcpu {
-                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+                return Err(ApiError::unprocessable("vcpu_limit_exceeded", format!("vcpu {} exceeds {} tier limit of {}", vcpu, tier, limits.max_vcpu)));
             }
             if memory_mb > limits.max_memory_mb {
-                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+                return Err(ApiError::unprocessable("memory_limit_exceeded", format!("memory_mb {} exceeds {} tier limit of {}", memory_mb, tier, limits.max_memory_mb)));
             }
             common::EngineSpec::Metal(common::MetalSpec {
                 vcpu,
@@ -872,7 +987,7 @@ pub async fn deploy_service(
                 quota:           Default::default(),
             })
         }
-        _ => common::EngineSpec::Liquid(common::LiquidSpec {
+        common::Engine::Liquid => common::EngineSpec::Liquid(common::LiquidSpec {
             artifact_key:    body.artifact_key.clone(),
             artifact_sha256: if body.sha256.is_empty() { None } else { Some(body.sha256.clone()) },
         }),
@@ -883,38 +998,125 @@ pub async fn deploy_service(
         common::EngineSpec::Liquid(_) => (0i32, 0i32, 0i32),
     };
 
+    let engine_str = engine.as_str();
+
     let service_id = Uuid::now_v7();
     let slug = if body.slug.is_empty() { common::slugify(&body.name) } else { body.slug.clone() };
 
-    // Advisory lock: serializes concurrent deploys for the same workspace.
+    // ── Capacity & limit checks (short-lived advisory lock) ────────────────
+    // Acquire a workspace-scoped advisory lock for just the capacity and service
+    // count checks, then release it immediately by committing. This prevents
+    // TOCTOU races while avoiding serialization of the heavier INSERT + outbox
+    // write below. A CI pipeline deploying 20 services in parallel will only
+    // serialize on the checks (~1ms each), not the full deploy transaction.
+    //
+    // Trade-off: between lock release and INSERT, another deploy could also pass
+    // the checks, potentially exceeding the limit by 1. This is acceptable —
+    // the limit is a soft gate, not a billing boundary.
     let lock_key = {
         let b = wid.as_bytes();
         i64::from_be_bytes(b[0..8].try_into().unwrap())
             ^ i64::from_be_bytes(b[8..16].try_into().unwrap())
     };
 
+    {
+        let check_txn = db
+            .build_transaction()
+            .start()
+            .await
+            .map_err(|_| ApiError::internal("failed to start check transaction"))?;
+
+        check_txn.execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
+            .await
+            .map_err(|_| ApiError::internal("failed to acquire workspace lock"))?;
+
+        // Hobby tier capacity gate: reject Metal deploys when >80% of cluster RAM is allocated.
+        if engine == common::Engine::Metal && tier == "hobby" && state.metal_capacity_mb > 0 {
+            let row = check_txn
+                .query_one(
+                    "SELECT COALESCE(SUM(memory_mb), 0)::bigint AS allocated_mb \
+                     FROM services \
+                     WHERE engine = 'metal' \
+                       AND status IN ('running', 'provisioning') \
+                       AND deleted_at IS NULL",
+                    &[],
+                )
+                .await
+                .map_err(|_| ApiError::internal("capacity check failed"))?;
+            let allocated_mb: i64 = row.get("allocated_mb");
+            if allocated_mb * 10 > state.metal_capacity_mb * HOBBY_CAPACITY_THRESHOLD_NUMERATOR {
+                tracing::warn!(
+                    allocated_mb,
+                    capacity_mb = state.metal_capacity_mb,
+                    "hobby metal deploy rejected — nodes >80% allocated"
+                );
+                return Err(ApiError::unavailable("cluster capacity exceeded — try again later or upgrade your plan"));
+            }
+        }
+
+        let svc_count: i64 = check_txn
+            .query_one(
+                "SELECT COUNT(*) FROM services WHERE workspace_id = $1 AND deleted_at IS NULL",
+                &[&wid],
+            )
+            .await
+            .map_err(|_| ApiError::internal("service count query failed"))?
+            .get(0);
+
+        if svc_count >= limits.max_services {
+            return Err(ApiError::unprocessable("service_limit_exceeded", format!("workspace has {} services, {} tier limit is {}", svc_count, tier, limits.max_services)));
+        }
+
+        // Reject deploy if there's already an active service with this slug in a
+        // non-terminal state. Prevents the stop-then-deploy race where a
+        // DeprovisionEvent is in-flight while the new ProvisionEvent is queued —
+        // the deprovision's RouteRemovedEvent would briefly evict the new route.
+        let active_slug: bool = check_txn
+            .query_one(
+                "SELECT EXISTS(\
+                   SELECT 1 FROM services \
+                   WHERE workspace_id = $1 AND slug = $2 \
+                     AND status IN ('running', 'provisioning') \
+                     AND deleted_at IS NULL\
+                 )",
+                &[&wid, &slug],
+            )
+            .await
+            .map_err(|_| ApiError::internal("active slug check failed"))?
+            .get(0);
+
+        if active_slug {
+            return Err(ApiError::conflict(
+                "a service with this slug is currently running or provisioning — stop it first",
+            ));
+        }
+
+        // Commit releases the advisory lock — other deploys for this workspace
+        // can now proceed with their own checks.
+        check_txn.commit().await.map_err(|_| ApiError::internal("check transaction commit failed"))?;
+    }
+
+    // ── Deploy transaction (no advisory lock) ────────────────────────────────
     let txn = db
         .build_transaction()
         .start()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("failed to start transaction"))?;
 
-    txn.execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let svc_count: i64 = txn
-        .query_one(
-            "SELECT COUNT(*) FROM services WHERE workspace_id = $1 AND deleted_at IS NULL",
-            &[&wid],
+    // Clean up previous service with the same slug (redeploy). Soft-delete the
+    // old row and queue its S3 artifact for deletion so storage doesn't leak.
+    let old_artifact = txn
+        .query_opt(
+            "UPDATE services \
+             SET deleted_at = NOW() \
+             WHERE workspace_id = $1 AND slug = $2 \
+               AND deleted_at IS NULL AND status IN ('stopped', 'failed') \
+             RETURNING artifact_key",
+            &[&wid, &slug],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .get(0);
-
-    if svc_count >= limits.max_services {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
-    }
+        .map_err(|_| ApiError::internal("old service cleanup failed"))?
+        .and_then(|r| r.get::<_, Option<String>>("artifact_key"));
 
     txn.execute(
         "INSERT INTO services \
@@ -931,25 +1133,63 @@ pub async fn deploy_service(
     .await
     .map_err(|e| {
         tracing::error!(error = %e, "service insert failed");
-        StatusCode::INTERNAL_SERVER_ERROR
+        ApiError::internal("failed to create service")
     })?;
-
-    txn.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let event = common::ProvisionEvent {
         tenant_id:  wid.to_string(),
         service_id: service_id.to_string(),
         app_name:   body.name.clone(),
-        engine:     if engine_str == "metal" { common::Engine::Metal } else { common::Engine::Liquid },
+        slug:       slug.clone(),
+        engine:     engine.clone(),
         spec:       engine_spec,
     };
 
-    crate::nats::publish_provision(&state.nats, &event)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "nats publish failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    // Write the NATS event into the outbox within the same transaction as the
+    // services INSERT. Commit atomically — either both land or neither does.
+    // The outbox poller (running in the background) will publish to NATS and
+    // delete the row once it receives a JetStream ack. This eliminates the
+    // race where a DB commit succeeds but the NATS publish fails.
+    let payload = serde_json::to_value(&event).map_err(|e| {
+        tracing::error!(error = %e, "serializing provision event");
+        ApiError::internal("failed to serialize provision event")
+    })?;
+    txn.execute(
+        "INSERT INTO outbox (subject, payload) VALUES ($1, $2)",
+        &[&common::events::SUBJECT_PROVISION, &payload],
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "outbox insert failed");
+        ApiError::internal("failed to queue provision event")
+    })?;
+
+    txn.commit().await.map_err(|_| ApiError::internal("failed to commit deploy transaction"))?;
+
+    // Fire-and-forget: delete the old artifact from S3 after commit.
+    // Non-blocking — a failure here only wastes storage, not correctness.
+    if let Some(old_key) = old_artifact {
+        let s3 = state.s3.clone();
+        let bucket = state.bucket.clone();
+        tokio::spawn(async move {
+            if let Err(e) = s3.delete_object().bucket(&bucket).key(&old_key).send().await {
+                tracing::warn!(key = old_key, error = %e, "failed to delete old artifact from S3");
+            } else {
+                tracing::debug!(key = old_key, "deleted old artifact from S3");
+            }
+        });
+    }
+
+    tracing::info!(
+        target: "audit",
+        action = "deploy_service",
+        user_id = %caller,
+        service_id = %service_id,
+        slug,
+        engine = engine_str,
+        workspace_id = %wid,
+        result = "ok",
+    );
 
     Ok(Json(serde_json::json!({
         "service": {
@@ -973,50 +1213,62 @@ pub async fn get_service_logs(
     headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<LogsParams>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
-    let service_id: Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let service_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_service_id", "service ID must be a valid UUID"))?;
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
 
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = db_conn(&state.db).await?;
 
-    let ok = db
-        .query_one(
-            "SELECT EXISTS(\
-               SELECT 1 FROM services s \
-               JOIN projects p ON p.id = s.project_id \
-               JOIN workspace_members wm \
-                 ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
-               WHERE s.id = $1 AND s.deleted_at IS NULL\
-             )",
+    // Verify caller has access and fetch the service slug for VictoriaLogs query.
+    let row = db
+        .query_opt(
+            "SELECT s.slug FROM services s \
+             JOIN projects p ON p.id = s.project_id \
+             JOIN workspace_members wm \
+               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("service lookup failed"))?;
 
-    if !ok.get::<_, bool>(0) {
-        return Err(StatusCode::NOT_FOUND);
+    let slug: String = match row {
+        Some(r) => r.get("slug"),
+        None => return Err(ApiError::not_found("service not found")),
+    };
+
+    // Query VictoriaLogs for this service's logs (collected by Promtail).
+    let vlogs_url = &state.victorialogs_url;
+    if vlogs_url.is_empty() {
+        return Ok(Json(serde_json::Value::Array(vec![])));
     }
 
-    let rows = db
-        .query(
-            "SELECT content \
-             FROM build_log_lines \
-             WHERE service_id = $1 \
-               AND created_at > NOW() - INTERVAL '30 days' \
-             ORDER BY created_at DESC \
-             LIMIT $2",
-            &[&service_id, &limit],
-        )
+    let query = format!("task:\"{}\"", slug.replace('"', ""));
+    let resp = state.http_client
+        .get(format!("{vlogs_url}/select/logsql/query"))
+        .query(&[("query", &query), ("limit", &limit.to_string())])
+        .send()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::bad_gateway("log backend unreachable"))?;
 
-    let lines: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|row| serde_json::json!({
-            "ts":      serde_json::Value::Null,
-            "message": row.get::<_, String>("content"),
-        }))
+    if !resp.status().is_success() {
+        tracing::warn!(status = %resp.status(), slug, "VictoriaLogs query failed");
+        return Err(ApiError::bad_gateway("log query failed"));
+    }
+
+    // VictoriaLogs returns newline-delimited JSON. Each line is a log entry.
+    let body = resp.text().await.map_err(|_| ApiError::bad_gateway("failed to read log response"))?;
+    let lines: Vec<serde_json::Value> = body
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| {
+            let obj: serde_json::Value = serde_json::from_str(l).ok()?;
+            Some(serde_json::json!({
+                "ts":      obj.get("_time"),
+                "message": obj.get("_msg").or_else(|| obj.get("message")).unwrap_or(&serde_json::Value::Null),
+            }))
+        })
         .collect();
 
     Ok(Json(serde_json::Value::Array(lines)))
@@ -1028,11 +1280,30 @@ pub async fn stop_service(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, ApiError> {
     let caller = extract_caller(&headers)?;
-    let service_id: Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let service_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_service_id", "service ID must be a valid UUID"))?;
 
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = db_conn(&state.db).await?;
+
+    // First check the service exists and caller has access.
+    let existing = db
+        .query_opt(
+            "SELECT s.status FROM services s \
+             JOIN projects p ON p.id = s.project_id \
+             JOIN workspace_members wm \
+               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             WHERE s.id = $1 AND s.deleted_at IS NULL",
+            &[&service_id, &caller],
+        )
+        .await
+        .map_err(|_| ApiError::internal("service lookup failed"))?
+        .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let current_status: String = existing.get("status");
+    if current_status == "stopped" {
+        return Err(ApiError::conflict("service is already stopped"));
+    }
 
     let row = db
         .query_opt(
@@ -1045,23 +1316,47 @@ pub async fn stop_service(
                AND s.project_id = p.id \
                AND wm.workspace_id = p.workspace_id \
                AND wm.user_id = $2 \
-             RETURNING s.engine",
+             RETURNING s.engine, s.slug",
             &[&service_id, &caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::internal("failed to stop service"))?
+        .ok_or_else(|| ApiError::conflict("service state changed concurrently"))?;
 
-    let row = row.ok_or(StatusCode::NOT_FOUND)?;
     let engine_str: String = row.get("engine");
+    let slug: String       = row.get("slug");
+    let engine: common::Engine = engine_str.parse().map_err(|_| {
+        tracing::error!(engine = engine_str, service_id = %service_id, "unknown engine in DB");
+        ApiError::internal("corrupt engine value in database")
+    })?;
+
+    // Remove any pending outbox rows for this service — if a provision event
+    // hasn't been published yet, we don't want it replayed after the user stops.
+    db.execute(
+        "DELETE FROM outbox WHERE payload->>'service_id' = $1",
+        &[&service_id.to_string()],
+    )
+    .await
+    .ok();
 
     let event = common::events::DeprovisionEvent {
         service_id: service_id.to_string(),
-        engine: if engine_str == "metal" { common::Engine::Metal } else { common::Engine::Liquid },
+        slug,
+        engine,
     };
     crate::nats::publish_deprovision(&state.nats, &event)
         .await
         .map_err(|e| tracing::error!(error = %e, "nats deprovision publish failed"))
         .ok();
+
+    tracing::info!(
+        target: "audit",
+        action = "stop_service",
+        user_id = %caller,
+        service_id = %service_id,
+        slug = event.slug,
+        result = "ok",
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1072,11 +1367,30 @@ pub async fn restart_service(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = extract_caller(&headers)?;
-    let service_id: Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let service_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_service_id", "service ID must be a valid UUID"))?;
 
-    let db = state.db.get().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = db_conn(&state.db).await?;
+
+    // First check the service exists and caller has access.
+    let existing = db
+        .query_opt(
+            "SELECT s.status FROM services s \
+             JOIN projects p ON p.id = s.project_id \
+             JOIN workspace_members wm \
+               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             WHERE s.id = $1 AND s.deleted_at IS NULL",
+            &[&service_id, &caller],
+        )
+        .await
+        .map_err(|_| ApiError::internal("service lookup failed"))?
+        .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let current_status: String = existing.get("status");
+    if current_status != "stopped" && current_status != "failed" {
+        return Err(ApiError::conflict(format!("service is currently '{}' — only stopped or failed services can be restarted", current_status)));
+    }
 
     let row = db
         .query_opt(
@@ -1092,17 +1406,21 @@ pub async fn restart_service(
             &[&service_id, &caller],
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| ApiError::internal("service lookup failed"))?
+        .ok_or_else(|| ApiError::conflict("service state changed concurrently"))?;
 
     let engine_str: String = row.get("engine");
+    let engine: common::Engine = engine_str.parse().map_err(|_| {
+        tracing::error!(engine = engine_str, service_id = %service_id, "unknown engine in DB");
+        ApiError::internal("corrupt engine value in database")
+    })?;
     let wid: Uuid           = row.get("workspace_id");
     let name: String        = row.get("name");
     let slug: String        = row.get("slug");
     let artifact_key: String = row.get::<_, Option<String>>("artifact_key").unwrap_or_default();
 
-    let spec = match engine_str.as_str() {
-        "metal" => common::EngineSpec::Metal(common::MetalSpec {
+    let spec = match engine {
+        common::Engine::Metal => common::EngineSpec::Metal(common::MetalSpec {
             vcpu:            row.get::<_, i32>("vcpu") as u32,
             memory_mb:       row.get::<_, i32>("memory_mb") as u32,
             port:            row.get::<_, i32>("port") as u16,
@@ -1110,7 +1428,7 @@ pub async fn restart_service(
             artifact_sha256: None,
             quota:           Default::default(),
         }),
-        _ => common::EngineSpec::Liquid(common::LiquidSpec {
+        common::Engine::Liquid => common::EngineSpec::Liquid(common::LiquidSpec {
             artifact_key:    artifact_key,
             artifact_sha256: None,
         }),
@@ -1121,13 +1439,14 @@ pub async fn restart_service(
         &[&service_id],
     )
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|_| ApiError::internal("failed to update service status"))?;
 
     let event = common::ProvisionEvent {
         tenant_id:  wid.to_string(),
         service_id: service_id.to_string(),
         app_name:   name.clone(),
-        engine:     if engine_str == "metal" { common::Engine::Metal } else { common::Engine::Liquid },
+        slug:       slug.clone(),
+        engine:     engine,
         spec,
     };
 
@@ -1135,7 +1454,7 @@ pub async fn restart_service(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "nats provision publish failed");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ApiError::internal("failed to publish restart event")
         })?;
 
     Ok(Json(serde_json::json!({
@@ -1146,4 +1465,109 @@ pub async fn restart_service(
             "status": "provisioning",
         }
     })))
+}
+
+// ── DELETE /workspaces/:id ────────────────────────────────────────────────────
+
+/// Soft-delete a workspace and deprovision all its running services.
+///
+/// Steps:
+/// 1. Verify caller is an owner of the workspace.
+/// 2. Find all non-stopped, non-deleted services in the workspace.
+/// 3. Mark them stopped and publish DeprovisionEvent for each.
+/// 4. Soft-delete all projects and the workspace itself.
+pub async fn delete_workspace(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let caller = extract_caller(&headers)?;
+    let wid: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_workspace_id", "workspace ID must be a valid UUID"))?;
+
+    let db = db_conn(&state.db).await?;
+
+    // Verify caller owns this workspace.
+    let owns = db
+        .query_opt(
+            "SELECT 1 FROM workspace_members \
+             WHERE workspace_id = $1 AND user_id = $2 AND role = 'owner'",
+            &[&wid, &caller],
+        )
+        .await
+        .map_err(|_| ApiError::internal("ownership check failed"))?;
+
+    if owns.is_none() {
+        return Err(ApiError::not_found("workspace not found"));
+    }
+
+    // Find all running/provisioning services in this workspace.
+    let running = db
+        .query(
+            "SELECT id::text, slug, engine FROM services \
+             WHERE workspace_id = $1 AND deleted_at IS NULL \
+               AND status IN ('running', 'provisioning')",
+            &[&wid],
+        )
+        .await
+        .map_err(|_| ApiError::internal("failed to list running services"))?;
+
+    // Mark them stopped and publish deprovision events.
+    for row in &running {
+        let sid: String   = row.get("id");
+        let slug: String  = row.get("slug");
+        let eng: String   = row.get("engine");
+
+        let engine: common::Engine = match eng.parse() {
+            Ok(e) => e,
+            Err(_) => {
+                tracing::error!(engine = eng, service_id = sid, "unknown engine during workspace delete");
+                continue;
+            }
+        };
+
+        let event = common::events::DeprovisionEvent {
+            service_id: sid.clone(),
+            slug,
+            engine,
+        };
+
+        crate::nats::publish_deprovision(&state.nats, &event)
+            .await
+            .map_err(|e| tracing::error!(error = %e, service_id = sid, "deprovision publish failed"))
+            .ok();
+    }
+
+    // Soft-delete all services, projects, and the workspace in one shot.
+    db.execute(
+        "UPDATE services SET status = 'stopped', upstream_addr = NULL, deleted_at = NOW() \
+         WHERE workspace_id = $1 AND deleted_at IS NULL",
+        &[&wid],
+    )
+    .await
+    .map_err(|_| ApiError::internal("failed to delete services"))?;
+
+    db.execute(
+        "UPDATE projects SET deleted_at = NOW() WHERE workspace_id = $1 AND deleted_at IS NULL",
+        &[&wid],
+    )
+    .await
+    .map_err(|_| ApiError::internal("failed to delete projects"))?;
+
+    db.execute(
+        "UPDATE workspaces SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
+        &[&wid],
+    )
+    .await
+    .map_err(|_| ApiError::internal("failed to delete workspace"))?;
+
+    tracing::info!(
+        target: "audit",
+        action = "delete_workspace",
+        user_id = %caller,
+        workspace_id = %wid,
+        services_deprovisioned = running.len(),
+        result = "ok",
+    );
+
+    Ok(StatusCode::NO_CONTENT)
 }

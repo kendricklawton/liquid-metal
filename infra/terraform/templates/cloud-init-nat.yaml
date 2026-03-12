@@ -1,0 +1,843 @@
+#cloud-config
+# ── NAT VPS: HAProxy + NATS + Nomad Server + Observability ───────────────────
+# 12-Factor: All secrets centralized in /etc/liquid-metal/secrets.env.
+# Config files are templates rendered by /opt/liquid-metal/render-configs.sh.
+# To rotate secrets: update secrets.env, run render-configs.sh, restart services.
+hostname: ${hostname}
+
+packages:
+  - haproxy
+  - curl
+  - ufw
+  - unzip
+  - pgbouncer
+  - postgresql-client
+  - gettext-base  # provides envsubst
+
+runcmd:
+  # Install Tailscale
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --authkey=${tailscale_auth_key} --hostname=${hostname} --advertise-tags=tag:liquid-metal
+
+  # Firewall — only expose :80, :443, :3478 (Tailscale STUN) publicly
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 3478/udp
+  - ufw --force enable
+
+  # ── SSH Hardening ───────────────────────────────────────────────────────────
+  - apt-get install -y fail2ban
+  - |
+    cat > /etc/fail2ban/jail.local <<EOF
+    [sshd]
+    enabled = true
+    port = ssh
+    maxretry = 5
+    bantime = 3600
+    findtime = 600
+    EOF
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?X11Forwarding.*/X11Forwarding no/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+
+  # ── Central Secrets (12-Factor III) ─────────────────────────────────────────
+  # Single source of truth for all credentials on this node.
+  # To rotate: update this file, run /opt/liquid-metal/render-configs.sh,
+  # then restart affected services.
+  - mkdir -p /etc/liquid-metal /etc/liquid-metal/templates /opt/liquid-metal
+  - chmod 700 /etc/liquid-metal
+  - |
+    cat > /etc/liquid-metal/secrets.env <<'EOFENV'
+    # ── Postgres ─────────────────────────────────────────────────────────────
+    PG_HOST=${pg_host}
+    PG_PORT=${pg_port}
+    PG_DBNAME=${pg_dbname}
+    PG_USER=${pg_user}
+    PG_PASSWORD=${pg_password}
+    # ── NATS (per-role credentials for subject ACLs) ──────────────────────────
+    NATS_USER=${nats_user}
+    NATS_PASSWORD=${nats_password}
+    NATS_PASSWORD_DAEMON=${nats_password_daemon}
+    NATS_PASSWORD_PROXY=${nats_password_proxy}
+    # ── Grafana ──────────────────────────────────────────────────────────────
+    GRAFANA_ADMIN_PASSWORD=${grafana_admin_password}
+    # ── S3 (Vultr Object Storage) ────────────────────────────────────────────
+    S3_ENDPOINT=${s3_endpoint}
+    S3_ACCESS_KEY=${s3_access_key}
+    S3_SECRET_KEY=${s3_secret_key}
+    S3_BUCKET=${s3_bucket}
+    # ── Cloudflare ───────────────────────────────────────────────────────────
+    CLOUDFLARE_API_TOKEN=${cloudflare_api_token}
+    # ── GCS Backup Buckets ───────────────────────────────────────────────────
+    GCS_BUCKET_POSTGRES=${gcs_bucket_postgres}
+    GCS_BUCKET_VICTORIAMETRICS=${gcs_bucket_victoriametrics}
+    GCS_BUCKET_VICTORIALOGS=${gcs_bucket_victorialogs}
+    GCS_BUCKET_ARTIFACTS=${gcs_bucket_artifacts}
+    # ── Topology ─────────────────────────────────────────────────────────────
+    NODE_A_01_HOSTNAME=${node_a_01_hostname}
+    NODE_B_01_HOSTNAME=${node_b_01_hostname}
+    DOMAIN=${domain}
+    # ── Backup Heartbeats (dead man's switch) ───────────────────────────────
+    HEARTBEAT_URL_POSTGRES=${heartbeat_url_postgres}
+    HEARTBEAT_URL_VICTORIAMETRICS=${heartbeat_url_victoriametrics}
+    HEARTBEAT_URL_VICTORIALOGS=${heartbeat_url_victorialogs}
+    HEARTBEAT_URL_ARTIFACTS=${heartbeat_url_artifacts}
+    EOFENV
+  - chmod 600 /etc/liquid-metal/secrets.env
+
+  # GCS service account key (JSON — must be a file, not an env var)
+  - |
+    cat > /etc/liquid-metal/gcs-sa.json <<'EOFKEY'
+    ${gcs_sa_key}
+    EOFKEY
+  - chmod 600 /etc/liquid-metal/gcs-sa.json
+
+  # ── Config Templates ────────────────────────────────────────────────────────
+  # Templates use $VAR placeholders. render-configs.sh applies envsubst.
+
+  # NATS server config (multi-user with per-subject ACLs)
+  - |
+    cat > /etc/liquid-metal/templates/nats.conf <<'EOFTPL'
+    listen: 0.0.0.0:4222
+
+    authorization {
+      users: [
+        # API — publishes provision/deprovision/suspend, subscribes to usage events.
+        # Also publishes via outbox (any platform.* subject stored in the outbox table).
+        {
+          user: $NATS_USER
+          password: $NATS_PASSWORD
+          permissions: {
+            publish: {
+              allow: [
+                "platform.provision",
+                "platform.deprovision",
+                "platform.suspend",
+                "$JS.API.>"
+              ]
+            }
+            subscribe: {
+              allow: [
+                "platform.usage_metal",
+                "platform.usage_liquid",
+                "_INBOX.>"
+              ]
+            }
+          }
+        },
+        # Daemon — subscribes to provision/deprovision/suspend/traffic_pulse,
+        # publishes route updates, usage events, and deprovision (idle timeout).
+        {
+          user: daemon
+          password: $NATS_PASSWORD_DAEMON
+          permissions: {
+            publish: {
+              allow: [
+                "platform.route_updated",
+                "platform.route_removed",
+                "platform.usage_metal",
+                "platform.usage_liquid",
+                "platform.deprovision",
+                "$JS.API.>"
+              ]
+            }
+            subscribe: {
+              allow: [
+                "platform.provision",
+                "platform.deprovision",
+                "platform.suspend",
+                "platform.traffic_pulse",
+                "_INBOX.>"
+              ]
+            }
+          }
+        },
+        # Proxy — publishes traffic pulses, subscribes to route cache updates.
+        {
+          user: proxy
+          password: $NATS_PASSWORD_PROXY
+          permissions: {
+            publish: {
+              allow: ["platform.traffic_pulse"]
+            }
+            subscribe: {
+              allow: [
+                "platform.route_updated",
+                "platform.route_removed"
+              ]
+            }
+          }
+        }
+      ]
+    }
+
+    jetstream {
+      store_dir: /var/lib/nats/jetstream
+      max_mem: 256MB
+      max_file: 4GB
+    }
+    EOFTPL
+
+  # PgBouncer config
+  - |
+    cat > /etc/liquid-metal/templates/pgbouncer.ini <<'EOFTPL'
+    [databases]
+    $PG_DBNAME = host=$PG_HOST port=$PG_PORT dbname=$PG_DBNAME
+
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 6432
+    auth_type = md5
+    auth_file = /etc/pgbouncer/userlist.txt
+    pool_mode = transaction
+    max_client_conn = 400
+    default_pool_size = 20
+    min_pool_size = 5
+    reserve_pool_size = 5
+    reserve_pool_timeout = 3
+    server_tls_sslmode = require
+    log_connections = 0
+    log_disconnections = 0
+    EOFTPL
+
+  # PgBouncer userlist
+  - |
+    cat > /etc/liquid-metal/templates/userlist.txt <<'EOFTPL'
+    "$PG_USER" "$PG_PASSWORD"
+    EOFTPL
+
+  # Cloudflare credentials for certbot
+  - |
+    cat > /etc/liquid-metal/templates/cloudflare.ini <<'EOFTPL'
+    dns_cloudflare_api_token = $CLOUDFLARE_API_TOKEN
+    EOFTPL
+
+  # Grafana datasource provisioning
+  - |
+    cat > /etc/liquid-metal/templates/grafana-datasources.yaml <<'EOFTPL'
+    apiVersion: 1
+    datasources:
+      - name: VictoriaMetrics
+        type: prometheus
+        access: proxy
+        url: http://127.0.0.1:8428
+        isDefault: true
+      - name: VictoriaLogs
+        type: victoriametrics-logs-datasource
+        access: proxy
+        url: http://127.0.0.1:9428
+      - name: Postgres
+        uid: postgres
+        type: postgres
+        access: proxy
+        url: 127.0.0.1:6432
+        database: $PG_DBNAME
+        user: $PG_USER
+        secureJsonData:
+          password: $PG_PASSWORD
+        jsonData:
+          sslmode: disable
+          maxOpenConns: 2
+    EOFTPL
+
+  # Grafana main config
+  - |
+    cat > /etc/liquid-metal/templates/grafana.ini <<'EOFTPL'
+    [server]
+    http_port = 3001
+
+    [security]
+    admin_user = admin
+    admin_password = $GRAFANA_ADMIN_PASSWORD
+
+    [paths]
+    provisioning = /etc/grafana/provisioning
+    data = /mnt/observability/grafana
+
+    [plugins]
+    allow_loading_unsigned_plugins = victoriametrics-logs-datasource
+    EOFTPL
+
+  # rclone config
+  - |
+    cat > /etc/liquid-metal/templates/rclone.conf <<'EOFTPL'
+    [vultr-s3]
+    type = s3
+    provider = Other
+    access_key_id = $S3_ACCESS_KEY
+    secret_access_key = $S3_SECRET_KEY
+    endpoint = https://$S3_ENDPOINT
+    acl = private
+
+    [gcs-backups]
+    type = google cloud storage
+    service_account_file = /etc/liquid-metal/gcs-sa.json
+    bucket_policy_only = true
+    EOFTPL
+
+  # HAProxy config
+  - |
+    cat > /etc/liquid-metal/templates/haproxy.cfg <<'EOFTPL'
+    global
+      log /dev/log local0
+      chroot /var/lib/haproxy
+      stats socket /run/haproxy/admin.sock mode 660 level admin
+      stats timeout 30s
+      user haproxy
+      group haproxy
+      daemon
+      maxconn 4096
+      ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+      ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+      tune.ssl.default-dh-param 2048
+
+    defaults
+      log     global
+      mode    http
+      option  httplog
+      option  dontlognull
+      option  forwardfor
+      timeout connect 5s
+      timeout client  30s
+      timeout server  30s
+      errorfile 400 /etc/haproxy/errors/400.http
+      errorfile 403 /etc/haproxy/errors/403.http
+      errorfile 408 /etc/haproxy/errors/408.http
+      errorfile 500 /etc/haproxy/errors/500.http
+      errorfile 502 /etc/haproxy/errors/502.http
+      errorfile 503 /etc/haproxy/errors/503.http
+      errorfile 504 /etc/haproxy/errors/504.http
+
+    frontend rate_limiter
+      stick-table type ip size 100k expire 30s store http_req_rate(1s)
+
+    frontend https
+      bind *:443 ssl crt /etc/letsencrypt/live/$DOMAIN/combined.pem
+      http-request track-sc0 src table rate_limiter
+      http-request deny deny_status 429 if { sc_http_req_rate(0) gt 50 }
+      http-request set-header X-Forwarded-Proto https
+      http-request set-header X-Real-IP %[src]
+      default_backend pingora
+
+    frontend http
+      bind *:80
+      http-request redirect scheme https code 301
+
+    backend pingora
+      balance roundrobin
+      option httpchk GET /health
+      http-check expect status 200
+      server node-a-01 $NODE_A_01_HOSTNAME:8080 check inter 5s fall 3 rise 2
+      server node-b-01 $NODE_B_01_HOSTNAME:8080 check inter 5s fall 3 rise 2
+    EOFTPL
+
+  # VictoriaMetrics scrape config
+  - |
+    cat > /etc/liquid-metal/templates/victoriametrics-scrape.yaml <<'EOFTPL'
+    scrape_configs:
+      - job_name: node_exporter
+        scrape_interval: 15s
+        static_configs:
+          - targets:
+              - "$NODE_A_01_HOSTNAME:9100"
+              - "$NODE_B_01_HOSTNAME:9100"
+            labels:
+              env: liquid-metal
+    EOFTPL
+
+  # Backup scripts — source secrets.env at runtime for automatic rotation pickup
+  - |
+    cat > /etc/liquid-metal/templates/backup-postgres.sh <<'EOFTPL'
+    #!/bin/bash
+    set -euo pipefail
+    source /etc/liquid-metal/secrets.env
+    TIMESTAMP=$(date -u +%Y-%m-%dT%H%M%SZ)
+    DUMP_FILE="/tmp/pg-$TIMESTAMP.sql.gz"
+    PGPASSWORD="$PG_PASSWORD" pg_dump \
+      -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DBNAME" \
+      --no-owner --no-acl \
+      | gzip > "$DUMP_FILE"
+    gsutil cp "$DUMP_FILE" "gs://$GCS_BUCKET_POSTGRES/$TIMESTAMP.sql.gz"
+    rm -f "$DUMP_FILE"
+    echo "$(date -u) postgres backup complete" >> /var/log/backups/postgres.log
+    [ -n "$HEARTBEAT_URL_POSTGRES" ] && curl -fsS --retry 3 "$HEARTBEAT_URL_POSTGRES" > /dev/null
+    EOFTPL
+
+  - |
+    cat > /etc/liquid-metal/templates/backup-victoriametrics.sh <<'EOFTPL'
+    #!/bin/bash
+    set -euo pipefail
+    source /etc/liquid-metal/secrets.env
+    TIMESTAMP=$(date -u +%Y-%m-%dT%H%M%SZ)
+    SNAP_RESP=$(curl -sf http://127.0.0.1:8428/snapshot/create)
+    SNAP_NAME=$(echo "$SNAP_RESP" | grep -o '"snapshot":"[^"]*"' | cut -d'"' -f4)
+    SNAP_PATH="/mnt/observability/victoriametrics/snapshots/$SNAP_NAME"
+    gsutil -m rsync -r "$SNAP_PATH" "gs://$GCS_BUCKET_VICTORIAMETRICS/$TIMESTAMP/"
+    curl -sf "http://127.0.0.1:8428/snapshot/delete?snapshot=$SNAP_NAME" > /dev/null
+    echo "$(date -u) victoriametrics backup complete ($SNAP_NAME)" >> /var/log/backups/victoriametrics.log
+    [ -n "$HEARTBEAT_URL_VICTORIAMETRICS" ] && curl -fsS --retry 3 "$HEARTBEAT_URL_VICTORIAMETRICS" > /dev/null
+    EOFTPL
+
+  - |
+    cat > /etc/liquid-metal/templates/backup-victorialogs.sh <<'EOFTPL'
+    #!/bin/bash
+    set -euo pipefail
+    source /etc/liquid-metal/secrets.env
+    TIMESTAMP=$(date -u +%Y-%m-%dT%H%M%SZ)
+    TAR_FILE="/tmp/vlogs-$TIMESTAMP.tar.gz"
+    tar -czf "$TAR_FILE" -C /mnt/observability victorialogs
+    gsutil cp "$TAR_FILE" "gs://$GCS_BUCKET_VICTORIALOGS/$TIMESTAMP.tar.gz"
+    rm -f "$TAR_FILE"
+    echo "$(date -u) victorialogs backup complete" >> /var/log/backups/victorialogs.log
+    [ -n "$HEARTBEAT_URL_VICTORIALOGS" ] && curl -fsS --retry 3 "$HEARTBEAT_URL_VICTORIALOGS" > /dev/null
+    EOFTPL
+
+  - |
+    cat > /etc/liquid-metal/templates/backup-artifacts.sh <<'EOFTPL'
+    #!/bin/bash
+    set -euo pipefail
+    source /etc/liquid-metal/secrets.env
+    rclone sync vultr-s3:$S3_BUCKET gcs-backups:$GCS_BUCKET_ARTIFACTS \
+      --transfers=8 \
+      --checkers=16 \
+      --fast-list \
+      --log-file=/var/log/backups/artifacts.log \
+      --log-level=INFO
+    echo "$(date -u) artifacts sync complete" >> /var/log/backups/artifacts.log
+    [ -n "$HEARTBEAT_URL_ARTIFACTS" ] && curl -fsS --retry 3 "$HEARTBEAT_URL_ARTIFACTS" > /dev/null
+    EOFTPL
+
+  # ── Render Script (12-Factor: config from env) ──────────────────────────────
+  # Sources secrets.env and renders all config templates via envsubst.
+  # Idempotent — safe to re-run after secret rotation.
+  - |
+    cat > /opt/liquid-metal/render-configs.sh <<'EOFSCRIPT'
+    #!/bin/bash
+    set -euo pipefail
+
+    SECRETS_FILE="/etc/liquid-metal/secrets.env"
+    TEMPLATES="/etc/liquid-metal/templates"
+
+    if [ ! -f "$SECRETS_FILE" ]; then
+      echo "ERROR: $SECRETS_FILE not found" >&2
+      exit 1
+    fi
+
+    # Export all secrets as environment variables.
+    set -a
+    source "$SECRETS_FILE"
+    set +a
+
+    echo "Rendering configs from templates..."
+
+    # NATS — restrict to known vars so $JS.API.> in ACL rules isn't clobbered
+    envsubst '$NATS_USER $NATS_PASSWORD $NATS_PASSWORD_DAEMON $NATS_PASSWORD_PROXY' \
+      < "$TEMPLATES/nats.conf" > /etc/nats/nats.conf
+
+    # PgBouncer
+    envsubst < "$TEMPLATES/pgbouncer.ini"              > /etc/pgbouncer/pgbouncer.ini
+    envsubst < "$TEMPLATES/userlist.txt"               > /etc/pgbouncer/userlist.txt
+    chmod 600 /etc/pgbouncer/userlist.txt
+    chown postgres:postgres /etc/pgbouncer/userlist.txt
+
+    # Certbot / Cloudflare
+    mkdir -p /etc/letsencrypt
+    envsubst < "$TEMPLATES/cloudflare.ini"             > /etc/letsencrypt/cloudflare.ini
+    chmod 600 /etc/letsencrypt/cloudflare.ini
+
+    # HAProxy
+    envsubst < "$TEMPLATES/haproxy.cfg"                > /etc/haproxy/haproxy.cfg
+
+    # VictoriaMetrics scrape config
+    mkdir -p /etc/victoriametrics
+    envsubst < "$TEMPLATES/victoriametrics-scrape.yaml" > /etc/victoriametrics/scrape.yaml
+
+    # Grafana
+    mkdir -p /etc/grafana/provisioning/datasources /etc/grafana/provisioning/plugins /etc/grafana/provisioning/alerting
+    envsubst < "$TEMPLATES/grafana-datasources.yaml"   > /etc/grafana/provisioning/datasources/datasources.yaml
+    envsubst < "$TEMPLATES/grafana.ini"                > /etc/grafana/grafana.ini
+
+    # rclone
+    mkdir -p /root/.config/rclone
+    envsubst < "$TEMPLATES/rclone.conf"                > /root/.config/rclone/rclone.conf
+    chmod 600 /root/.config/rclone/rclone.conf
+
+    # Backup scripts — source secrets.env at runtime, so just copy them.
+    mkdir -p /opt/backups/scripts
+    cp "$TEMPLATES/backup-postgres.sh"         /opt/backups/scripts/backup-postgres.sh
+    cp "$TEMPLATES/backup-victoriametrics.sh"  /opt/backups/scripts/backup-victoriametrics.sh
+    cp "$TEMPLATES/backup-victorialogs.sh"     /opt/backups/scripts/backup-victorialogs.sh
+    cp "$TEMPLATES/backup-artifacts.sh"        /opt/backups/scripts/backup-artifacts.sh
+    chmod +x /opt/backups/scripts/*.sh
+
+    echo "All configs rendered."
+    EOFSCRIPT
+  - chmod +x /opt/liquid-metal/render-configs.sh
+
+  # ── Rotate Script ───────────────────────────────────────────────────────────
+  # Usage: /opt/liquid-metal/rotate-secrets.sh [new-secrets.env]
+  # If no argument, re-renders with current secrets. If argument given,
+  # replaces secrets.env first.
+  - |
+    cat > /opt/liquid-metal/rotate-secrets.sh <<'EOFSCRIPT'
+    #!/bin/bash
+    set -euo pipefail
+
+    SECRETS_FILE="/etc/liquid-metal/secrets.env"
+
+    if [ -n "${1:-}" ]; then
+      echo "Installing new secrets from $1..."
+      cp "$1" "$SECRETS_FILE"
+      chmod 600 "$SECRETS_FILE"
+    fi
+
+    # Re-render all config files.
+    /opt/liquid-metal/render-configs.sh
+
+    # Restart services that read config files (not backup scripts — they
+    # source secrets.env at runtime and pick up changes automatically).
+    echo "Restarting services..."
+    systemctl restart nats pgbouncer haproxy grafana
+
+    echo "Secret rotation complete."
+    EOFSCRIPT
+  - chmod +x /opt/liquid-metal/rotate-secrets.sh
+
+  # ── Install Binaries ────────────────────────────────────────────────────────
+
+  # Nomad server
+  - curl -fsSL https://releases.hashicorp.com/nomad/1.9.5/nomad_1.9.5_linux_amd64.zip -o /tmp/nomad.zip
+  - unzip /tmp/nomad.zip -d /usr/local/bin/
+  - chmod +x /usr/local/bin/nomad
+
+  # NATS server
+  - curl -fsSL https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-linux-amd64.zip -o /tmp/nats.zip
+  - unzip /tmp/nats.zip -d /tmp/nats-server
+  - mv /tmp/nats-server/nats-server-*/nats-server /usr/local/bin/nats-server
+
+  # gsutil / gcloud
+  - curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz | tar -xz -C /opt
+  - /opt/google-cloud-sdk/install.sh --quiet --path-update=true
+  - ln -sf /opt/google-cloud-sdk/bin/gsutil /usr/local/bin/gsutil
+  - ln -sf /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
+  - gcloud auth activate-service-account --key-file=/etc/liquid-metal/gcs-sa.json
+
+  # rclone
+  - curl -fsSL https://rclone.org/install.sh | bash
+
+  # VictoriaMetrics
+  - curl -fsSL https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v1.112.0/victoria-metrics-linux-amd64-v1.112.0.tar.gz | tar -xz -C /usr/local/bin/
+  - chmod +x /usr/local/bin/victoria-metrics-prod
+
+  # VictoriaLogs
+  - curl -fsSL https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v1.112.0/victoria-logs-linux-amd64-v1.112.0.tar.gz | tar -xz -C /usr/local/bin/
+  - chmod +x /usr/local/bin/victoria-logs-prod
+
+  # Grafana
+  - curl -fsSL https://dl.grafana.com/oss/release/grafana-11.5.2.linux-amd64.tar.gz | tar -xz -C /opt
+  - ln -sf /opt/grafana-v11.5.2 /opt/grafana
+  - /opt/grafana/bin/grafana cli --pluginsDir=/opt/grafana/data/plugins plugins install victoriametrics-logs-datasource
+
+  # Certbot
+  - apt-get install -y certbot python3-certbot-dns-cloudflare
+
+  # ── Render Configs From Secrets ─────────────────────────────────────────────
+  # First render — produces all config files from templates + secrets.env.
+  - mkdir -p /etc/nats /var/lib/nats/jetstream /var/log/backups /etc/pgbouncer
+  - /opt/liquid-metal/render-configs.sh
+
+  # ── TLS (certbot + Cloudflare DNS-01) ──────────────────────────────────────
+  - certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini -d "${domain}" -d "*.${domain}" --non-interactive --agree-tos -m admin@${domain}
+  - |
+    cat /etc/letsencrypt/live/${domain}/fullchain.pem \
+        /etc/letsencrypt/live/${domain}/privkey.pem \
+        > /etc/letsencrypt/live/${domain}/combined.pem
+  - chmod 600 /etc/letsencrypt/live/${domain}/combined.pem
+  - |
+    (crontab -l 2>/dev/null || true; echo "0 2 * * * certbot renew --quiet --deploy-hook 'systemctl reload haproxy'") | crontab -
+
+  # ── Systemd Units ───────────────────────────────────────────────────────────
+
+  # Nomad (server mode — tiebreaker only)
+  - mkdir -p /etc/nomad.d /var/lib/nomad
+  - |
+    cat > /etc/nomad.d/server.hcl <<EOF
+    data_dir  = "/var/lib/nomad"
+    log_level = "INFO"
+
+    server {
+      enabled          = true
+      bootstrap_expect = 1
+    }
+
+    client {
+      enabled = false
+    }
+    EOF
+  - |
+    cat > /etc/systemd/system/nomad.service <<EOF
+    [Unit]
+    Description=Nomad
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/nomad agent -config=/etc/nomad.d/
+    Restart=on-failure
+    RestartSec=5
+    LimitNOFILE=65536
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # NATS
+  - |
+    cat > /etc/systemd/system/nats.service <<EOF
+    [Unit]
+    Description=NATS Server
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/nats-server -c /etc/nats/nats.conf
+    Restart=on-failure
+    RestartSec=5
+    LimitNOFILE=65536
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # VictoriaMetrics
+  - |
+    cat > /etc/systemd/system/victoriametrics.service <<EOF
+    [Unit]
+    Description=VictoriaMetrics
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/victoria-metrics-prod \
+      -storageDataPath=/mnt/observability/victoriametrics \
+      -retentionPeriod=30d \
+      -promscrape.config=/etc/victoriametrics/scrape.yaml \
+      -httpListenAddr=:8428 \
+      -snapshot.createURL=http://127.0.0.1:8428/snapshot/create
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # VictoriaLogs
+  - |
+    cat > /etc/systemd/system/victorialogs.service <<EOF
+    [Unit]
+    Description=VictoriaLogs
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/victoria-logs-prod \
+      -storageDataPath=/mnt/observability/victorialogs \
+      -retentionPeriod=30d \
+      -httpListenAddr=:9428
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # Grafana
+  - |
+    cat > /etc/systemd/system/grafana.service <<EOF
+    [Unit]
+    Description=Grafana
+    After=network.target victoriametrics.service victorialogs.service
+
+    [Service]
+    ExecStart=/opt/grafana/bin/grafana server --config=/etc/grafana/grafana.ini --homepath=/opt/grafana
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # Grafana alerting rules
+  - |
+    cat > /etc/grafana/provisioning/alerting/alerts.yaml <<'EOF'
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: Infrastructure
+        folder: Alerts
+        interval: 1m
+        rules:
+          - uid: node-down
+            title: Node Down
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: prometheus
+                model:
+                  expr: up{job="node_exporter"} == 0
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: C
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: { type: gt, params: [0] }
+            for: 2m
+            annotations:
+              summary: "Node {{ $labels.instance }} is unreachable"
+
+          - uid: disk-space-critical
+            title: Disk Space Critical
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: prometheus
+                model:
+                  expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: C
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: { type: gt, params: [0] }
+            for: 5m
+            annotations:
+              summary: "Disk space below 10% on {{ $labels.instance }}"
+
+          - uid: high-cpu
+            title: High CPU Usage
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: prometheus
+                model:
+                  expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: C
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: { type: gt, params: [0] }
+            for: 10m
+            annotations:
+              summary: "CPU usage above 90% on {{ $labels.instance }} for 10m"
+
+          - uid: high-memory
+            title: High Memory Usage
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: prometheus
+                model:
+                  expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: C
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: { type: gt, params: [0] }
+            for: 5m
+            annotations:
+              summary: "Memory usage above 90% on {{ $labels.instance }}"
+
+          - uid: observability-disk
+            title: Observability Volume Low
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: prometheus
+                model:
+                  expr: (node_filesystem_avail_bytes{mountpoint="/mnt/observability"} / node_filesystem_size_bytes{mountpoint="/mnt/observability"}) * 100 < 15
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: C
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: { type: gt, params: [0] }
+            for: 5m
+            annotations:
+              summary: "Observability volume below 15% free space"
+
+          - uid: stuck-provisioning
+            title: Stuck Provisioning
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 900, to: 0 }
+                datasourceUid: postgres
+                model:
+                  rawSql: "SELECT COUNT(*) AS stuck FROM services WHERE status = 'provisioning' AND created_at < NOW() - INTERVAL '10 minutes' AND deleted_at IS NULL"
+                  format: table
+              - refId: C
+                relativeTimeRange: { from: 900, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: { type: gt, params: [0] }
+            for: 0s
+            annotations:
+              summary: "{{ $values.A.Value }} services stuck in provisioning for >10 minutes — watchdog will auto-heal, investigate daemon logs"
+    EOF
+
+  # ── Block Storage Mount ────────────────────────────────────────────────────
+  - mkdir -p /mnt/observability
+  - |
+    if ! blkid /dev/vdb | grep -q ext4; then
+      mkfs.ext4 -L observability /dev/vdb
+    fi
+  - mount /dev/vdb /mnt/observability
+  - echo '/dev/vdb /mnt/observability ext4 defaults,nofail 0 2' >> /etc/fstab
+  - mkdir -p /mnt/observability/victoriametrics /mnt/observability/victorialogs /mnt/observability/grafana
+
+  # ── Start Services ──────────────────────────────────────────────────────────
+  - systemctl daemon-reload
+  - systemctl enable nomad nats victoriametrics victorialogs grafana haproxy pgbouncer
+  - systemctl start nomad nats pgbouncer victoriametrics victorialogs grafana haproxy
+
+  # ── Backup Crons ────────────────────────────────────────────────────────────
+  - |
+    (crontab -l 2>/dev/null || true; cat <<'EOFCRON'
+    0 3 * * * /opt/backups/scripts/backup-postgres.sh 2>&1 | tee -a /var/log/backups/postgres.log
+    30 3 * * * /opt/backups/scripts/backup-victoriametrics.sh 2>&1 | tee -a /var/log/backups/victoriametrics.log
+    0 4 * * * /opt/backups/scripts/backup-victorialogs.sh 2>&1 | tee -a /var/log/backups/victorialogs.log
+    30 4 * * * /opt/backups/scripts/backup-artifacts.sh 2>&1 | tee -a /var/log/backups/artifacts.log
+    EOFCRON
+    ) | crontab -

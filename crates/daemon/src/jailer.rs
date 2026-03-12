@@ -97,11 +97,19 @@ pub async fn spawn(cfg: &JailerConfig<'_>) -> Result<(u32, JailerPaths)> {
     cmd.stdout(std::process::Stdio::null())
        .stderr(std::process::Stdio::null());
 
-    let child = cmd.spawn().context("spawning jailer")?;
+    let mut child = cmd
+        .process_group(0)
+        .spawn()
+        .context("spawning jailer")?;
     let pid = child.id().context("jailer exited immediately after spawn")?;
 
     let socket = format!("{}/run/api.sock", chroot_root);
-    wait_for_socket(&socket).await?;
+    if let Err(e) = wait_for_socket(&socket).await {
+        // Kill the jailer process group to avoid leaking the jailer + Firecracker.
+        unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL); }
+        let _ = child.wait().await;
+        return Err(e);
+    }
 
     tracing::info!(
         vm_id = cfg.vm_id,

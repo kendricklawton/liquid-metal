@@ -19,7 +19,7 @@ These are table-stakes — users expect them on day one.
 | Service pause / resume | Both | API sets status, daemon respects it |
 | Rollback to previous deploy | Both | Object Storage — `deploy_id` (uuid_v7) is immutable |
 | Deploy history per service | Both | `services` table + deploy rows |
-| Usage dashboard (credits burned, invocations) | Both | `usage_records` table → web UI |
+| Usage dashboard (credits burned, invocations) | Both | VictoriaMetrics → Grafana → web UI |
 
 ---
 
@@ -31,7 +31,7 @@ All of this is math on top of data you already collect.
 |---|---|
 | Compute hours (Metal) | daemon records `started_at` / `stopped_at` per VM |
 | Wasm invocations (Liquid) | daemon increments counter per `wasmtime::execute` |
-| Provisioned memory GB-hrs | `memory_mb * active_seconds / 3600` — write to `usage_records` |
+| Provisioned memory GB-hrs | `memory_mb * active_seconds / 3600` — derive from VictoriaMetrics |
 | Egress bandwidth | eBPF TC classifier already planned — sum bytes per service |
 | Prepaid credit balance | `workspaces.credit_balance` — deduct on usage flush (every 60s) |
 | Manual top-up (dashboard) | Stripe PaymentIntent → credit ledger entry |
@@ -102,7 +102,7 @@ Already mostly there — Pingora does this natively.
 | Workspace roles: owner, member, viewer | `workspace_members.role` enum — already in schema |
 | Viewer roles always free | billing only counts owner + member seats |
 | Shared credit pool | `workspaces.credit_balance` — all services in workspace draw from one pool |
-| Audit log | `audit_log` table — already partitioned in schema |
+| Audit log | VictoriaLogs — structured logging via Promtail |
 | Invite by email | WorkOS org invites → provision `workspace_members` row |
 | Seat count billing | `stripe_subscription` with `quantity = active_seat_count` |
 
@@ -115,9 +115,9 @@ Minimal but useful — you don't need Datadog.
 | Feature | Notes |
 |---|---|
 | Log streaming (`flux logs`) | daemon → NATS subject `logs.{service_id}` → SSE endpoint → CLI |
-| Build log lines | `build_log_lines` table — already partitioned in schema |
+| Build log lines | VictoriaLogs — collected by Promtail from daemon stdout |
 | Service status history | `status_events` table — provisioning / running / stopped / failed |
-| Basic metrics (invocations/hr, p50 boot time) | Aggregate from `usage_records` — no external metrics store needed |
+| Basic metrics (invocations/hr, p50 boot time) | VictoriaMetrics + Grafana dashboards |
 | Uptime / health probe | Pingora pings `upstream_addr/healthz` every 30s — writes to `services.last_health_check` |
 
 ---
