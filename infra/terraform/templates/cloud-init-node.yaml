@@ -1,0 +1,269 @@
+#cloud-config
+# ── Bare Metal Node: Nomad Client + Promtail + node_exporter ─────────────────
+# 12-Factor: Secrets centralized in /etc/liquid-metal/secrets.env.
+# Application secrets (DATABASE_URL, NATS credentials, etc.) are injected
+# at runtime by Nomad Variables — not baked into this template.
+hostname: ${hostname}
+
+packages:
+  - curl
+  - unzip
+  - ufw
+  - chrony
+
+runcmd:
+  # Install Tailscale
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --authkey=${tailscale_auth_key} --hostname=${hostname} --advertise-tags=tag:liquid-metal
+
+  # Firewall — no public ports; all access via Tailscale
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw --force enable
+
+  # ── NTP (clock skew prevention) ────────────────────────────────────────────
+  - systemctl enable chrony
+  - systemctl start chrony
+
+  # ── SSH Hardening ───────────────────────────────────────────────────────────
+  - apt-get install -y fail2ban
+  - |
+    cat > /etc/fail2ban/jail.local <<EOF
+    [sshd]
+    enabled = true
+    port = ssh
+    maxretry = 5
+    bantime = 3600
+    findtime = 600
+    EOF
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?X11Forwarding.*/X11Forwarding no/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+
+  # ── Central Secrets (12-Factor III) ─────────────────────────────────────────
+  # Only infrastructure-level secrets here. Application secrets (DATABASE_URL,
+  # NATS_URL, S3 keys) are injected by Nomad Variables at job runtime.
+  - mkdir -p /etc/liquid-metal /opt/liquid-metal
+  - chmod 700 /etc/liquid-metal
+  - |
+    cat > /etc/liquid-metal/secrets.env <<'EOFENV'
+    # ── GCS Backup ───────────────────────────────────────────────────────────
+    GCS_BUCKET_NOMAD=${gcs_bucket_nomad}
+    # ── Topology ─────────────────────────────────────────────────────────────
+    HOSTNAME_SELF=${hostname}
+    VLOGS_URL=${vlogs_url}
+    # ── Backup Heartbeat (dead man's switch) ────────────────────────────────
+    HEARTBEAT_URL_NOMAD=${heartbeat_url_nomad}
+    EOFENV
+  - chmod 600 /etc/liquid-metal/secrets.env
+
+  # GCS service account key
+  - |
+    cat > /etc/liquid-metal/gcs-sa.json <<'EOFKEY'
+    ${gcs_sa_key}
+    EOFKEY
+  - chmod 600 /etc/liquid-metal/gcs-sa.json
+
+  # Install Nomad client
+  - curl -fsSL https://releases.hashicorp.com/nomad/1.9.5/nomad_1.9.5_linux_amd64.zip -o /tmp/nomad.zip
+  - unzip /tmp/nomad.zip -d /usr/local/bin/
+  - chmod +x /usr/local/bin/nomad
+
+  # Write Nomad client config
+  - mkdir -p /etc/nomad.d /var/lib/nomad
+  - |
+    cat > /etc/nomad.d/client.hcl <<EOF
+    data_dir  = "/var/lib/nomad"
+    log_level = "INFO"
+
+    client {
+      enabled    = true
+      node_class = "${nomad_node_class}"
+
+      options {
+        "driver.raw_exec.enable" = "1"
+      }
+    }
+
+    # Nomad server join — NAT VPS Tailscale IP (update after first apply)
+    client {
+      servers = ["nat-vps.your-tailnet:4647"]
+    }
+    EOF
+
+  # Enable Nomad as systemd service
+  - |
+    cat > /etc/systemd/system/nomad.service <<EOF
+    [Unit]
+    Description=Nomad
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/nomad agent -config=/etc/nomad.d/
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+  - systemctl daemon-reload
+  - systemctl enable nomad
+  - systemctl start nomad
+
+  # Create artifact cache dir
+  - mkdir -p /var/lib/liquid-metal/artifacts
+
+  # ── gsutil (GCS CLI) ───────────────────────────────────────────────────────
+  - curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz | tar -xz -C /opt
+  - /opt/google-cloud-sdk/install.sh --quiet --path-update=true
+  - ln -sf /opt/google-cloud-sdk/bin/gsutil /usr/local/bin/gsutil
+  - ln -sf /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
+  - gcloud auth activate-service-account --key-file=/etc/liquid-metal/gcs-sa.json
+
+  # ── Backup Cron ────────────────────────────────────────────────────────────
+  # Nomad client state snapshot → GCS daily at 03:00 UTC.
+  # Sources secrets.env at runtime for automatic rotation pickup.
+  - mkdir -p /opt/backups/scripts /var/log/backups
+  - |
+    cat > /opt/backups/scripts/backup-nomad.sh <<'EOFSCRIPT'
+    #!/bin/bash
+    set -euo pipefail
+    source /etc/liquid-metal/secrets.env
+    TIMESTAMP=$(date -u +%Y-%m-%dT%H%M%SZ)
+    TAR_FILE="/tmp/nomad-$HOSTNAME_SELF-$TIMESTAMP.tar.gz"
+    tar -czf "$TAR_FILE" -C /var/lib nomad
+    gsutil cp "$TAR_FILE" "gs://$GCS_BUCKET_NOMAD/$HOSTNAME_SELF/$TIMESTAMP.tar.gz"
+    rm -f "$TAR_FILE"
+    echo "$(date -u) nomad backup complete" >> /var/log/backups/nomad.log
+    [ -n "$HEARTBEAT_URL_NOMAD" ] && curl -fsS --retry 3 "$HEARTBEAT_URL_NOMAD" > /dev/null
+    EOFSCRIPT
+  - chmod +x /opt/backups/scripts/backup-nomad.sh
+  - |
+    (crontab -l 2>/dev/null || true; cat <<'EOFCRON'
+    0 3 * * * /opt/backups/scripts/backup-nomad.sh 2>&1 | tee -a /var/log/backups/nomad.log
+    EOFCRON
+    ) | crontab -
+
+  # ── Promtail ─────────────────────────────────────────────────────────────────
+  - curl -fsSL https://github.com/grafana/loki/releases/download/v3.4.2/promtail-linux-amd64.zip -o /tmp/promtail.zip
+  - unzip /tmp/promtail.zip -d /usr/local/bin/
+  - chmod +x /usr/local/bin/promtail-linux-amd64
+  - mv /usr/local/bin/promtail-linux-amd64 /usr/local/bin/promtail
+  - mkdir -p /etc/promtail /var/lib/promtail
+  - |
+    cat > /etc/promtail/config.yaml <<EOF
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+
+    positions:
+      filename: /var/lib/promtail/positions.yaml
+
+    clients:
+      - url: http://${vlogs_url}:9428/insert/loki/api/v1/push
+        batchsize: 1048576        # 1 MiB max per push request
+        batchwait: 3s
+        backoff_config:
+          min_period: 500ms
+          max_period: 30s
+          max_retries: 10
+
+    # Cap Promtail's in-memory buffer to prevent OOM under backpressure.
+    limits_config:
+      readline_rate_enabled: true
+      readline_rate: 5000         # lines/sec across all targets
+      readline_burst: 10000
+      readline_rate_drop: true    # drop lines above the limit instead of buffering
+
+    scrape_configs:
+      - job_name: nomad
+        static_configs:
+          - targets:
+              - localhost
+            labels:
+              node: ${hostname}
+              __path__: /var/lib/nomad/alloc/*/alloc/logs/*.std*
+        pipeline_stages:
+          - regex:
+              expression: '/alloc/(?P<alloc_id>[^/]+)/alloc/logs/(?P<task>[^.]+)\.std(?P<stream>out|err)\.'
+          - labels:
+              alloc_id:
+              task:
+              stream:
+          # Per-job rate limit — drops excess log lines instead of buffering
+          # to OOM. 1000 lines/sec is enough for any well-behaved service.
+          - limit:
+              rate: 1000
+              burst: 2000
+              drop: true
+
+      - job_name: journal
+        journal:
+          max_age: 12h
+          labels:
+            node: ${hostname}
+        relabel_configs:
+          - source_labels: ['__journal__systemd_unit']
+            target_label: unit
+    EOF
+  - |
+    cat > /etc/systemd/system/promtail.service <<EOF
+    [Unit]
+    Description=Promtail
+    After=network.target nomad.service
+
+    [Service]
+    ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/config.yaml
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+  - systemctl daemon-reload
+  - systemctl enable promtail
+  - systemctl start promtail
+
+  # ── node_exporter ────────────────────────────────────────────────────────────
+  - curl -fsSL https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz | tar -xz -C /tmp
+  - mv /tmp/node_exporter-1.8.2.linux-amd64/node_exporter /usr/local/bin/node_exporter
+  - chmod +x /usr/local/bin/node_exporter
+  - |
+    cat > /etc/systemd/system/node_exporter.service <<EOF
+    [Unit]
+    Description=Prometheus Node Exporter
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/node_exporter
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+  - systemctl daemon-reload
+  - systemctl enable node_exporter
+  - systemctl start node_exporter
+
+  # Metal-only setup
+  %{ if node_engine == "metal" }
+  - mkdir -p /run/firecracker /opt/firecracker
+  - curl -fsSL https://github.com/firecracker-microvm/firecracker/releases/download/v1.10.1/firecracker-v1.10.1-x86_64.tgz | tar -xz -C /tmp
+  - mv /tmp/release-v1.10.1-x86_64/firecracker-v1.10.1-x86_64 /usr/local/bin/firecracker
+  - mv /tmp/release-v1.10.1-x86_64/jailer-v1.10.1-x86_64 /usr/local/bin/jailer
+  - chmod +x /usr/local/bin/firecracker /usr/local/bin/jailer
+  # Create jailer user
+  - useradd -r -s /bin/false -u 10000 jailer
+  # Enable KVM access
+  - chmod 660 /dev/kvm
+  - chown root:kvm /dev/kvm
+  # Setup br0 bridge
+  - ip link add name br0 type bridge
+  - ip addr add 172.16.0.1/12 dev br0
+  - ip link set br0 up
+  %{ endif }

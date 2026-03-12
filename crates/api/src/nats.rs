@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use async_nats::jetstream;
 use async_nats::jetstream::stream::Config as StreamConfig;
-use common::events::{DeprovisionEvent, ProvisionEvent, STREAM_NAME, SUBJECT_DEPROVISION, SUBJECT_PROVISION};
+
+use common::events::{
+    DeprovisionEvent, ProvisionEvent, STREAM_NAME, SUBJECT_DEPROVISION, SUBJECT_PROVISION,
+};
 
 pub async fn ensure_stream(js: &jetstream::Context) -> Result<()> {
     js.get_or_create_stream(StreamConfig {

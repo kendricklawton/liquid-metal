@@ -21,6 +21,7 @@ use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use wasmtime::*;
@@ -37,16 +38,26 @@ const WASM_STACK_BYTES: usize = 1024 * 1024;
 /// Maximum captured stdout size (4 MiB).
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+/// Default wall-clock timeout per Wasm request. Overridable via WASM_TIMEOUT_SECS.
+const DEFAULT_WASM_TIMEOUT_SECS: u64 = 30;
+
 /// Pre-compiled Wasm service shared across all request-handling tasks.
 struct WasmService {
-    engine:   Arc<Engine>,
-    module:   Arc<Module>,
-    app_name: String,
+    engine:       Arc<Engine>,
+    module:       Arc<Module>,
+    app_name:     String,
+    /// Per-request invocation counter, drained by the usage reporter every 60s.
+    invocations:  Arc<AtomicU64>,
+    /// Wall-clock timeout per request.
+    timeout:      std::time::Duration,
 }
 
 /// Compile `wasm_path`, bind a local TCP listener, and start serving requests.
 /// Returns the port number written to the `services` table as `upstream_addr`.
-pub async fn serve(wasm_path: String, app_name: String) -> Result<u16> {
+///
+/// `invocations` is an externally-owned counter incremented on every request.
+/// The usage reporter reads and resets it periodically to publish billing events.
+pub async fn serve(wasm_path: String, app_name: String, invocations: Arc<AtomicU64>) -> Result<u16> {
     // Compile once — expensive (~100 ms for a Go Wasm binary); amortised across
     // every request for the lifetime of this service.
     let mut cfg = Config::new();
@@ -62,15 +73,21 @@ pub async fn serve(wasm_path: String, app_name: String) -> Result<u16> {
         Module::new(&engine, &wasm_bytes).context("compiling wasm module")?,
     );
 
+    let timeout_secs = std::env::var("WASM_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_WASM_TIMEOUT_SECS);
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+
     // Bind on an OS-assigned port so we never collide across services.
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("binding wasm HTTP listener")?;
     let port = listener.local_addr()?.port();
 
-    tracing::info!(app = app_name, port, "liquid wasm HTTP shim ready");
+    tracing::info!(app = app_name, port, timeout_secs, "liquid wasm HTTP shim ready");
 
-    let svc = Arc::new(WasmService { engine, module, app_name });
+    let svc = Arc::new(WasmService { engine, module, app_name, invocations, timeout });
 
     tokio::spawn(async move {
         loop {
@@ -101,6 +118,7 @@ async fn dispatch(
     svc: Arc<WasmService>,
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    svc.invocations.fetch_add(1, Ordering::Relaxed);
     let method = req.method().to_string();
     let uri    = req.uri().clone();
     let path   = uri.path().to_string();
@@ -134,26 +152,34 @@ async fn dispatch(
     let module   = svc.module.clone();
     let app_name = svc.app_name.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        invoke(&engine, &module, &app_name, env_vars, body_bytes)
-    })
+    let timeout = svc.timeout;
+    let result = tokio::time::timeout(
+        timeout,
+        tokio::task::spawn_blocking(move || {
+            invoke(&engine, &module, &app_name, env_vars, body_bytes)
+        }),
+    )
     .await;
 
     match result {
-        Ok(Ok((status, headers, body))) => {
+        Ok(Ok(Ok((status, headers, body)))) => {
             let mut builder = Response::builder().status(status);
             for (k, v) in headers {
                 builder = builder.header(k, v);
             }
             Ok(builder.body(Full::new(Bytes::from(body))).unwrap())
         }
-        Ok(Err(e)) => {
+        Ok(Ok(Err(e))) => {
             tracing::error!(error = %e, app = svc.app_name, "wasm execution error");
             Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::error!(error = ?e, "wasm task panicked");
             Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal error".into()))
+        }
+        Err(_) => {
+            tracing::error!(app = svc.app_name, timeout_secs = timeout.as_secs(), "wasm execution timed out");
+            Ok(error_response(StatusCode::GATEWAY_TIMEOUT, "wasm execution timed out".into()))
         }
     }
 }

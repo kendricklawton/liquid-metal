@@ -19,22 +19,19 @@ services:
     volumes:
       - natsdata:/data
 
-  rustfs:
-    image: rustfs/rustfs:latest
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
     environment:
-      RUSTFS_VOLUMES: /data
-      RUSTFS_ADDRESS: "0.0.0.0:9000"
-      RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
-      RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-rustfsadmin}
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_KEY:-minioadmin}
     ports:
       - "9000:9000"
       - "9001:9001" # console → http://localhost:9001
     volumes:
-      - rustfsdata:/data
+      - miniodata:/data
 
 volumes:
   pgdata:
   natsdata:
-  rustfsdata:
+  miniodata:

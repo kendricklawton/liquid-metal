@@ -184,6 +184,98 @@ tasks:
         echo "  lsblk -o NAME,MAJ:MIN   # find major:minor (e.g. 8:0 for /dev/sda)"
         echo "  echo 'ROOTFS_DEVICE=8:0' >> .env"
 
+  # ── Infrastructure (Terraform + Nomad) ───────────────────────────────────────
+
+  _tf:
+    internal: true
+    dir: "{{.ROOT_DIR}}/infra/terraform"
+    vars:
+      TFSTATE_BUCKET: "liquid-metal-tfstate-{{.CLOUD_ENV}}"
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS: "{{.ROOT_DIR}}/keys/liquid-metal-tfstate-{{.CLOUD_ENV}}.json"
+      TF_VAR_env: "{{.CLOUD_ENV}}"
+      TF_VAR_region: '{{.VULTR_REGION | default "ord"}}'
+      TF_VAR_vultr_api_key: "{{.VULTR_API_KEY}}"
+      TF_VAR_ssh_key_id: "{{.VULTR_SSH_KEY_ID}}"
+      TF_VAR_bare_metal_plan: '{{.VULTR_BARE_METAL_PLAN | default "vbm-4c-32gb"}}'
+      TF_VAR_vps_plan: '{{.VULTR_VPS_PLAN | default "vc2-2c-4gb"}}'
+      TF_VAR_os_id: '{{.VULTR_OS_ID | default "2136"}}'
+      TF_VAR_cloudflare_api_token: "{{.CLOUDFLARE_API_TOKEN}}"
+      TF_VAR_cloudflare_zone_id: "{{.CLOUDFLARE_ZONE_ID}}"
+      TF_VAR_domain: "{{.DOMAIN}}"
+      TF_VAR_tailscale_api_key: "{{.TAILSCALE_API_KEY}}"
+      TF_VAR_tailscale_tailnet: "{{.TAILSCALE_TAILNET}}"
+      TF_VAR_grafana_admin_password: "{{.GRAFANA_ADMIN_PASSWORD}}"
+      TF_VAR_gcp_project: "{{.GCP_PROJECT}}"
+    cmds:
+      - echo "[TERRAFORM] {{.CMD}} -> vultr -> {{.VULTR_REGION | default \"ord\"}} -> {{.CLOUD_ENV}}"
+      - terraform init -reconfigure -backend-config="bucket={{.TFSTATE_BUCKET}}" -backend-config="prefix=vultr"
+      - |
+        if [ -f terraform.tfvars ]; then
+          terraform {{.CMD}} -var-file=terraform.tfvars {{.ARGS}}
+        else
+          terraform {{.CMD}} {{.ARGS}}
+        fi
+
+  infra:plan:
+    desc: "Plan infrastructure changes (CLOUD_ENV=dev)"
+    cmds:
+      - task: _tf
+        vars:
+          {
+            CLOUD_ENV: '{{.CLOUD_ENV | default "dev"}}',
+            CMD: "plan",
+            ARGS: "-out=tfplan",
+          }
+
+  infra:apply:
+    desc: "Apply infrastructure changes (CLOUD_ENV=dev)"
+    cmds:
+      - task: _tf
+        vars:
+          {
+            CLOUD_ENV: '{{.CLOUD_ENV | default "dev"}}',
+            CMD: "apply",
+            ARGS: "-auto-approve tfplan",
+          }
+
+  infra:destroy:
+    desc: "Destroy infrastructure (CLOUD_ENV=dev)"
+    cmds:
+      - task: _tf
+        vars:
+          {
+            CLOUD_ENV: '{{.CLOUD_ENV | default "dev"}}',
+            CMD: "destroy",
+            ARGS: "-auto-approve",
+          }
+
+  infra:output:
+    desc: "Show Terraform outputs (IPs, DB URL, storage keys)"
+    cmds:
+      - task: _tf
+        vars:
+          {
+            CLOUD_ENV: '{{.CLOUD_ENV | default "dev"}}',
+            CMD: "output",
+            ARGS: "",
+          }
+
+  nomad:deploy:
+    desc: "Deploy all Nomad jobs to the cluster"
+    cmds:
+      - nomad job run infra/jobs/api.nomad.hcl
+      - nomad job run infra/jobs/daemon-metal.nomad.hcl
+      - nomad job run infra/jobs/daemon-liquid.nomad.hcl
+      - nomad job run infra/jobs/proxy.nomad.hcl
+
+  nomad:status:
+    desc: "Show status of all Nomad jobs"
+    cmds:
+      - nomad job status
+
+  # ── T480 / Linux one-time setup ───────────────────────────────────────────
+
   metal:setup:
     desc: "One-time setup: br0 bridge, /run/firecracker, Firecracker binary"
     cmds:
