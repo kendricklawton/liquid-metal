@@ -8,3 +8,11 @@ serde      = { workspace = true }
 serde_json = { workspace = true }
 uuid       = { workspace = true }
 anyhow     = { workspace = true }
+tracing    = { workspace = true }
+sha2       = { workspace = true }
+tokio      = { workspace = true }
+async-nats            = { workspace = true }
+tokio-postgres        = { workspace = true }
+tokio-postgres-rustls = { workspace = true }
+rustls                = { workspace = true }
+rustls-pemfile        = { workspace = true }

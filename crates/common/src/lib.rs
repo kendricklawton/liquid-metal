@@ -1,7 +1,11 @@
+pub mod artifact;
 pub mod config;
 pub mod events;
+pub mod features;
+pub mod networking;
 
 pub use events::{Engine, EngineSpec, LiquidSpec, MetalSpec, ProvisionEvent};
+pub use features::Features;
 
 /// Lowercase, replace non-alphanumeric with `-`, collapse consecutive dashes, trim edges.
 /// Used by API and daemon to derive URL-safe slugs from user-supplied names.

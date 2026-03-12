@@ -45,16 +45,18 @@ tasks:
     cmds:
       - cargo check --workspace
 
-  # ── Run individual services ───────────────────────────────────────────────
+  # ── Run Individual Rust Services ───────────────────────────────────────────────
   dev:api:
     desc: "Run the API server locally"
+    ignore_error: true
     env:
-      RUST_LOG: "api=debug"
+      RUST_LOG: "api=debug,refinery_core=info"
     cmds:
       - cargo run -p api
 
   dev:proxy:
     desc: "Run the Pingora edge proxy locally"
+    ignore_error: true
     env:
       BIND_ADDR: "0.0.0.0:8080"
       CLOUD_UPSTREAM: "127.0.0.1:7070"
@@ -64,6 +66,7 @@ tasks:
 
   dev:daemon:
     desc: "Run the daemon locally (requires NATS; TAP/Firecracker/cgroup requires Linux)"
+    ignore_error: true
     env:
       NATS_URL: "nats://127.0.0.1:4222"
       ROOTFS_DEVICE: "8:0" # override in .env for your node
@@ -71,64 +74,40 @@ tasks:
     cmds:
       - cargo run -p daemon
 
-  release:cli:
-    desc: "Release flux CLI via GoReleaser (usage: task release:cli -- v0.1.0)"
+  # ── Release ───────────────────────────────────────────────────────────────
+  release:patch:
+    desc: "Release a patch version bump (0.1.0 → 0.1.1)"
     cmds:
-      - git tag {{.CLI_ARGS}}
-      - git push origin {{.CLI_ARGS}}
-      - goreleaser release --clean
+      - cargo release patch
 
-  install:cli:
-    desc: "Install flux CLI to $GOPATH/bin (then use 'flux' from any directory)"
-    dir: cli
+  release:minor:
+    desc: "Release a minor version bump (0.1.0 → 0.2.0)"
     cmds:
-      - go build -o "$(go env GOPATH)/bin/flux" .
-      - |
-        GOBIN="$(go env GOPATH)/bin"
-        if ! echo "$PATH" | grep -q "$GOBIN"; then
-          echo ""
-          echo "⚠  $GOBIN is not in your PATH."
-          echo "   Add this to your ~/.zshrc (or ~/.bashrc):"
-          echo ""
-          echo '   export PATH="$PATH:$(go env GOPATH)/bin"'
-          echo ""
-          echo "   Then run: source ~/.zshrc"
-        else
-          echo "✓ flux installed — $(flux --help 2>&1 | head -1)"
-        fi
+      - cargo release minor
+
+  release:major:
+    desc: "Release a major version bump (0.1.0 → 1.0.0)"
+    cmds:
+      - cargo release major
+
+  release:dry-run:
+    desc: "Preview what the next minor release would do (no changes made)"
+    cmds:
+      - cargo release minor --dry-run
+
+  # ── Rust CLI ──────────────────────────────────────────────────────────────
+  install:cli:
+    desc: "Build and install Rust flux CLI to ~/.cargo/bin"
+    cmds:
+      - cargo install --path crates/cli
+      - echo "flux (Rust) installed — $(flux --help 2>&1 | head -1)"
 
   dev:cli:
-    desc: "Run the flux CLI without installing (usage: task dev:cli -- <args>)"
-    dir: cli
+    desc: "Run Rust flux CLI without installing (usage: task dev:cli -- <args>)"
     env:
       FLUX_API_URL: '{{.FLUX_API_URL | default "http://localhost:7070"}}'
     cmds:
-      - go run . {{.CLI_ARGS}}
-
-  # dev:web:
-  #   desc: "Run the Go web dashboard locally (:3000) with hot reload"
-  #   dir: web
-  #   env:
-  #     API_URL: "http://localhost:7070"
-  #     BIND_ADDR: "0.0.0.0:3000"
-  #   cmds:
-  #     - go run github.com/air-verse/air@latest -c .air.toml
-
-  dev:
-    desc: "Start API + web together; Ctrl+C kills both"
-    deps: []
-    cmds:
-      - |
-        bash <<'BASH'
-        trap 'kill $API_PID $WEB_PID 2>/dev/null; wait $API_PID $WEB_PID 2>/dev/null' INT TERM
-        RUST_LOG=api=debug cargo run -p api &
-        API_PID=$!
-        until curl -sf http://localhost:7070/healthz > /dev/null 2>&1; do sleep 0.2; done
-        cd web && API_URL=http://localhost:7070 BIND_ADDR=0.0.0.0:3000 \
-          go run github.com/air-verse/air@latest -c .air.toml &
-        WEB_PID=$!
-        wait $API_PID $WEB_PID
-        BASH
+      - cargo run -p cli -- {{.CLI_ARGS}}
 
   # ── T480 / Linux one-time setup ───────────────────────────────────────────
   security:setup:
@@ -204,6 +183,98 @@ tasks:
         echo "Set ROOTFS_DEVICE in .env to the block device of your rootfs images:"
         echo "  lsblk -o NAME,MAJ:MIN   # find major:minor (e.g. 8:0 for /dev/sda)"
         echo "  echo 'ROOTFS_DEVICE=8:0' >> .env"
+
+  # ── Infrastructure (Terraform + Nomad) ───────────────────────────────────────
+
+  _tf:
+    internal: true
+    dir: "{{.ROOT_DIR}}/infra/terraform"
+    vars:
+      TFSTATE_BUCKET: "liquid-metal-tfstate-{{.CLOUD_ENV}}"
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS: "{{.ROOT_DIR}}/keys/liquid-metal-tfstate-{{.CLOUD_ENV}}.json"
+      TF_VAR_env: "{{.CLOUD_ENV}}"
+      TF_VAR_region: '{{.VULTR_REGION | default "ord"}}'
+      TF_VAR_vultr_api_key: "{{.VULTR_API_KEY}}"
+      TF_VAR_ssh_key_id: "{{.VULTR_SSH_KEY_ID}}"
+      TF_VAR_bare_metal_plan: '{{.VULTR_BARE_METAL_PLAN | default "vbm-4c-32gb"}}'
+      TF_VAR_vps_plan: '{{.VULTR_VPS_PLAN | default "vc2-2c-4gb"}}'
+      TF_VAR_os_id: '{{.VULTR_OS_ID | default "2136"}}'
+      TF_VAR_cloudflare_api_token: "{{.CLOUDFLARE_API_TOKEN}}"
+      TF_VAR_cloudflare_zone_id: "{{.CLOUDFLARE_ZONE_ID}}"
+      TF_VAR_domain: "{{.DOMAIN}}"
+      TF_VAR_tailscale_api_key: "{{.TAILSCALE_API_KEY}}"
+      TF_VAR_tailscale_tailnet: "{{.TAILSCALE_TAILNET}}"
+      TF_VAR_grafana_admin_password: "{{.GRAFANA_ADMIN_PASSWORD}}"
+      TF_VAR_gcp_project: "{{.GCP_PROJECT}}"
+    cmds:
+      - echo "[TERRAFORM] {{.CMD}} -> vultr -> {{.VULTR_REGION | default \"ord\"}} -> {{.CLOUD_ENV}}"
+      - terraform init -reconfigure -backend-config="bucket={{.TFSTATE_BUCKET}}" -backend-config="prefix=vultr"
+      - |
+        if [ -f terraform.tfvars ]; then
+          terraform {{.CMD}} -var-file=terraform.tfvars {{.ARGS}}
+        else
+          terraform {{.CMD}} {{.ARGS}}
+        fi
+
+  infra:plan:
+    desc: "Plan infrastructure changes (CLOUD_ENV=dev)"
+    cmds:
+      - task: _tf
+        vars:
+          {
+            CLOUD_ENV: '{{.CLOUD_ENV | default "dev"}}',
+            CMD: "plan",
+            ARGS: "-out=tfplan",
+          }
+
+  infra:apply:
+    desc: "Apply infrastructure changes (CLOUD_ENV=dev)"
+    cmds:
+      - task: _tf
+        vars:
+          {
+            CLOUD_ENV: '{{.CLOUD_ENV | default "dev"}}',
+            CMD: "apply",
+            ARGS: "-auto-approve tfplan",
+          }
+
+  infra:destroy:
+    desc: "Destroy infrastructure (CLOUD_ENV=dev)"
+    cmds:
+      - task: _tf
+        vars:
+          {
+            CLOUD_ENV: '{{.CLOUD_ENV | default "dev"}}',
+            CMD: "destroy",
+            ARGS: "-auto-approve",
+          }
+
+  infra:output:
+    desc: "Show Terraform outputs (IPs, DB URL, storage keys)"
+    cmds:
+      - task: _tf
+        vars:
+          {
+            CLOUD_ENV: '{{.CLOUD_ENV | default "dev"}}',
+            CMD: "output",
+            ARGS: "",
+          }
+
+  nomad:deploy:
+    desc: "Deploy all Nomad jobs to the cluster"
+    cmds:
+      - nomad job run infra/jobs/api.nomad.hcl
+      - nomad job run infra/jobs/daemon-metal.nomad.hcl
+      - nomad job run infra/jobs/daemon-liquid.nomad.hcl
+      - nomad job run infra/jobs/proxy.nomad.hcl
+
+  nomad:status:
+    desc: "Show status of all Nomad jobs"
+    cmds:
+      - nomad job status
+
+  # ── T480 / Linux one-time setup ───────────────────────────────────────────
 
   metal:setup:
     desc: "One-time setup: br0 bridge, /run/firecracker, Firecracker binary"

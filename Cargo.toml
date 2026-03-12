@@ -4,6 +4,7 @@ members = [
     "crates/api",
     "crates/proxy",
     "crates/daemon",
+    "crates/cli",
 ]
 resolver = "2"
 
@@ -26,7 +27,7 @@ toml         = "0.8"
 async-nats   = "0.33"
 futures      = "0.3"
 # Postgres
-tokio-postgres   = { version = "0.7", features = ["with-uuid-1"] }
+tokio-postgres   = { version = "0.7", features = ["with-uuid-1", "with-serde_json-1", "runtime"] }
 deadpool-postgres = { version = "0.14", features = ["rt_tokio_1"] }
 # HTTP primitives
 hyper          = { version = "1", features = ["client", "http1", "server"] }
@@ -42,6 +43,8 @@ async-trait    = "0.1"
 # Logging
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Date/time
+chrono       = { version = "0.4", features = ["serde"] }
 # Utilities
 uuid     = { version = "1", features = ["v4", "v7", "serde"] }
 clap     = { version = "4", features = ["derive"] }
@@ -59,6 +62,32 @@ prost        = "0.14"
 prost-types  = "0.14"
 # Envelope encryption
 aes-gcm      = { version = "0.10", features = ["aes"] }
+# HMAC (Stripe webhook signature verification)
+hmac         = "0.12"
+# Rate limiting
+governor     = { version = "0.8", features = ["std"] }
+# Constant-time comparison
+subtle       = "2.6"
+# Postgres TLS
+tokio-postgres-rustls = "0.13"
+rustls                = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rustls-pemfile        = "2"
+
+# cargo-dist release configuration
+[workspace.metadata.dist]
+cargo-dist-version = "0.22.1"
+ci = "github"
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+installers = ["shell", "powershell", "homebrew"]
+# tap injected by CI
+# Only the CLI binary is distributed — API/daemon/proxy are server-side
+dist = false
 
 # Linux-only (daemon crate)
 [workspace.metadata]

@@ -1,0 +1,32 @@
+# ── Environment ────────────────────────────────────────────────────────────────
+env    = "dev"        # dev | prod
+region = "ord"        # Vultr region slug (Chicago)
+
+# ── Vultr ──────────────────────────────────────────────────────────────────────
+vultr_api_key   = "your-vultr-api-key"
+ssh_key_id      = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+bare_metal_plan = "vbm-4c-32gb"        # Bare metal plan for compute nodes
+vps_plan        = "vc2-2c-4gb"         # VPS plan for NAT gateway
+os_id           = 2136                 # Ubuntu 24.04 LTS
+
+# ── Cloudflare ─────────────────────────────────────────────────────────────────
+cloudflare_api_token = "your-cloudflare-api-token"
+cloudflare_zone_id   = "your-zone-id"
+domain               = "example.com"
+
+# ── Tailscale ──────────────────────────────────────────────────────────────────
+tailscale_api_key = "tskey-api-xxxxx"
+tailscale_tailnet = "your-tailnet.ts.net"
+
+# ── GCP (backup destination) ──────────────────────────────────────────────────
+gcp_project = "your-gcp-project-id"
+gcp_region  = "us-central1"
+
+# ── Secrets ────────────────────────────────────────────────────────────────────
+grafana_admin_password = "change-me"
+# NATS authentication — per-role passwords for subject-level ACLs.
+# Generate each: openssl rand -hex 32
+# API user is "liquidmetal" (var.nats_user default), daemon is "daemon", proxy is "proxy".
+nats_password        = "change-me"
+nats_password_daemon = "change-me"
+nats_password_proxy  = "change-me"

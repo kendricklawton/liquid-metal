@@ -2,47 +2,60 @@
 
 > Bare-metal hosting platform. Two products, no Kubernetes, ever.
 
+> **Status**: Implementation in progress. Infrastructure described below is the target topology — not yet provisioned.
+
 ---
 
 ## Infrastructure Stack
 
-All infrastructure runs in **Vultr Chicago (ORD)**. One vendor, one region, sub-millisecond between every layer.
+All infrastructure runs in **Vultr Chicago (ORD)**. One vendor, one region, sub-millisecond between every layer. Backups replicate to GCP (GCS) for cross-cloud disaster recovery.
 
-| Layer              | Technology                              | Notes                                              |
-|--------------------|-----------------------------------------|----------------------------------------------------|
-| **Floating IP**    | Vultr VPS — Chicago                     | Holds public IP permanently, HAProxy + NATS tiebreaker |
-| **Compute**        | 2× Vultr Bare Metal — Chicago           | node-a (primary) + node-b (standby)                |
-| **Proxy**          | Pingora (Rust) on both nodes            | TLS termination, slug → upstream routing           |
-| **Load balancer**  | HAProxy on NAT VPS                      | Health-checks both nodes, routes :80/:443          |
-| **Private mesh**   | Tailscale                               | Official Tailscale — VPS + node-a + node-b         |
-| **API**            | Axum + tonic (Rust), :7070              | Active/active on both nodes                        |
-| **Daemon**         | NATS consumer (Rust)                    | Active on both nodes, each owns local KVM          |
-| **Web UI**         | chi + Templ + HTMX (Go), :3000          | Active/active on both nodes                        |
-| **CLI**            | `flux` binary (Go)                      | login, init, deploy, status, logs, workspace, project |
-| **Event bus**      | NATS JetStream — 3-node Raft            | node-a + node-b + NAT VPS, survives 1 failure      |
-| **Database**       | Vultr Managed Postgres — Chicago        | Managed HA, daily backups, standard pg conn string |
-| **Artifact store** | Vultr Object Storage — Chicago          | S3-compatible, rootfs images + .wasm binaries      |
-| **DNS**            | Cloudflare                              | Wildcard `*.liquidmetal.dev` → NAT VPS floating IP |
-| **TLS**            | Let's Encrypt via Pingora               | Wildcard cert, auto-renewed                        |
-| **eBPF isolation** | Aya TC classifier per tap{n}            | Tenant isolation at kernel level, no Cilium daemon |
-| **Observability**  | Structured JSON logs → stdout           | Metrics: Prometheus + Grafana (future)             |
-
+| Layer                 | Technology                                          | Notes                                                                              |
+|-----------------------|-----------------------------------------------------|------------------------------------------------------------------------------------|
+| **NAT VPS**           | Vultr VPS — Chicago                                 | Holds public IP permanently, HAProxy + Nomad server + NATS + observability stack   |
+| **Compute (Metal)**   | Vultr Bare Metal — Chicago                          | node-a-01 — Firecracker microVMs, KVM isolation                                    |
+| **Compute (Liquid)**  | Vultr Bare Metal — Chicago                          | node-b-01 — Wasmtime/WASI execution                                                |
+| **Proxy**             | Pingora (Rust) on compute nodes                     | Slug → upstream routing, :8080 (behind HAProxy)                                    |
+| **Load balancer**     | HAProxy on NAT VPS                                  | TLS termination (Let's Encrypt), rate limiting, health-checks, :80/:443            |
+| **Private mesh**      | Tailscale                                           | Official Tailscale — VPS + both bare metal nodes                                   |
+| **API**               | Axum (Rust), :7070                                  | Active/active on compute nodes                                                     |
+| **Web**               | Axum + Askama + HTMX (Rust), :3000                  | Dashboard — server-rendered HTML, OIDC browser auth. *Planned.*                    |
+| **Daemon**            | NATS consumer (Rust)                                | Each node owns its engine — Metal runs Firecracker, Liquid runs Wasmtime           |
+| **CLI**               | `flux` binary (Rust)                                | login, init, deploy, status, logs, workspace, project                              |
+| **Event bus**         | NATS JetStream                                      | Single server on NAT VPS, JetStream persistence to disk                            |
+| **Database**          | Vultr Managed Postgres — Chicago                    | Managed HA + PgBouncer connection pooler on NAT VPS (:6432)                        |
+| **Artifact store**    | Vultr Object Storage — Chicago                      | S3-compatible, rootfs images + .wasm binaries                                      |
+| **DNS**               | Cloudflare                                          | Wildcard + apex → NAT VPS public IP                                                |
+| **TLS**               | Let's Encrypt (certbot + Cloudflare DNS-01)         | Wildcard cert on HAProxy, auto-renewed via cron                                    |
+| **eBPF isolation**    | Aya TC classifier per tap{n}                        | Tenant isolation at kernel level, no Cilium daemon                                 |
+| **Observability**     | VictoriaMetrics + VictoriaLogs + Grafana            | Metrics scraping (:8428), log aggregation (:9428), dashboards (:3001)              |
+| **Log shipping**      | Promtail on each compute node                       | Tails Nomad allocation logs + systemd journal → VictoriaLogs                       |
+| **Node metrics**      | node_exporter on each compute node                  | Hardware metrics (:9100) scraped by VictoriaMetrics                                |
+| **Connection pooling**| PgBouncer on NAT VPS                                | Transaction-mode pooler (:6432), all services connect here                         |
+| **Backups**           | GCS (5 buckets) + rclone                            | Postgres, VictoriaMetrics, VictoriaLogs, Nomad, S3 artifacts → GCP daily           |
+| **Infra provisioning**| Terraform (Vultr + Cloudflare + Tailscale + Google) | Everything declared as code in `infra/terraform/`                                  |
+| **Process scheduling**| Nomad (HashiCorp)                                   | Schedules api/daemon/proxy on bare metal nodes — no K8s                            |
+| **CI/CD**             | GitHub Actions                                      | ci.yml (check/test), release.yml (cargo-dist), deploy.yml (Nomad job update)       |
 ---
 
 ## Vultr Setup
 
+> **Planned** — not yet provisioned.
+
 ### Region: Chicago (ORD)
 
-Everything lives in Vultr Chicago. Bare metal, VPS, Managed Postgres, and Object Storage are all in the same datacenter — latency between any two services is <1ms.
+Everything lives in Vultr Chicago. Bare metal, VPS, Managed Postgres, and Object Storage in the same datacenter — latency between any two services is <1ms.
 
 ### Services Used
 
-| Vultr Service            | Purpose                                        |
-|--------------------------|------------------------------------------------|
-| **Bare Metal** (×2)      | Firecracker + Wasmtime compute nodes           |
-| **Cloud Compute VPS**    | NAT box — floating IP, HAProxy, NATS tiebreaker|
-| **Managed Databases**    | PostgreSQL 16 — primary datastore              |
-| **Object Storage**       | S3-compatible — rootfs images + .wasm binaries |
+| Vultr Service            | Purpose                                                         |
+|--------------------------|-----------------------------------------------------------------|
+| **Bare Metal** (×1)      | node-a-01 — Firecracker/Metal tier                              |
+| **Bare Metal** (×1)      | node-b-01 — Wasmtime/Liquid tier                                |
+| **Cloud Compute VPS**    | NAT VPS — HAProxy, Nomad server, NATS, PgBouncer, observability |
+| **Block Storage** (40GB) | Persistent volume for VictoriaMetrics, VictoriaLogs, Grafana    |
+| **Managed Databases**    | PostgreSQL 16 — primary datastore                               |
+| **Object Storage**       | S3-compatible — rootfs images + .wasm binaries                  |
 
 ### Object Storage Layout
 
@@ -64,7 +77,7 @@ liquid-metal-artifacts/          (bucket name)
 
 Lifecycle policy: delete artifacts 30 days after service deletion.
 
-Vultr Object Storage is S3-compatible. The Rust codebase uses the `aws-sdk-s3` crate pointed at the Vultr endpoint:
+The Rust codebase uses `aws-sdk-s3` pointed at the Vultr endpoint:
 
 ```
 OBJECT_STORAGE_ENDPOINT=https://ord1.vultrobjects.com
@@ -78,148 +91,146 @@ OBJECT_STORAGE_SECRET_KEY=<vultr-secret-key>
 - Engine: PostgreSQL 16
 - Plan: Vultr Managed Database, Chicago
 - HA: Vultr manages standby + failover
-- Backups: daily automated, 7-day retention
-- Connection string: `postgresql://user:pass@<vultr-db-host>:5432/liquidmetal?sslmode=require`
-- No auth proxy needed — standard TLS connection direct to Vultr endpoint
+- Backups: Vultr daily automated (7-day retention) + pg_dump to GCS daily at 03:00 UTC
+- Connection pooling: PgBouncer on NAT VPS (:6432, transaction mode)
+- All services connect via PgBouncer, not directly to Postgres
+- Trusted IPs: `100.64.0.0/10` (Tailscale CGNAT range only)
 
 ---
 
 ## High Availability
+
+> **Planned** — target topology once infrastructure is provisioned.
 
 ### Topology
 
 ```
 Internet
     │
-    ▼ DNS: *.liquidmetal.dev → Floating IP (on NAT VPS)
-┌──────────────────────────────┐
-│  NAT VPS — Vultr Chicago     │  Cloud Compute VPS, ~$6/mo
-│  Holds the public IP         │  HAProxy: :80/:443 → active node
-│  NATS node (Raft member 3)   │  Tailscale coordination node
-└────────────┬─────────────────┘
+    ▼ DNS: *.domain + domain → NAT VPS public IP
+┌───────────────────────────────────────────────┐
+│  NAT VPS — Vultr Chicago (Cloud Compute VPS)  │
+│  HAProxy :80/:443 (TLS termination + rate limiting)
+│  Nomad server (bootstrap_expect=1)            │
+│  NATS server (JetStream, single node)         │
+│  PgBouncer :6432 (transaction-mode pooler)    │
+│  VictoriaMetrics :8428 (metrics)              │
+│  VictoriaLogs :9428 (log aggregation)         │
+│  Grafana :3001 (dashboards + alerting)        │
+│  Block Storage at /mnt/observability (40GB)   │
+└────────────┬──────────────────────────────────┘
              │ Tailscale mesh (100.x.x.x)
     ┌────────┴────────┐
+    │                 │
+  Metal tier      Liquid tier
+    │                 │
     ▼                 ▼
-node-a (primary)   node-b (standby)
-Pingora :443       Pingora :443
-API :7070          API :7070
-Daemon             Daemon
-NATS (Raft 1)      NATS (Raft 2)
-KVM + Firecracker  KVM + Firecracker
+  node-a-01        node-b-01
+  Pingora :8080    Pingora :8080
+  API :7070        API :7070
+  Daemon           Daemon
+  Nomad client     Nomad client
+  Promtail         Promtail
+  node_exporter    node_exporter
+  KVM+Firecracker  Wasmtime
 ```
 
-The NAT VPS holds the public IP permanently — it never moves. HAProxy health-checks both bare metal nodes and routes to whichever is alive. Tailscale carries all internal traffic between nodes.
+The NAT VPS holds the public IP permanently — it never moves. HAProxy health-checks both bare metal nodes and routes traffic to Pingora. Tailscale carries all internal traffic.
 
 ### Per-Layer HA Strategy
 
-| Layer              | Strategy                                                        | Failover time |
-|--------------------|-----------------------------------------------------------------|---------------|
-| **Floating IP**    | Permanent on NAT VPS — never moves                              | N/A           |
-| **Pingora**        | Active on node-a, standby on node-b. HAProxy switches          | <5s           |
-| **API**            | Active/active on both nodes. HAProxy round-robins              | Instant       |
-| **Web UI**         | Active/active on both nodes. HAProxy round-robins              | Instant       |
-| **NATS JetStream** | 3-node Raft: node-a + node-b + NAT VPS. Survives 1 failure     | <10s          |
-| **Managed Postgres**| Vultr-managed standby + automatic failover                    | <60s          |
-| **Object Storage** | Vultr-managed, redundant by default                            | N/A           |
-| **Daemon**         | Both nodes run daemon, each owns its local KVM                 | N/A           |
+| Layer                 | Strategy                                                                      | Failover time |
+|-----------------------|-------------------------------------------------------------------------------|---------------|
+| **Public IP**         | Permanent on NAT VPS — never moves                                            | N/A           |
+| **HAProxy**           | Single instance on NAT VPS, TLS termination + rate limiting                   | Manual        |
+| **Pingora**           | Active on both compute nodes. HAProxy round-robins with health checks         | <5s           |
+| **API**               | Active/active on both compute nodes                                           | <5s           |
+| **NATS JetStream**    | Single server on NAT VPS with file-backed JetStream persistence               | Manual        |
+| **Managed Postgres**  | Vultr-managed standby + automatic failover                                    | <60s          |
+| **PgBouncer**         | Single instance on NAT VPS, transaction-mode pooling                          | Manual        |
+| **Object Storage**    | Vultr-managed, redundant by default                                           | N/A           |
+| **Observability**     | VictoriaMetrics + VictoriaLogs + Grafana on NAT VPS, block storage persists   | Manual        |
+| **Backups**           | Daily crons to GCS (Postgres, metrics, logs, Nomad state, S3 artifacts)       | N/A           |
 
-### Metal HA (Warm Standby)
+> **Note**: The NAT VPS is a single point of failure for control-plane services (NATS, Nomad, PgBouncer, observability). This is a deliberate tradeoff for a lean 3-node cluster. If the NAT VPS fails, running services continue operating (Pingora routes directly) but new deploys and observability are unavailable until it recovers.
 
-Firecracker VMs are pinned to the node that provisioned them — KVM and TAP are local to each host. There is no live migration. Failover is re-provisioning:
+### NATS JetStream
 
-```
-node-a dies
-  → HAProxy health check detects failure (~5s)
-  → HAProxy stops routing to node-a
-  → NATS (still quorate on node-b + VPS) re-delivers ProvisionEvent
-  → daemon on node-b pulls rootfs.ext4 from Vultr Object Storage
-  → boots new Firecracker VM on node-b
-  → UPDATE services SET upstream_addr = node-b VM IP, node_id = 'node-b'
-  → Pingora (now on node-b) resumes routing
-Total: ~30–60s outage for Metal services
-```
-
-The `services` table stores `node_id` so the system tracks which node owns each VM. A watchdog in the daemon periodically checks peer health and re-queues provision events for stranded services.
-
-### Liquid HA (Active/Active)
-
-Wasm modules are stateless. The same module runs on both nodes simultaneously:
+Single-node NATS server on the NAT VPS with JetStream enabled for durable stream persistence. Listens on `:4222` (Tailscale only — blocked from public by UFW).
 
 ```
-Both nodes run the same .wasm module
-HAProxy load-balances across both upstream_addrs
-node-a dies → HAProxy removes it → all traffic to node-b
-Total: <5s, no re-provisioning needed
-```
-
-The `services` table for Liquid stores multiple `upstream_addr` entries. Pingora uses all healthy ones.
-
-### NATS JetStream Cluster
-
-```
-# /etc/nats/nats.conf on each node
-cluster {
-  name: liquid-metal
-  listen: 0.0.0.0:6222
-  routes: [
-    nats://10.0.0.1:6222   # NAT VPS
-    nats://10.0.0.2:6222   # node-a
-    nats://10.0.0.3:6222   # node-b
-  ]
-}
+# /etc/nats/nats.conf on NAT VPS
+listen: 0.0.0.0:4222
 
 jetstream {
-  store_dir: /var/lib/nats
+  store_dir: /var/lib/nats/jetstream
+  max_mem: 256MB
+  max_file: 4GB
 }
 ```
 
-3-node cluster tolerates 1 failure. The NAT VPS is the tiebreaker — it runs NATS only, no daemon or API.
+Both compute nodes connect to this single NATS server via Tailscale. JetStream persistence ensures events survive a NATS restart.
 
-### Network Architecture (HA)
+### Network Architecture
 
 ```
 Internet
     │
-    ▼ (*.liquidmetal.dev → 1 floating IP on NAT VPS)
-NAT VPS — Vultr Chicago (HAProxy :80/:443, Tailscale node)
+    ▼ (*.domain + domain → NAT VPS public IP)
+NAT VPS — Vultr Chicago
+    HAProxy :80/:443 (TLS + rate limiting)
+    Nomad server, NATS :4222, PgBouncer :6432
+    VictoriaMetrics :8428, VictoriaLogs :9428, Grafana :3001
+    │
     │ Tailscale mesh (100.x.x.x CGNAT range)
-    ├──────────────────────────────────┐
-    ▼                                  ▼
-node-a                              node-b
-Pingora (:443)                      Pingora (:443)
-API (:7070)                         API (:7070)
-Web (:3000)                         Web (:3000)
-NATS (:4222/:6222)                  NATS (:4222/:6222)
-Daemon                              Daemon
-KVM + br0 + TAP devices             KVM + br0 + TAP devices
-    │                                   │
-    └───────────────┬───────────────────┘
-                    ▼
-        Vultr Managed Postgres (Chicago)
-        Vultr Object Storage (Chicago)
+    ├──────────────────────┐
+    │                      │
+  Metal tier           Liquid tier
+    │                      │
+    ▼                      ▼
+  node-a-01            node-b-01
+  Pingora :8080        Pingora :8080
+  API :7070            API :7070
+  Daemon               Daemon
+  Nomad client         Nomad client
+  Promtail → VLogs     Promtail → VLogs
+  node_exporter :9100  node_exporter :9100
+  KVM+br0+TAP          Wasmtime
+    │                      │
+    └──────────┬───────────┘
+               ▼
+    Vultr Managed Postgres (Chicago)
+    ├── via PgBouncer :6432 on NAT VPS
+    Vultr Object Storage (Chicago)
+    ├── backed up to GCS via rclone
 ```
 
 **Internal mesh (Tailscale):**
 - Official Tailscale — each node joins the same Tailscale network
-- Tailscale assigns 100.x.x.x addresses (CGNAT range) to each node
-- All inter-service traffic (API→NATS, daemon→NATS, Postgres) uses Tailscale IPs
-- No manual key management, no peer config files — Tailscale handles it
+- All inter-service traffic (API→NATS, daemon→NATS, services→PgBouncer) uses Tailscale IPs
+- No manual key management — Tailscale handles it
 
 **Exposed ports (NAT VPS only — bare metal nodes have no public ports):**
-- `:80` — HAProxy (redirect to HTTPS)
-- `:443` — HAProxy (user traffic)
+- `:80` — HAProxy (HTTP → HTTPS redirect)
+- `:443` — HAProxy (TLS-terminated user traffic, per-IP rate limited at 50 req/s)
 - `:3478` — STUN (UDP, Tailscale NAT traversal)
 
 **Bare metal nodes — public firewall: all closed.**
-Tailscale handles all connectivity. SSH is via `tailscale ssh` — no public port 22.
+SSH is via `tailscale ssh` — no public port 22.
+
+**SSH hardening (all nodes):**
+- fail2ban (5 retries, 1hr ban)
+- Password auth disabled, key-only root, X11 forwarding disabled
 
 ---
 
 ## eBPF Tenant Isolation (Aya)
 
+> Applies to **Metal tier only** (node-a-01). Liquid nodes run Wasmtime in-process — no TAP devices, no bridge, no eBPF needed.
+
 ### Why — The Multi-Tenant Bridge Problem
 
-All Firecracker VMs on a node share the same `br0` bridge. Without enforcement,
+All Firecracker VMs on a Metal node share the same `br0` bridge. Without enforcement,
 VM A can send packets directly to VM B's TAP IP (172.16.x.x). This is a
 cross-tenant security hole.
 
@@ -258,13 +269,9 @@ the Pingora proxy.
 
 ### Bandwidth (tc.rs) + Isolation (ebpf.rs) Coexist
 
-`tc.rs` manages tbf qdiscs for rate limiting (L3 bandwidth).
-`ebpf.rs` manages the TC classifier for identity enforcement (L3 isolation).
-Both attach to the same `tap{n}` device and operate independently.
-
 ```
 tap{n} egress:
-  1. tbf qdisc (tc.rs)      → rate limit to net_egress_kbps
+  1. tbf qdisc (tc.rs)       → rate limit to net_egress_kbps
   2. TC classifier (ebpf.rs) → drop if dst is another VM
   3. packet exits to br0 → NAT → internet
 ```
@@ -278,24 +285,34 @@ provision_metal():
   tc::apply(tap, quota)              # bandwidth qdiscs
   ebpf::attach(tap, service_id)      # TC isolation classifier ← Aya
 
-deprovision (future):
+deprovision:
   ebpf::detach(tap)                  # unload BPF program
   tc::remove(tap)                    # remove qdiscs
   netlink::remove_tap(tap)           # delete tap{n}
 ```
+
+### TAP IPAM — Index Recycling
+
+Each `tap{n}` device gets an index from a recycling pool tracked by a `Mutex<BTreeSet<u32>>` in the daemon. On startup, `init_tap_pool()` loads all currently-allocated indices from the database and builds the set of free indices:
+
+```sql
+SELECT tap_name FROM services
+WHERE node_id = $1 AND status = 'running' AND engine = 'metal'
+  AND deleted_at IS NULL AND tap_name IS NOT NULL
+```
+
+`allocate_tap_index()` pops the lowest available index from the free set (or extends past the current max if none are free). `release_tap_index()` returns an index to the pool on deprovision. This replaces the earlier monotonic `AtomicU32` counter which could only grow — leaked indices from deleted services were never reclaimed.
 
 ### Build Requirements (Linux only)
 
 ```bash
 rustup target add bpfel-unknown-none
 rustup component add rust-src
-# daemon build.rs handles the rest automatically
 cargo build -p daemon
 ```
 
-On macOS, the eBPF build is skipped entirely. The `#[cfg(target_os = "linux")]`
-gate in `ebpf.rs` ensures the embedded bytes are never referenced in a macOS
-binary.
+On macOS, the eBPF build is skipped entirely. `#[cfg(target_os = "linux")]`
+gates ensure the embedded bytes are never referenced in a macOS binary.
 
 ---
 
@@ -322,26 +339,57 @@ liquid-metal-artifacts/
 ```
 
 `deploy_id` is a UUID v7 generated at deploy time. Each deploy is immutable —
-the artifact at `{service_id}/{deploy_id}/` never changes. This makes rollback
-trivial: re-provision with an older `deploy_id`.
+rollback means re-provisioning with an older `deploy_id`.
 
 ### Why No Container Registry
-
-Container registries (Docker Hub, GHCR, ECR) exist for OCI image layers. Liquid
-Metal uses a different model:
 
 - **Metal**: user ships a static Linux binary → daemon injects it into the base
   Alpine rootfs template → boots as a Firecracker VM. No Dockerfile, no layers.
 - **Liquid**: user ships a `.wasm` file → daemon loads it into Wasmtime. No
   image format at all.
 
-Object Storage provides everything needed: immutable versioned storage, pre-signed
-upload URLs (so the large artifact bypasses the API server), and lifecycle
-policies for cleanup.
-
 ---
 
 ## Data Flow
+
+### NATS Event Reference
+
+All events live in `crates/common/src/events.rs`. JetStream events are durable (at-least-once delivery). Fire-and-forget events are plain NATS publishes — no ack, best-effort.
+
+| Subject | Type | Transport | Publisher | Consumer |
+|---|---|---|---|---|
+| `platform.provision` | `ProvisionEvent` | JetStream | API outbox poller | Daemon |
+| `platform.deprovision` | `DeprovisionEvent` | JetStream | API | Daemon |
+| `platform.route_updated` | `RouteUpdatedEvent` | Fire-and-forget | Daemon | Proxy (all instances) |
+| `platform.route_removed` | `RouteRemovedEvent` | Fire-and-forget | Daemon | Proxy (all instances) |
+| `platform.traffic_pulse` | `TrafficPulseEvent` | Fire-and-forget | Proxy | Daemon |
+| `platform.usage_metal` | `MetalUsageEvent` | Fire-and-forget | Daemon | API |
+| `platform.usage_liquid` | `LiquidUsageEvent` | Fire-and-forget | Daemon | API |
+| `platform.service_crashed` | `ServiceCrashedEvent` | Fire-and-forget | Daemon | API |
+| `platform.suspend` | `SuspendEvent` | JetStream | API | Daemon |
+
+`DeprovisionEvent` carries `slug` so the daemon can publish `RouteRemovedEvent` without a DB lookup.
+
+### Transactional Outbox
+
+`platform.provision` events are delivered via the **transactional outbox pattern** (`crates/api/src/outbox.rs`, `migrations/V16__outbox.sql`). This eliminates the race where a DB commit succeeds but the NATS publish fails, leaving a service stuck in `provisioning` forever.
+
+```
+deploy handler (single DB transaction):
+  INSERT INTO services (...)
+  INSERT INTO outbox (subject='platform.provision', payload={...})
+  COMMIT   ← both rows land, or neither does
+
+outbox poller (background task, 1s interval):
+  BEGIN
+  SELECT * FROM outbox ORDER BY created_at ASC LIMIT 50 FOR UPDATE SKIP LOCKED
+  for each row:
+    js.publish(subject, payload)  ← JetStream ack awaited
+    DELETE FROM outbox WHERE id = $1
+  COMMIT
+```
+
+If NATS is temporarily unreachable the publish returns an error — the row is not deleted and will be retried next poll. If the API crashes mid-publish, the row survives the restart. The daemon's provisioning logic is idempotent on `service_id`.
 
 ### Deploy
 
@@ -349,47 +397,223 @@ policies for cleanup.
 flux deploy
   1. read liquid-metal.toml → engine, name, build command
   2. build locally:
-       metal:  go build -o app . / cargo build --release
-       liquid: GOOS=wasip1 go build -o main.wasm .
+       metal:  cargo build --target x86_64-unknown-linux-musl --release
+       liquid: cargo build --target wasm32-wasip1 --release
   3. sha256(artifact) + generate deploy_id (uuid_v7)
-  4. GetUploadUrl RPC → API returns pre-signed Object Storage PUT URL
+  4. GET /upload-url → API returns pre-signed Object Storage PUT URL
   5. PUT artifact → Object Storage directly (no API in the upload path)
-  6. Deploy RPC { slug, engine, spec, artifact_key, deploy_id, sha256 }
-       → API inserts service row → Managed Postgres
-       → API publishes ProvisionEvent → NATS JetStream
+  6. POST /services { slug, engine, spec, artifact_key, deploy_id, sha256 }
+       → API: capacity gate (hobby Metal) + advisory lock + INSERT services + INSERT outbox
+       → COMMIT (atomic)
+       → outbox poller publishes ProvisionEvent → NATS JetStream
 
 NATS → daemon
   ├─ metal:  download base-alpine.ext4 from Object Storage (cached locally)
   │           download user binary from Object Storage
-  │           loop-mount base → inject binary → unmount → rootfs.ext4
+  │           inject binary into rootfs template
   │           attach eBPF TC filter (ebpf.rs)
   │           spawn Firecracker → boot VM
   │           UPDATE services SET upstream_addr, node_id, status='running'
+  │           publish RouteUpdatedEvent → NATS (platform.route_updated)
   └─ liquid: download main.wasm from Object Storage
-             load into Wasmtime gateway
+             load into Wasmtime gateway (fuel: 1B ops/invocation → OutOfFuel trap on runaway)
              UPDATE services SET upstream_addr, status='running'
+             publish RouteUpdatedEvent → NATS (platform.route_updated)
 ```
+
+`RouteUpdatedEvent` is consumed by every Pingora instance's background subscriber, which writes `slug → upstream_addr` into the in-process route cache. The proxy cache is warm within milliseconds of provisioning completing.
 
 ### Live Request
 
 ```
 Browser → Pingora
-  └─ slug lookup → Managed Postgres → upstream_addr
+  └─ slug lookup
+      ├─ cache hit  → in-memory HashMap<slug, upstream_addr> (no DB round-trip)
+      └─ cache miss → Managed Postgres → upstream_addr → populate cache
       ├─ metal:  proxy → TAP → Firecracker VM
       └─ liquid: dispatch → in-process Wasmtime executor → response
 ```
 
-### Web UI
+The route cache (`crates/proxy/src/cache.rs`) is an `Arc<RwLock<HashMap<String, String>>>` kept warm by a background NATS subscriber. It listens on two subjects simultaneously using `tokio::select!`:
+
+| Subject | Event | Cache action |
+|---|---|---|
+| `platform.route_updated` | Service provisioned / upstream_addr set | `insert(slug, addr)` |
+| `platform.route_removed` | Service stopped or deleted | `remove(slug)` |
+
+On a cold start or cache miss it falls back to a DB lookup and then populates the cache. There is no Redis — the cache is in-process, kilobytes of data, and DB is always the authoritative source on restart. Memory is bounded by the number of **currently running** services.
+
+### Stop / Delete
 
 ```
-Browser (HTMX)
-  └─→ Go web :3000 (chi + Templ)
-        └─→ ConnectRPC / h2c (protobuf)
-              └─→ Rust API :7070 (tonic + Axum)
-                    └─→ Managed Postgres
+flux stop <id>  (or flux delete <id>)
+  → DELETE/POST /services/:id/stop
+  → API: UPDATE services SET status='stopped', upstream_addr=NULL
+  → API publishes DeprovisionEvent { service_id, slug, engine } → NATS JetStream
+
+NATS → daemon
+  → halt VM (SIGTERM → SIGKILL) or unload Wasm module
+  → detach eBPF TC filter + remove TAP device (Metal only)
+  → cleanup cgroup + artifact cache (Metal only)
+  → publish RouteRemovedEvent { slug } → NATS (platform.route_removed)
+
+platform.route_removed → every Pingora instance
+  → cache.remove(slug)   ← slug evicted immediately
 ```
 
-Go web has **zero direct database or NATS access**. All data flows through the Rust API via ConnectRPC.
+After eviction, any request for that slug gets a cache miss → DB lookup → `upstream_addr` is NULL → falls back to `api_upstream`. The service is gone.
+
+---
+
+## Observability
+
+All observability services run on the NAT VPS. Data is stored on persistent Vultr Block Storage mounted at `/mnt/observability` (survives VPS rebuilds). All ports are Tailscale-only — blocked from public by UFW.
+
+| Service | Port | Purpose |
+|---|---|---|
+| **VictoriaMetrics** | :8428 | Time-series database. Scrapes node_exporter on each compute node every 15s. 30-day retention. |
+| **VictoriaLogs** | :9428 | Log aggregation. Accepts Loki push protocol (`/insert/loki/api/v1/push`). 30-day retention. |
+| **Grafana** | :3001 | Dashboards and alerting. VictoriaMetrics as Prometheus datasource, VictoriaLogs via plugin. |
+| **Promtail** | :9080 (per node) | Log shipper on each compute node. Tails Nomad allocation logs + systemd journal. |
+| **node_exporter** | :9100 (per node) | Hardware metrics from /proc and /sys on each compute node. |
+
+### Provisioned Alerts (Grafana)
+
+| Alert | Condition | For |
+|---|---|---|
+| Node Down | `up{job="node_exporter"} == 0` | 2m |
+| Disk Space Critical | Root filesystem below 10% free | 5m |
+| High CPU | CPU usage above 90% sustained | 10m |
+| High Memory | Memory usage above 90% | 5m |
+| Observability Volume Low | `/mnt/observability` below 15% free | 5m |
+
+## Backups
+
+All cluster data replicates daily to GCP (GCS) for cross-cloud disaster recovery. Each data type has its own bucket with lifecycle policies.
+
+| Data | Schedule | Destination | Retention |
+|---|---|---|---|
+| **Postgres** | 03:00 UTC | `{project}-lm-{env}-postgres-backups` | 30d Standard → Nearline, 90d delete |
+| **VictoriaMetrics** | 03:30 UTC | `{project}-lm-{env}-victoriametrics-backups` | 30d Standard → Nearline, 90d delete |
+| **VictoriaLogs** | 04:00 UTC | `{project}-lm-{env}-victorialogs-backups` | 30d Standard → Nearline, 90d delete |
+| **S3 Artifacts** | 04:30 UTC | `{project}-lm-{env}-artifacts-backups` | 30d Nearline, 90d Coldline, 180d delete |
+| **Nomad state** | 03:00 UTC (per node) | `{project}-lm-{env}-nomad-backups` | 30d Standard → Nearline, 90d delete |
+
+A single GCP service account (`lm-{env}-backup`) with `roles/storage.objectAdmin` on all 5 buckets is distributed to all machines via cloud-init.
+
+---
+
+## GitOps & Deployment
+
+Two distinct layers — infra provisioning and workload scheduling are separate concerns.
+
+### Terraform — Infrastructure Provisioning
+
+`infra/terraform/` at repo root declares all Vultr resources as code. One `terraform apply` rebuilds the entire platform from scratch.
+
+**State backend**: Google Cloud Storage (`backend "gcs" {}`). State is stored in a per-environment GCS bucket (`liquid-metal-tfstate-dev`, `liquid-metal-tfstate-prod`). A GCP service account key lives in `keys/` (gitignored) and is referenced via `GOOGLE_APPLICATION_CREDENTIALS`.
+
+```
+infra/
+├── terraform/
+│   ├── main.tf                    # GCS backend + providers (Vultr, Cloudflare, Tailscale, Google) + variables
+│   ├── nodes.tf                   # Tailscale keys + 2× bare metal + NAT VPS + cloud-init templatefile calls
+│   ├── services.tf                # Vultr Managed Postgres + Object Storage
+│   ├── backups.tf                 # GCS backup buckets (5×) + SA + block storage
+│   ├── dns.tf                     # Cloudflare wildcard + apex A records
+│   ├── outputs.tf                 # IPs, DB URL, PgBouncer URL, observability URLs, storage keys
+│   ├── terraform.tfvars.example   # Example variable values for new environments
+│   └── templates/
+│       ├── cloud-init-nat.yaml    # NAT VPS: SSH hardening, Nomad server, NATS, TLS/certbot, HAProxy,
+│       │                          #   block storage, VictoriaMetrics, VictoriaLogs, Grafana (with alerts),
+│       │                          #   PgBouncer, backup crons (Postgres, metrics, logs, artifacts)
+│       └── cloud-init-node.yaml   # Bare metal: SSH hardening, Nomad client, Promtail, node_exporter,
+│                                  #   Nomad state backup cron, Firecracker setup (Metal only)
+└── jobs/
+    ├── api.nomad.hcl              # API — active/active on compute nodes
+    ├── daemon-metal.nomad.hcl     # Daemon — Metal tier only (node_class=metal)
+    ├── daemon-liquid.nomad.hcl    # Daemon — Liquid tier only (node_class=liquid)
+    ├── proxy.nomad.hcl            # Proxy — active/active on compute nodes
+    └── migrate.nomad.hcl          # Batch job — applies pending SQL migrations via psql
+```
+
+Providers used:
+
+| Provider | Purpose |
+|---|---|
+| `vultr/vultr` | Bare metal, VPS, Block Storage, Managed Postgres, Object Storage |
+| `cloudflare/cloudflare` | DNS — wildcard + apex → NAT VPS public IP |
+| `tailscale/tailscale` | Pre-auth keys for node join |
+| `hashicorp/google` | GCS backup buckets + service account for backup uploads |
+
+Taskfile operations:
+
+```bash
+task infra:plan    # CLOUD_ENV=dev terraform plan
+task infra:apply   # CLOUD_ENV=dev terraform apply
+task infra:destroy # tear down everything
+task infra:output  # print IPs, DB URL, storage credentials
+```
+
+All `TF_VAR_*` values are sourced from `.env` — no `terraform.tfvars` file needed in CI or locally.
+
+### Nomad — Process Scheduling
+
+Nomad runs on both bare metal nodes (clients) and the NAT VPS (server, `bootstrap_expect=1`). It manages the lifecycle of `api`, `daemon`, and `proxy` — health checks, rolling deploys, restarts on crash. It does **not** schedule Firecracker VMs — that remains the daemon's job via NATS. Schema migrations are run via a separate `migrate.nomad.hcl` batch job dispatched before rolling deploys.
+
+```
+infra/jobs/
+├── api.nomad.hcl              # api binary, :7070, active/active all nodes
+├── daemon-metal.nomad.hcl     # daemon — Metal tier (node_class=metal)
+├── daemon-liquid.nomad.hcl    # daemon — Liquid tier (node_class=liquid)
+└── proxy.nomad.hcl            # proxy binary, :443, active/active all nodes
+```
+
+Nomad node classes map to engine tier:
+
+```hcl
+# node-a-01 — set at agent config
+client {
+  node_class = "metal"
+}
+
+# node-b-01
+client {
+  node_class = "liquid"
+}
+```
+
+Daemon job spec pins to the correct tier:
+
+```hcl
+constraint {
+  attribute = "${node.class}"
+  value     = "metal"   # or "liquid"
+}
+```
+
+### GitHub Actions — CI/CD
+
+```
+.github/workflows/
+├── ci.yml        # cargo check + test on every push to dev/main
+├── release.yml   # cargo-dist builds flux CLI binary on v* tag → GitHub Release + Homebrew
+└── deploy.yml    # on merge to main → nomad job run infra/jobs/*.nomad.hcl via Tailscale
+```
+
+`deploy.yml` flow:
+
+```
+merge to main
+  → build api/daemon/proxy release binaries
+  → upload to GitHub Release (or Object Storage)
+  → SSH into NAT VPS via Tailscale
+  → nomad job run api.nomad.hcl   (rolling deploy, zero downtime)
+  → nomad job run daemon.nomad.hcl
+  → nomad job run proxy.nomad.hcl
+```
+
+Firecracker provisioning is unaffected — Nomad only restarts the daemon process, not the VMs it manages.
 
 ---
 
@@ -398,98 +622,80 @@ Go web has **zero direct database or NATS access**. All data flows through the R
 ```
 liquid-metal/
 ├── crates/
-│   ├── common/     Shared Rust types (Engine, ProvisionEvent, EngineSpec, slugify)
-│   ├── api/        Axum + tonic — ConnectRPC server :7070, publishes to NATS
-│   ├── proxy/      Pingora edge router — slug → upstream_addr
-│   └── daemon/     NATS consumer — Firecracker + Wasmtime provision loop
-├── cli/            flux CLI (Go) — login, init, deploy, status, logs, workspace, project
-│   ├── main.go
-│   └── cmd/        Cobra commands
-├── web/            Go dashboard — chi + Templ + HTMX, ConnectRPC client, :3000
-│   ├── cmd/web/    chi server entry point
-│   └── internal/
-│       ├── handler/ HTMX request handlers
-│       └── ui/      Templ components + pages
-├── mcp/            MCP server (Go) — exposes Liquid Metal ops as tools for Claude agents
-├── gen/go/         buf-generated Go protobuf + connect stubs (shared via go.work)
-├── proto/          Protobuf definitions — buf generates Rust (tonic) + Go (connect-go) stubs
-├── migrations/     PostgreSQL migrations (refinery, embedded in api)
-└── ARCHITECTURE.md This file
+│   ├── common/        Shared Rust types (Engine, ProvisionEvent, EngineSpec, slugify)
+│   ├── api/           Axum — REST/JSON server :7070, publishes to NATS
+│   ├── web/           Axum + Askama + HTMX dashboard :3000 — OIDC browser auth, calls API internally
+│   │                    PLANNED — not yet built
+│   ├── cli/           flux CLI — login, init, deploy, status, logs, workspace, project
+│   ├── proxy/         Pingora edge router — slug → upstream_addr
+│   ├── daemon/        NATS consumer — Firecracker (Metal) + Wasmtime (Liquid) provision loop
+│   └── ebpf-programs/  TC egress classifier (Aya, bpfel target) — Metal tier only
+│                          Excluded from workspace, compiled by daemon/build.rs
+├── infra/
+│   ├── terraform/     Terraform — Vultr nodes, Postgres, Object Storage, DNS, Tailscale + cloud-init templates
+│   └── jobs/          Nomad job specs — api, daemon-metal, daemon-liquid, proxy
+├── keys/              GCP service account keys for Terraform state (gitignored)
+└── migrations/        PostgreSQL migrations (refinery, embedded in api)
 ```
-
----
-
-## Proto / ConnectRPC
-
-- Definitions in `proto/` — the only contract between Go and Rust
-- `buf` generates:
-  - Rust stubs (tonic) → consumed by `crates/api`
-  - Go stubs (connect-go) → consumed by `web/` and `cli/`
-- Transport: ConnectRPC over h2c (HTTP/2 cleartext, internal Tailscale mesh only)
 
 ---
 
 ## Environment Variables
 
-| Variable                      | Used by            | Description                                   |
-|-------------------------------|--------------------|-----------------------------------------------|
-| `DATABASE_URL`                | api, proxy, daemon | Vultr Managed Postgres connection string       |
-| `NATS_URL`                    | api, daemon        | NATS JetStream address (Tailscale IP)          |
-| `BIND_ADDR`                   | api, proxy, web    | Listen address                                 |
-| `API_URL`                     | web                | Rust API ConnectRPC endpoint                   |
-| `OBJECT_STORAGE_ENDPOINT`     | api, daemon        | Vultr Object Storage endpoint (S3-compat)      |
-| `OBJECT_STORAGE_BUCKET`       | api, daemon        | Bucket name for artifacts                      |
-| `OBJECT_STORAGE_ACCESS_KEY`   | api, daemon        | Vultr Object Storage access key                |
-| `OBJECT_STORAGE_SECRET_KEY`   | api, daemon        | Vultr Object Storage secret key                |
-| `ANTHROPIC_API_KEY`           | mcp                | Anthropic API key for Claude agent features    |
-| `FLUX_API_KEY`                | mcp, cli           | Liquid Metal API key (X-Api-Key header)        |
+### Runtime (services)
 
----
+| Variable                      | Used by            | Description                                                 |
+|-------------------------------|--------------------|-------------------------------------------------------------|
+| `DATABASE_URL`                | api, proxy, daemon | Vultr Managed Postgres connection string                    |
+| `NATS_URL`                    | api, daemon, proxy | NATS JetStream address (Tailscale IP)                       |
+| `BIND_ADDR`                   | api, proxy         | Listen address                                              |
+| `INTERNAL_SECRET`             | api                | Shared secret for internal provisioning route               |
+| `OBJECT_STORAGE_ENDPOINT`     | api, daemon        | Vultr Object Storage endpoint (S3-compat)                   |
+| `OBJECT_STORAGE_BUCKET`       | api, daemon        | Bucket name for artifacts                                   |
+| `OBJECT_STORAGE_ACCESS_KEY`   | api, daemon        | Vultr Object Storage access key                             |
+| `OBJECT_STORAGE_SECRET_KEY`   | api, daemon        | Vultr Object Storage secret key                             |
+| `FLUX_API_KEY`                | cli                | Liquid Metal API key (X-Api-Key header)                     |
+| `FLUX_API_URL`                | cli                | API base URL                                                |
+| `NODE_ID`                     | daemon             | Identifies which bare metal node (e.g. `node-a-01`)         |
+| `NODE_ENGINE`                 | daemon             | `metal` or `liquid` — which engine this node runs           |
+| `METAL_CAPACITY_MB`           | api                | Total allocatable Metal RAM across all nodes (MB); used by hobby tier capacity gate. 0 = gate disabled |
+| `IDLE_TIMEOUT_SECS`           | daemon             | Seconds of no traffic before a serverless Metal VM is stopped (default: 300; set to 0 to disable for always-on services) |
+| `FC_BIN`                      | daemon             | Path to Firecracker binary (Linux, Metal nodes only)        |
+| `FC_KERNEL_PATH`              | daemon             | Path to guest kernel vmlinux (Linux)                        |
+| `BRIDGE`                      | daemon             | TAP bridge name, e.g. `br0` (Linux)                         |
+| `ARTIFACT_DIR`                | daemon             | Local artifact cache directory                              |
 
-## MCP Server
+### Infrastructure provisioning (Terraform via Taskfile)
 
-The `mcp/` service exposes Liquid Metal operations as tools for Claude and other MCP-compatible agents. It follows the same architectural constraint as `web/` — no direct database or NATS access, all data flows through the Rust API via ConnectRPC.
+| Variable                        | Used by   | Description                                              |
+|---------------------------------|-----------|----------------------------------------------------------|
+| `VULTR_API_KEY`                 | Terraform | Vultr API key                                            |
+| `VULTR_SSH_KEY_ID`              | Terraform | SSH key ID to inject into nodes (from Vultr console)     |
+| `VULTR_BARE_METAL_PLAN`         | Terraform | Bare metal plan ID, default `vbm-4c-32gb`                |
+| `VULTR_VPS_PLAN`                | Terraform | VPS plan for NAT node, default `vc2-2c-4gb`              |
+| `VULTR_OS_ID`                   | Terraform | OS image ID (Ubuntu 24.04 LTS)                           |
+| `CLOUDFLARE_API_TOKEN`          | Terraform | Cloudflare API token (Zone:DNS:Edit + certbot DNS-01)    |
+| `CLOUDFLARE_ZONE_ID`            | Terraform | Cloudflare zone ID for your domain                       |
+| `DOMAIN`                        | Terraform | Root domain, e.g. `liquidmetal.dev`                      |
+| `TAILSCALE_API_KEY`             | Terraform | Tailscale API key for generating pre-auth keys           |
+| `TAILSCALE_TAILNET`             | Terraform | Tailscale tailnet name, e.g. `yourname.github`           |
+| `GRAFANA_ADMIN_PASSWORD`        | Terraform | Grafana admin UI password                                |
+| `GCP_PROJECT`                   | Terraform | GCP project ID for backup buckets                        |
+| `GCP_REGION`                    | Terraform | GCS bucket region, default `us-central1`                 |
+| `GOOGLE_APPLICATION_CREDENTIALS`| Terraform | Path to GCP service account JSON — `keys/*.json`         |
 
-### Data Flow
-
-```
-Claude / Agent SDK client
-    │ MCP (JSON-RPC over stdio or SSE)
-    ▼
-mcp/        Go MCP server — tool definitions + ConnectRPC client
-    │ ConnectRPC / h2c
-    ▼
-Rust API :7070
-    │
-    ├─→ Managed Postgres
-    └─→ NATS JetStream
-```
-
-### Transport
-
-| Mode   | Use case                                          |
-|--------|---------------------------------------------------|
-| stdio  | Local dev — Claude Desktop, Claude Code           |
-| SSE    | Production — hosted agent pipelines               |
-
-### Auth
-
-The MCP server authenticates to the Rust API using `X-Api-Key: $FLUX_API_KEY` — the same header used by the CLI. No separate auth layer.
-
-### Constraint: No Destructive Tools Without Confirmation
-
-Tools that modify or delete resources require an explicit `confirm: true` argument. An agent cannot accidentally deprovision a running service.
+See `infra/terraform/terraform.tfvars.example` for a complete variable reference.
 
 ---
 
 ## Hard Constraints
 
-- **No Kubernetes, K3s, or any orchestrator**
-- **No managed compute** — bare metal for all execution (Vultr Managed Postgres + Object Storage are fine)
-- **No ORMs** — tokio-postgres with raw SQL (Rust); Go web has zero DB access
-- **No SPA frameworks** — HTMX + Templ only, Alpine.js sparingly
+- **No Kubernetes, K3s, or any container orchestrator** — Nomad for process scheduling only
+- **No managed compute** — bare metal for execution (Vultr Managed Postgres + Object Storage are fine)
+- **No ORMs** — `tokio-postgres` with raw SQL everywhere
 - **No hardcoded addresses** — all config via env vars
-- **No rounded corners** — `rounded-none` everywhere in UI
 - **Firecracker + TAP are Linux-only** — gated with `#[cfg(target_os = "linux")]`
 - **Wasmtime runs on all platforms** — safe for local macOS dev
-- **Go web never touches Postgres or NATS directly**
+- **All Rust** — Zig used only as a cross-compilation linker for Windows CLI builds
+- **Terraform owns infra** — no manual Vultr resource creation; everything declared in `infra/`
+- **Nomad does not schedule VMs** — Firecracker lifecycle is owned exclusively by the daemon
