@@ -8,11 +8,13 @@ use tokio::task::JoinSet;
 
 use common::events::{
     DeprovisionEvent, Engine, LiquidUsageEvent, MetalUsageEvent, ProvisionEvent,
-    RouteRemovedEvent, ServiceCrashedEvent, SuspendEvent, TrafficPulseEvent,
+    RouteRemovedEvent, SuspendEvent, TrafficPulseEvent,
     STREAM_NAME, SUBJECT_DEPROVISION, SUBJECT_PROVISION, SUBJECT_ROUTE_REMOVED,
-    SUBJECT_SERVICE_CRASHED, SUBJECT_SUSPEND, SUBJECT_TRAFFIC_PULSE,
+    SUBJECT_SUSPEND, SUBJECT_TRAFFIC_PULSE,
     SUBJECT_USAGE_LIQUID, SUBJECT_USAGE_METAL,
 };
+#[cfg(target_os = "linux")]
+use common::events::{ServiceCrashedEvent, SUBJECT_SERVICE_CRASHED};
 use common::{Features, config::{env_or, require_env}};
 use daemon::deprovision;
 use daemon::provision::{self, ProvisionConfig, ProvisionCtx};
@@ -35,7 +37,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "daemon=info".into()),
+                .unwrap_or_else(|_| "daemon=info,liquid_metal_daemon=info".into()),
         )
         .init();
 
@@ -156,6 +158,7 @@ async fn main() -> Result<()> {
         }
     }
 
+
     // Rebuild VM registry from DB — services provisioned by a previous daemon
     // instance need handles so deprovision events can clean them up.
     {
@@ -195,6 +198,7 @@ async fn main() -> Result<()> {
             }
         }
     }
+
 
     // NATS — connect here so nc can be cloned into ProvisionCtx for plain publishes.
     // js (JetStream) gets nc.clone() and is used for durable consumers below.
@@ -624,6 +628,10 @@ async fn main() -> Result<()> {
         .create_consumer(async_nats::jetstream::consumer::pull::Config {
             durable_name:   Some(CONSUMER_PROVISION.to_string()),
             filter_subject: SUBJECT_PROVISION.to_string(),
+            // Wasm compilation (Module::new) can take 60s+ in debug builds for
+            // large binaries. Default ack_wait is 30s — too short, causes
+            // redelivery loops that pile up competing compilations.
+            ack_wait: std::time::Duration::from_secs(300),
             ..Default::default()
         })
         .await

@@ -15,9 +15,11 @@ struct RestartResponse {
     service: Service,
 }
 
-pub async fn run(config: &Config, service_id: &str) -> Result<()> {
+pub async fn run(config: &Config, service_ref: &str) -> Result<()> {
     let token = config.require_token()?;
     let client = ApiClient::new(config.api_url(), Some(token));
+
+    let service_id = client.resolve_service(service_ref).await?;
 
     let resp: RestartResponse = client
         .post(&format!("/services/{}/restart", service_id), &serde_json::Value::Null)

@@ -6,6 +6,7 @@ use crate::config::Config;
 
 #[derive(Deserialize)]
 struct Service {
+    id: String,
     name: String,
     engine: String,
     status: String,
@@ -22,9 +23,9 @@ pub async fn run(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<20} {:<10} {:<15} {}", "NAME", "ENGINE", "STATUS", "UPSTREAM");
+    println!("{:<38} {:<20} {:<10} {:<15} {}", "ID", "NAME", "ENGINE", "STATUS", "UPSTREAM");
     for s in &services {
-        println!("{:<20} {:<10} {:<15} {}", s.name, s.engine, s.status, s.upstream_addr);
+        println!("{:<38} {:<20} {:<10} {:<15} {}", s.id, s.name, s.engine, s.status, s.upstream_addr);
     }
     Ok(())
 }

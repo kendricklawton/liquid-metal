@@ -52,26 +52,84 @@ struct WasmService {
     timeout:      std::time::Duration,
 }
 
+/// Compile a wasm module, caching the native code to disk.
+///
+/// Cache key: `{wasm_path}.compiled` — a serialized Cranelift artifact keyed by
+/// the SHA-256 of the original `.wasm` file (stored in the first 32 bytes).
+/// On cache hit the module is deserialized in <10ms instead of 60-180s.
+///
+/// # Safety
+/// `Module::deserialize` is `unsafe` because a corrupt/malicious cache file could
+/// cause UB. We mitigate this by:
+///   1. Storing a SHA-256 prefix and rejecting mismatches before deserializing.
+///   2. The cache file lives in ARTIFACT_DIR which is daemon-owned.
+async fn compile_or_cache(engine: &Arc<Engine>, wasm_path: &str, app_name: &str) -> Result<Module> {
+    use sha2::{Sha256, Digest};
+
+    let cache_path = format!("{wasm_path}.compiled");
+    let wasm_bytes = tokio::fs::read(wasm_path)
+        .await
+        .with_context(|| format!("reading {wasm_path}"))?;
+
+    let sha = Sha256::digest(&wasm_bytes);
+
+    // Try cache hit — SHA prefix must match to guard against stale/corrupt cache.
+    if let Ok(cached) = tokio::fs::read(&cache_path).await {
+        if cached.len() > 32 && cached[..32] == sha[..] {
+            tracing::info!(app = app_name, "wasm cache hit — deserializing");
+            // SAFETY: cache file is daemon-owned, SHA-verified, and written by
+            // Module::serialize from the same wasmtime version.
+            match unsafe { Module::deserialize(engine, &cached[32..]) } {
+                Ok(m) => return Ok(m),
+                Err(e) => {
+                    tracing::warn!(error = %e, "wasm cache deserialize failed — recompiling");
+                    let _ = tokio::fs::remove_file(&cache_path).await;
+                }
+            }
+        } else {
+            tracing::info!(app = app_name, "wasm cache stale (SHA mismatch) — recompiling");
+            let _ = tokio::fs::remove_file(&cache_path).await;
+        }
+    }
+
+    // Cache miss — full compilation on the blocking threadpool.
+    tracing::info!(app = app_name, bytes = wasm_bytes.len(), "compiling wasm module (first time may take minutes for large Go binaries)");
+    let engine_clone = engine.clone();
+    let module = tokio::task::spawn_blocking(move || Module::new(&engine_clone, &wasm_bytes))
+        .await
+        .context("wasm compile task panicked")?
+        .context("compiling wasm module")?;
+
+    // Serialize to cache: [32-byte SHA][serialized module]
+    match module.serialize() {
+        Ok(serialized) => {
+            let mut cache_data = Vec::with_capacity(32 + serialized.len());
+            cache_data.extend_from_slice(&sha);
+            cache_data.extend_from_slice(&serialized);
+            if let Err(e) = tokio::fs::write(&cache_path, &cache_data).await {
+                tracing::warn!(error = %e, "failed to write wasm cache — next deploy will recompile");
+            } else {
+                tracing::info!(app = app_name, cache = cache_path, "wasm module cached");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "Module::serialize failed — caching disabled for this module"),
+    }
+
+    Ok(module)
+}
+
 /// Compile `wasm_path`, bind a local TCP listener, and start serving requests.
 /// Returns the port number written to the `services` table as `upstream_addr`.
 ///
 /// `invocations` is an externally-owned counter incremented on every request.
 /// The usage reporter reads and resets it periodically to publish billing events.
 pub async fn serve(wasm_path: String, app_name: String, invocations: Arc<AtomicU64>) -> Result<u16> {
-    // Compile once — expensive (~100 ms for a Go Wasm binary); amortised across
-    // every request for the lifetime of this service.
     let mut cfg = Config::new();
     cfg.consume_fuel(true);
     cfg.max_wasm_stack(WASM_STACK_BYTES);
     let engine = Arc::new(Engine::new(&cfg).context("wasmtime engine")?);
 
-    let wasm_bytes = tokio::fs::read(&wasm_path)
-        .await
-        .with_context(|| format!("reading {wasm_path}"))?;
-
-    let module = Arc::new(
-        Module::new(&engine, &wasm_bytes).context("compiling wasm module")?,
-    );
+    let module = Arc::new(compile_or_cache(&engine, &wasm_path, &app_name).await?);
 
     let timeout_secs = std::env::var("WASM_TIMEOUT_SECS")
         .ok()

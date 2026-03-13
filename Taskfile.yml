@@ -34,6 +34,12 @@ tasks:
     cmds:
       - docker exec -it liquid-metal-db-1 psql -U liquid-metal liquid-metal
 
+  # ── Database ─────────────────────────────────────────────────────────────
+  migrate:
+    desc: "Run database migrations (requires Postgres via docker compose)"
+    cmds:
+      - cargo run -p api -- --migrate
+
   # ── Build ─────────────────────────────────────────────────────────────────
   build:
     desc: "Build all crates (release)"
