@@ -39,6 +39,16 @@ docker compose up -d
 ```
 Starts: Postgres (:5432), NATS (:4222), RustFS S3 mock (:9000, console :9001)
 
+### First run only — Migrations
+```bash
+# With Taskfile
+task migrate
+
+# Without Taskfile
+cargo run -p api -- --migrate
+```
+Applies all schema migrations. Only needed on a fresh DB or after pulling new migrations. The API will refuse to start if the schema is behind.
+
 ### Tab 2 — Rust API
 ```bash
 # With Taskfile
@@ -57,7 +67,7 @@ task dev:daemon
 # Without Taskfile
 NATS_URL="nats://127.0.0.1:4222" RUST_LOG="daemon=debug" cargo run -p daemon
 ```
-Waits for: `TAP counter initialized from DB`
+Waits for: `TAP index set initialized from DB`
 
 > On macOS: Firecracker/TAP are skipped automatically. Only Liquid (Wasm) deployments work locally.
 
@@ -67,7 +77,7 @@ Waits for: `TAP counter initialized from DB`
 
 ```bash
 flux login
-# Opens browser → WorkOS → token saved to ~/.config/flux/config.yaml
+# OIDC device flow → Zitadel → token saved to ~/.config/flux/config.yaml
 ```
 
 Verify:
@@ -167,7 +177,9 @@ cargo test --workspace
 
 ### Integration tests (requires infra + API running)
 ```bash
-cargo test -p api --test api
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/liquidmetal \
+INTERNAL_SECRET=test-secret \
+cargo test -p api --test api -- --include-ignored
 ```
 
 ### API smoke tests (requires infra + API running)
@@ -327,7 +339,7 @@ flux deploy    # liquid-metal.toml already has project_id from flux init
 | Symptom | Check |
 |---------|-------|
 | `flux: command not found` | `export PATH="$PATH:$HOME/.cargo/bin"` and reinstall |
-| `flux login` fails | `FLUX_WORKOS_CLIENT_ID` in `.env`, confirm Docker infra is running |
+| `flux login` fails | `OIDC_CLIENT_ID` in `.env`, confirm Docker infra is running |
 | `flux init` fails | API running? (`cargo run -p api` or `task dev:api`) |
 | `flux deploy` upload fails | RustFS running? (`docker compose up -d rustfs`) Check `http://localhost:9001` |
 | Status stuck at `provisioning` | Check daemon logs for errors |

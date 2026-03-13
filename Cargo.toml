@@ -47,7 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono       = { version = "0.4", features = ["serde"] }
 # Utilities
 uuid     = { version = "1", features = ["v4", "v7", "serde"] }
-clap     = { version = "4", features = ["derive"] }
+clap     = { version = "4", features = ["derive", "suggestions", "help"] }
 refinery = { version = "0.8", features = ["tokio-postgres"] }
 sha2     = "0.10"
 hex      = "0.4"
@@ -88,6 +88,14 @@ installers = ["shell", "powershell", "homebrew"]
 # tap injected by CI
 # Only the CLI binary is distributed — API/daemon/proxy are server-side
 dist = false
+
+# Wasmtime's Cranelift codegen is painfully slow in debug builds (~60s for a
+# 7MB Go wasm binary). Optimise just these crates so `cargo run` dev cycles
+# don't stall on wasm compilation.
+[profile.dev.package.wasmtime]
+opt-level = 2
+[profile.dev.package.cranelift-codegen]
+opt-level = 2
 
 # Linux-only (daemon crate)
 [workspace.metadata]

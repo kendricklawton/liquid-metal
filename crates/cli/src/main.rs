@@ -31,23 +31,29 @@ enum Commands {
     Status,
     /// Stream logs for a service
     Logs {
-        service_id: String,
+        /// Service slug or UUID
+        service: String,
         #[arg(long, default_value_t = 100)]
         limit: i32,
     },
     /// Stop a running service
     Stop {
-        service_id: String,
+        /// Service slug or UUID
+        service: String,
     },
     /// Restart a service
     Restart {
-        service_id: String,
+        /// Service slug or UUID
+        service: String,
     },
     /// Create a project and write liquid-metal.toml (auto-detects language)
     Init {
         /// Override the detected service name
         #[arg(long)]
         name: Option<String>,
+        /// Engine: "liquid" (Wasm) or "metal" (Firecracker microVM)
+        #[arg(long)]
+        engine: Option<String>,
     },
     /// Build and deploy the current service
     Deploy,
@@ -114,12 +120,12 @@ async fn main() {
         Commands::Logout => commands::logout::run(&mut config).await,
         Commands::Whoami => commands::whoami::run(&config).await,
         Commands::Status => commands::status::run(&config).await,
-        Commands::Logs { service_id, limit } => {
-            commands::logs::run(&config, &service_id, limit).await
+        Commands::Logs { service, limit } => {
+            commands::logs::run(&config, &service, limit).await
         }
-        Commands::Stop { service_id } => commands::stop::run(&config, &service_id).await,
-        Commands::Restart { service_id } => commands::restart::run(&config, &service_id).await,
-        Commands::Init { name } => commands::init::run(&config, name).await,
+        Commands::Stop { service } => commands::stop::run(&config, &service).await,
+        Commands::Restart { service } => commands::restart::run(&config, &service).await,
+        Commands::Init { name, engine } => commands::init::run(&config, name, engine).await,
         Commands::Deploy => commands::deploy::run(&config).await,
         Commands::Workspace(args) => match args.command {
             WorkspaceCommands::List => commands::workspace::run_list(&config).await,
