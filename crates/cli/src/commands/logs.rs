@@ -10,9 +10,11 @@ struct LogLine {
     message: String,
 }
 
-pub async fn run(config: &Config, service_id: &str, limit: i32) -> Result<()> {
+pub async fn run(config: &Config, service_ref: &str, limit: i32) -> Result<()> {
     let token = config.require_token()?;
     let client = ApiClient::new(config.api_url(), Some(token));
+
+    let service_id = client.resolve_service(service_ref).await?;
 
     let lines: Vec<LogLine> = client
         .get(&format!("/services/{}/logs?limit={}", service_id, limit))

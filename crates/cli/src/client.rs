@@ -79,6 +79,26 @@ impl ApiClient {
         Ok(resp.json().await?)
     }
 
+    /// Resolve a service reference (slug or UUID) to a UUID string.
+    pub async fn resolve_service(&self, service_ref: &str) -> Result<String> {
+        if uuid::Uuid::parse_str(service_ref).is_ok() {
+            return Ok(service_ref.to_string());
+        }
+
+        #[derive(serde::Deserialize)]
+        struct ServiceEntry {
+            id: String,
+            slug: String,
+        }
+
+        let services: Vec<ServiceEntry> = self.get("/services").await?;
+        let matched = services
+            .iter()
+            .find(|s| s.slug == service_ref)
+            .ok_or_else(|| anyhow::anyhow!("no service {:?} found", service_ref))?;
+        Ok(matched.id.clone())
+    }
+
     pub async fn post_no_body(&self, path: &str) -> Result<()> {
         let mut req = self.client.post(format!("{}{}", self.base_url, path));
         if let Some(token) = &self.token {
