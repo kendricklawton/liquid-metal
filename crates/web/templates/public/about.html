@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}About{% endblock %}
+{% block description %}Hardware-isolated compute with full infrastructure transparency. No mystery resource pools.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  <div class="max-w-2xl mb-20">
+    <p class="lm-label mb-3">// about</p>
+    <h1 class="text-4xl font-black tracking-tight mb-6">Liquid Metal</h1>
+    <p class="text-base text-zwl-muted dark:text-zw-muted leading-relaxed">
+      A deploy platform for developers who ship compiled code. Push a binary, get an endpoint.
+    </p>
+  </div>
+
+  <div class="space-y-8">
+
+    {# Problem #}
+    <div class="glass-card grid md:grid-cols-3 overflow-hidden">
+      <div class="p-8 col-span-1 border-b md:border-b-0 md:border-r border-zwl-border dark:border-zw-border">
+        <p class="lm-label mb-3">// problem</p>
+        <h2 class="text-xl font-black tracking-tight">The mystery resource pool</h2>
+      </div>
+      <div class="p-8 col-span-2">
+        <p class="text-sm text-zwl-muted dark:text-zw-muted leading-relaxed">
+          Existing platforms force a choice: managed convenience with opaque resource sharing, or full control with management overhead. Your "2 vCPU" container might share a physical core with fifty other tenants. Performance is a lottery.
+        </p>
+      </div>
+    </div>
+
+    {# Approach #}
+    <div class="glass-card grid md:grid-cols-3 overflow-hidden">
+      <div class="p-8 col-span-1 border-b md:border-b-0 md:border-r border-zwl-border dark:border-zw-border">
+        <p class="lm-label mb-3">// approach</p>
+        <h2 class="text-xl font-black tracking-tight">Dedicated isolation</h2>
+      </div>
+      <div class="p-8 col-span-2">
+        <p class="text-sm text-zwl-muted dark:text-zw-muted leading-relaxed mb-4">
+          Every Metal workload runs in its own Firecracker microVM with dedicated vCPU and RAM. No oversubscription. No noisy neighbors. What you allocate is what you get.
+        </p>
+        <p class="text-sm text-zwl-muted dark:text-zw-muted leading-relaxed">
+          For lightweight workloads, Liquid (WebAssembly) provides sub-millisecond execution with per-invocation billing. Same binary, different runtime.
+        </p>
+      </div>
+    </div>
+
+    {# Stack #}
+    <div>
+      <p class="lm-label mb-6">// zero-trust infrastructure</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">No Kubernetes</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">No managed orchestrators. Bare metal or death.</p>
+        </div>
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">Firecracker + Jailer</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">VM-level isolation with seccomp and namespace sandboxing.</p>
+        </div>
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">eBPF (Aya)</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Per-tenant network isolation &mdash; TC egress classifiers block cross-tenant traffic at the kernel level.</p>
+        </div>
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">cgroup v2</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Triple-lock resource control: hypervisor limits, kernel I/O limits, and network shaping.</p>
+        </div>
+      </div>
+    </div>
+
+    {# Built with #}
+    <div>
+      <p class="lm-label mb-6">// built with</p>
+      <div class="glass-card p-8">
+        <p class="text-sm text-zwl-muted dark:text-zw-muted leading-relaxed font-mono border-l-2 pl-4 border-zwl-border dark:border-zw-border">
+          The entire platform is written in Rust. API, daemon, proxy, CLI &mdash; all Rust. Postgres for state. NATS JetStream for event delivery. Pingora for edge routing. No ORMs. No frameworks. Raw SQL and hand-rolled infrastructure.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+{% endblock %}

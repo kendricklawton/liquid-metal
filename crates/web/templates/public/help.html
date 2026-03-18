@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Help{% endblock %}
+{% block description %}Answers to common questions and how to get help.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  <div class="mb-16">
+    <p class="lm-label mb-3">// help</p>
+    <h1 class="text-4xl font-black tracking-tight mb-3">Help &amp; Support</h1>
+    <p class="text-zwl-muted dark:text-zw-muted max-w-lg">Answers to common questions and how to get in touch.</p>
+  </div>
+
+  {# FAQ #}
+  <div class="mb-16">
+    <p class="lm-label mb-6">// faq</p>
+    <div class="glass-card divide-y divide-zwl-border dark:divide-zw-border">
+
+      <div x-data="{ open: false }">
+        <button @click="open = !open" :aria-expanded="open" class="w-full flex items-center justify-between px-6 py-5 text-left transition-colors">
+          <span class="text-sm font-bold">What languages are supported?</span>
+          <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
+        </button>
+        <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
+          Any language that compiles to a Linux x86_64 static binary (Metal) or a WASI WebAssembly module (Liquid). Go, Rust, Zig, C, and C++ work out of the box. The CLI auto-detects Go and Rust projects and configures build commands automatically.
+        </div>
+      </div>
+
+      <div x-data="{ open: false }">
+        <button @click="open = !open" :aria-expanded="open" class="w-full flex items-center justify-between px-6 py-5 text-left transition-colors">
+          <span class="text-sm font-bold">What's the difference between Metal and Liquid?</span>
+          <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
+        </button>
+        <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
+          <strong>Metal</strong> runs your code in a Firecracker microVM &mdash; a full Linux kernel with dedicated CPU, RAM, and disk. Best for long-running servers and workloads needing filesystem access.<br><br>
+          <strong>Liquid</strong> runs your code as a WebAssembly module inside Wasmtime. Best for request handlers and workloads where sub-millisecond startup matters.
+        </div>
+      </div>
+
+      <div x-data="{ open: false }">
+        <button @click="open = !open" :aria-expanded="open" class="w-full flex items-center justify-between px-6 py-5 text-left transition-colors">
+          <span class="text-sm font-bold">How does billing work?</span>
+          <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
+        </button>
+        <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
+          The Hobby tier is free with a 2-service limit. Pro ($10/month) and Team ($20/month) include monthly credits. Usage beyond credits is billed at $0.10/vCPU-hour for Metal and $0.000001/invocation for Liquid. Top up credits anytime via Stripe.
+        </div>
+      </div>
+
+      <div x-data="{ open: false }">
+        <button @click="open = !open" :aria-expanded="open" class="w-full flex items-center justify-between px-6 py-5 text-left transition-colors">
+          <span class="text-sm font-bold">Is there a free tier?</span>
+          <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
+        </button>
+        <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
+          Yes. The Hobby tier is free forever with up to 2 services. Services idle-timeout after 5 minutes of inactivity. No credit card required.
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  {# Troubleshooting #}
+  <div class="mb-16">
+    <p class="lm-label mb-6">// troubleshooting</p>
+    <div class="glass-card overflow-hidden">
+      <div class="grid grid-cols-2 gap-4 px-6 py-3 border-b border-zwl-border dark:border-zw-border text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">
+        <span>Symptom</span><span>Fix</span>
+      </div>
+      <div class="divide-y divide-zwl-border dark:divide-zw-border">
+        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
+          <code class="font-mono">flux: command not found</code>
+          <span class="text-zwl-muted dark:text-zw-muted">Ensure <code class="font-mono">~/.cargo/bin</code> is on your PATH</span>
+        </div>
+        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
+          <code class="font-mono">flux login fails</code>
+          <span class="text-zwl-muted dark:text-zw-muted">Check internet connectivity and OIDC provider status</span>
+        </div>
+        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
+          <code class="font-mono">flux deploy upload fails</code>
+          <span class="text-zwl-muted dark:text-zw-muted">Check if the API and object storage are running</span>
+        </div>
+        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
+          <code class="font-mono">Status stuck at "provisioning"</code>
+          <span class="text-zwl-muted dark:text-zw-muted">Check daemon logs for errors</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# Contact #}
+  <div class="glass-card p-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+    <div>
+      <p class="lm-label mb-2">// contact</p>
+      <h2 class="text-xl font-black tracking-tight mb-1">Still need help?</h2>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted">Reach out and we'll get back to you.</p>
+    </div>
+    <a href="mailto:support@liquidmetal.dev" class="shrink-0 inline-flex items-center px-8 py-3 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-[11px] font-mono font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+      Email Support
+    </a>
+  </div>
+
+</div>
+{% endblock %}
