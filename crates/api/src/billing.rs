@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use axum::Extension;
 use axum::extract::{Json, State};
 use axum::http::{HeaderMap, StatusCode};
 use futures::StreamExt;
@@ -25,6 +26,9 @@ use common::events::{
     LiquidUsageEvent, MetalUsageEvent, SuspendEvent,
     SUBJECT_SUSPEND, SUBJECT_USAGE_LIQUID, SUBJECT_USAGE_METAL,
 };
+
+use common::contract;
+use crate::routes;
 
 use crate::AppState;
 use crate::routes::{ApiError, db_conn};
@@ -64,8 +68,10 @@ pub async fn usage_subscriber(state: Arc<AppState>) {
 }
 
 async fn usage_subscribe_loop(state: &AppState) -> Result<()> {
-    let mut metal_sub  = state.nats_client.subscribe(SUBJECT_USAGE_METAL).await?;
-    let mut liquid_sub = state.nats_client.subscribe(SUBJECT_USAGE_LIQUID).await?;
+    // Queue group ensures only one API instance processes each usage event,
+    // preventing duplicate inserts when scaling to multiple instances.
+    let mut metal_sub  = state.nats_client.queue_subscribe(SUBJECT_USAGE_METAL, "api-billing".into()).await?;
+    let mut liquid_sub = state.nats_client.queue_subscribe(SUBJECT_USAGE_LIQUID, "api-billing".into()).await?;
 
     tracing::info!("billing: usage subscriber connected");
 
@@ -122,9 +128,11 @@ async fn insert_liquid_usage(state: &AppState, ev: &LiquidUsageEvent) -> Result<
 
 // ── Billing aggregator ──────────────────────────────────────────────────────
 
-/// Runs every 60s: aggregates unbilled usage_events into credit deductions.
+/// Aggregates unbilled usage_events into credit deductions at a configurable interval.
 pub async fn billing_aggregator(state: Arc<AppState>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    let secs: u64 = common::config::env_or("BILLING_INTERVAL_SECS", "60").parse().unwrap_or(60);
+    tracing::info!(billing_interval_secs = secs, "billing aggregator configured");
+    let mut interval = tokio::time::interval(Duration::from_secs(secs));
     loop {
         interval.tick().await;
         if let Err(e) = aggregate_once(&state).await {
@@ -138,13 +146,22 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
     let txn = db.build_transaction().start().await?;
 
     // Aggregate unbilled Metal usage per workspace.
+    // The CTE locks rows with FOR UPDATE SKIP LOCKED so that concurrent
+    // API instances (each running their own billing_aggregator) don't
+    // double-bill the same usage events. The second instance skips rows
+    // already locked by the first, matching the outbox poller pattern.
     let metal_rows = txn.query(
-        "SELECT workspace_id, \
+        "WITH locked AS ( \
+             SELECT id, workspace_id, quantity, vcpu, memory_mb \
+             FROM usage_events \
+             WHERE billed = false AND engine = 'metal' \
+             FOR UPDATE SKIP LOCKED \
+         ) \
+         SELECT workspace_id, \
                 SUM(((quantity + 59) / 60) * vcpu)    AS vcpu_minutes, \
                 SUM(((quantity + 59) / 60) * memory_mb) AS mb_minutes, \
                 array_agg(id) AS ids \
-         FROM usage_events \
-         WHERE billed = false AND engine = 'metal' \
+         FROM locked \
          GROUP BY workspace_id",
         &[],
     ).await.context("aggregate metal usage")?;
@@ -169,15 +186,21 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
     }
 
     // Aggregate unbilled Liquid usage per workspace (join tier to avoid N+1).
+    // Same FOR UPDATE SKIP LOCKED pattern as Metal above.
     let liquid_rows = txn.query(
-        "SELECT ue.workspace_id, \
-                SUM(ue.quantity) AS total_invocations, \
-                array_agg(ue.id) AS ids, \
+        "WITH locked AS ( \
+             SELECT id, workspace_id, quantity \
+             FROM usage_events \
+             WHERE billed = false AND engine = 'liquid' \
+             FOR UPDATE SKIP LOCKED \
+         ) \
+         SELECT l.workspace_id, \
+                SUM(l.quantity) AS total_invocations, \
+                array_agg(l.id) AS ids, \
                 COALESCE(w.tier, 'hobby') AS tier \
-         FROM usage_events ue \
-         LEFT JOIN workspaces w ON w.id = ue.workspace_id \
-         WHERE ue.billed = false AND ue.engine = 'liquid' \
-         GROUP BY ue.workspace_id, w.tier",
+         FROM locked l \
+         LEFT JOIN workspaces w ON w.id = l.workspace_id \
+         GROUP BY l.workspace_id, w.tier",
         &[],
     ).await.context("aggregate liquid usage")?;
 
@@ -291,13 +314,18 @@ async fn deduct_credits(
     let mut topup_balance: i64 = row.get("topup_credits");
 
     // Deduct from subscription credits first, then top-up.
+    // If cost exceeds both balances, topup goes negative — the overage is
+    // tracked as debt rather than silently absorbed by the platform.
+    // This is intentional: the billing tick (60s) + suspend drain period (~30s)
+    // means a few seconds of usage may accrue after balance hits zero.
+    // Max overage for Pro (2 vCPU, 512 MB, 90s): ~5,100 µcr ≈ $0.005.
     let mut remaining = cost;
     let sub_deduction = remaining.min(sub_balance);
     sub_balance -= sub_deduction;
     remaining -= sub_deduction;
 
-    let topup_deduction = remaining.min(topup_balance);
-    topup_balance -= topup_deduction;
+    // Subscription credits never go negative; overflow spills into topup.
+    topup_balance -= remaining;
 
     // Update balances.
     txn.execute(
@@ -349,10 +377,12 @@ async fn check_suspensions(state: &AppState) -> Result<()> {
 
 // ── Monthly credit reset ────────────────────────────────────────────────────
 
-/// Runs daily. Checks for workspaces whose billing period has ended,
+/// Checks for workspaces whose billing period has ended,
 /// expires remaining subscription credits, and applies new monthly credits.
 pub async fn monthly_credit_reset(state: Arc<AppState>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(3600)); // hourly check
+    let secs: u64 = common::config::env_or("CREDIT_RESET_INTERVAL_SECS", "3600").parse().unwrap_or(3600);
+    tracing::info!(credit_reset_interval_secs = secs, "monthly credit reset configured");
+    let mut interval = tokio::time::interval(Duration::from_secs(secs));
     loop {
         interval.tick().await;
         if let Err(e) = reset_once(&state).await {
@@ -424,6 +454,10 @@ async fn reset_once(state: &AppState) -> Result<()> {
 
 // ── Stripe webhook handler ──────────────────────────────────────────────────
 
+#[utoipa::path(post, path = "/webhooks/stripe", request_body(content = String, description = "Raw Stripe webhook payload"), responses(
+    (status = 200, description = "Webhook processed"),
+    (status = 400, description = "Invalid payload or signature"),
+), tag = "Webhooks")]
 /// POST /webhooks/stripe — public route, verified by Stripe signature.
 pub async fn stripe_webhook(
     State(state): State<Arc<AppState>>,
@@ -561,39 +595,47 @@ async fn handle_checkout_completed(state: &AppState, object: &serde_json::Value)
     let txn = db.build_transaction().start().await
         .map_err(|e| ApiError::internal(format!("txn: {e}")))?;
 
-    // Add to topup_credits (these roll over).
+    // Idempotent guard — attempt the ledger insert FIRST. stripe_session_id has
+    // a UNIQUE index, so duplicate webhook deliveries hit the constraint before
+    // we touch topup_credits. On conflict the txn rolls back cleanly.
+    //
+    // We use balance_after = 0 as a placeholder here and patch it after the
+    // UPDATE below, keeping the ledger accurate without a second round-trip.
+    let result = txn.execute(
+        "INSERT INTO credit_ledger (workspace_id, amount, kind, description, reference_id, balance_after, stripe_session_id) \
+         SELECT id, $1, 'topup', 'credit top-up', $2, 0, $4 \
+         FROM workspaces WHERE stripe_customer_id = $3 AND deleted_at IS NULL",
+        &[&credits, &payment_intent, &customer_id, &session_id],
+    ).await;
+
+    match result {
+        Ok(_) => {}
+        Err(e) if e.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) => {
+            // Duplicate webhook — nothing was mutated, txn rolls back on drop.
+            tracing::info!(target: "audit", action = "topup_dedup", session_id, customer_id, "duplicate checkout webhook, skipping");
+            return Ok(());
+        }
+        Err(e) => return Err(ApiError::internal(format!("ledger: {e}"))),
+    }
+
+    // Now safe to credit — we know this session_id is unique.
     txn.execute(
         "UPDATE workspaces SET topup_credits = topup_credits + $1, updated_at = NOW() \
          WHERE stripe_customer_id = $2 AND deleted_at IS NULL",
         &[&credits, &customer_id],
     ).await.map_err(|e| ApiError::internal(format!("topup: {e}")))?;
 
-    // Get new total for ledger entry.
+    // Patch the ledger row with the real balance_after.
     let row = txn.query_one(
         "SELECT balance_credits + topup_credits AS total FROM workspaces WHERE stripe_customer_id = $1",
         &[&customer_id],
     ).await.map_err(|e| ApiError::internal(format!("balance query: {e}")))?;
     let balance_after: i64 = row.get("total");
 
-    // Idempotent insert — stripe_session_id has a UNIQUE index. Duplicate webhook
-    // deliveries hit the constraint and we return OK (already processed).
-    let result = txn.execute(
-        "INSERT INTO credit_ledger (workspace_id, amount, kind, description, reference_id, balance_after, stripe_session_id) \
-         SELECT id, $1, 'topup', 'credit top-up', $2, $3, $5 \
-         FROM workspaces WHERE stripe_customer_id = $4 AND deleted_at IS NULL",
-        &[&credits, &payment_intent, &balance_after, &customer_id, &session_id],
-    ).await;
-
-    match result {
-        Ok(_) => {}
-        Err(e) if e.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) => {
-            // Duplicate webhook — roll back the topup_credits update and return OK.
-            tracing::info!(target: "audit", action = "topup_dedup", session_id, customer_id, "duplicate checkout webhook, skipping");
-            // txn will be rolled back on drop.
-            return Ok(());
-        }
-        Err(e) => return Err(ApiError::internal(format!("ledger: {e}"))),
-    }
+    txn.execute(
+        "UPDATE credit_ledger SET balance_after = $1 WHERE stripe_session_id = $2",
+        &[&balance_after, &session_id],
+    ).await.map_err(|e| ApiError::internal(format!("ledger patch: {e}")))?;
 
     txn.commit().await.map_err(|e| ApiError::internal(format!("commit: {e}")))?;
 
@@ -661,12 +703,16 @@ async fn apply_initial_credits(state: &AppState, customer_id: &str, tier: &str) 
 
 // ── Billing API endpoints ───────────────────────────────────────────────────
 
+#[utoipa::path(get, path = "/billing/balance", responses(
+    (status = 200, description = "Current credit balance and plan info", body = contract::BalanceResponse),
+), tag = "Billing", security(("api_key" = [])))]
 /// GET /billing/balance — current credits, plan, and usage summary.
 pub async fn get_balance(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let wid = extract_workspace_id(&state, &headers).await?;
+    Extension(caller): Extension<routes::Caller>,
+) -> Result<Json<contract::BalanceResponse>, ApiError> {
+    routes::require_scope(&caller, "read")?;
+    let wid = extract_workspace_id(&state, caller.user_id).await?;
     let db = db_conn(&state.db).await?;
 
     let row = db.query_one(
@@ -683,31 +729,35 @@ pub async fn get_balance(
     let balance_credits: i64 = row.get("balance_credits");
     let topup_credits: i64   = row.get("topup_credits");
 
-    Ok(Json(serde_json::json!({
-        "tier": row.get::<_, String>("tier"),
-        "balance_credits": balance_credits,
-        "topup_credits": topup_credits,
-        "total_credits": balance_credits + topup_credits,
-        "billing_period_start": row.get::<_, Option<String>>("billing_period_start"),
-        "billing_period_end": row.get::<_, Option<String>>("billing_period_end"),
-        "plan": {
-            "price_cents": row.get::<_, i32>("price_cents"),
-            "credit_cents": row.get::<_, i32>("credit_cents"),
-            "max_services": row.get::<_, i32>("max_services"),
-            "max_vcpu": row.get::<_, i32>("max_vcpu"),
-            "max_memory_mb": row.get::<_, i32>("max_memory_mb"),
-            "allows_always_on": row.get::<_, bool>("allows_always_on"),
-            "max_wasm_invocations": row.get::<_, i64>("max_wasm_invocations"),
-        }
-    })))
+    Ok(Json(contract::BalanceResponse {
+        tier: row.get("tier"),
+        balance_credits,
+        topup_credits,
+        total_credits: balance_credits + topup_credits,
+        billing_period_start: row.get("billing_period_start"),
+        billing_period_end: row.get("billing_period_end"),
+        plan: contract::PlanInfo {
+            price_cents: row.get("price_cents"),
+            credit_cents: row.get("credit_cents"),
+            max_services: row.get("max_services"),
+            max_vcpu: row.get("max_vcpu"),
+            max_memory_mb: row.get("max_memory_mb"),
+            allows_always_on: row.get("allows_always_on"),
+            max_wasm_invocations: row.get("max_wasm_invocations"),
+        },
+    }))
 }
 
+#[utoipa::path(get, path = "/billing/usage", responses(
+    (status = 200, description = "Current period usage breakdown", body = contract::UsageResponse),
+), tag = "Billing", security(("api_key" = [])))]
 /// GET /billing/usage — usage events for the current billing period.
 pub async fn get_usage(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let wid = extract_workspace_id(&state, &headers).await?;
+    Extension(caller): Extension<routes::Caller>,
+) -> Result<Json<contract::UsageResponse>, ApiError> {
+    routes::require_scope(&caller, "read")?;
+    let wid = extract_workspace_id(&state, caller.user_id).await?;
     let db = db_conn(&state.db).await?;
 
     // Get the workspace's billing period start (fall back to start of calendar month).
@@ -741,28 +791,33 @@ pub async fn get_usage(
     ).await.map_err(|e| ApiError::internal(format!("liquid usage: {e}")))?;
 
     let invocations: i64 = liquid.get("total_invocations");
+    let liquid_cost = invocations * LIQUID_PER_INVOCATION;
 
-    Ok(Json(serde_json::json!({
-        "period_start": period_start,
-        "metal": {
-            "vcpu_minutes": vcpu_mins,
-            "memory_mb_minutes": mb_mins,
-            "cost_microcredits": metal_cost_credits,
+    Ok(Json(contract::UsageResponse {
+        period_start,
+        metal: contract::MetalUsage {
+            vcpu_minutes: vcpu_mins,
+            memory_mb_minutes: mb_mins,
+            cost_microcredits: metal_cost_credits,
         },
-        "liquid": {
-            "invocations": invocations,
-            "cost_microcredits": invocations * LIQUID_PER_INVOCATION,
+        liquid: contract::LiquidUsage {
+            invocations,
+            cost_microcredits: liquid_cost,
         },
-        "total_cost_microcredits": metal_cost_credits + invocations * LIQUID_PER_INVOCATION,
-    })))
+        total_cost_microcredits: metal_cost_credits + liquid_cost,
+    }))
 }
 
+#[utoipa::path(get, path = "/billing/ledger", responses(
+    (status = 200, description = "Credit transaction history", body = contract::LedgerResponse),
+), tag = "Billing", security(("api_key" = [])))]
 /// GET /billing/ledger — credit transaction history.
 pub async fn get_ledger(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let wid = extract_workspace_id(&state, &headers).await?;
+    Extension(caller): Extension<routes::Caller>,
+) -> Result<Json<contract::LedgerResponse>, ApiError> {
+    routes::require_scope(&caller, "read")?;
+    let wid = extract_workspace_id(&state, caller.user_id).await?;
     let db = db_conn(&state.db).await?;
 
     let rows = db.query(
@@ -775,32 +830,35 @@ pub async fn get_ledger(
         &[&wid],
     ).await.map_err(|e| ApiError::internal(format!("ledger query: {e}")))?;
 
-    let entries: Vec<serde_json::Value> = rows.iter().map(|r| {
-        serde_json::json!({
-            "id": r.get::<_, uuid::Uuid>("id").to_string(),
-            "amount": r.get::<_, i64>("amount"),
-            "kind": r.get::<_, String>("kind"),
-            "description": r.get::<_, Option<String>>("description"),
-            "reference_id": r.get::<_, Option<String>>("reference_id"),
-            "balance_after": r.get::<_, i64>("balance_after"),
-            "created_at": r.get::<_, String>("created_at"),
-        })
+    let entries = rows.iter().map(|r| contract::LedgerEntry {
+        id: r.get::<_, uuid::Uuid>("id").to_string(),
+        amount: r.get("amount"),
+        kind: r.get("kind"),
+        description: r.get("description"),
+        reference_id: r.get("reference_id"),
+        balance_after: r.get("balance_after"),
+        created_at: r.get("created_at"),
     }).collect();
 
-    Ok(Json(serde_json::json!({ "entries": entries })))
+    Ok(Json(contract::LedgerResponse { entries }))
 }
 
+#[utoipa::path(post, path = "/billing/topup", request_body = contract::TopupRequest, responses(
+    (status = 200, description = "Stripe checkout session created", body = contract::CheckoutResponse),
+    (status = 400, description = "Invalid amount"),
+), tag = "Billing", security(("api_key" = [])))]
 /// POST /billing/topup — initiate a Stripe checkout for credit top-up.
 pub async fn create_topup(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(body): Json<TopupRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+    Extension(caller): Extension<routes::Caller>,
+    Json(body): Json<contract::TopupRequest>,
+) -> Result<Json<contract::CheckoutResponse>, ApiError> {
+    routes::require_scope(&caller, "admin")?;
     let stripe = state.stripe.as_ref().ok_or_else(|| {
         ApiError::unavailable("billing not configured")
     })?;
 
-    let wid = extract_workspace_id(&state, &headers).await?;
+    let wid = extract_workspace_id(&state, caller.user_id).await?;
     let db = db_conn(&state.db).await?;
 
     let customer_id = get_or_create_stripe_customer(&state, &db, &wid).await?;
@@ -816,23 +874,37 @@ pub async fn create_topup(
         &body.cancel_url,
     ).await.map_err(|e| ApiError::bad_gateway(format!("Stripe: {e}")))?;
 
-    Ok(Json(serde_json::json!({
-        "checkout_url": session.url,
-        "session_id": session.id,
-    })))
+    tracing::info!(
+        target: "audit",
+        action = "create_topup",
+        workspace_id = %wid,
+        amount_cents = body.amount_cents,
+        session_id = session.id,
+        result = "ok",
+    );
+
+    Ok(Json(contract::CheckoutResponse {
+        checkout_url: session.url.unwrap_or_default(),
+        session_id: session.id,
+    }))
 }
 
+#[utoipa::path(post, path = "/billing/subscribe", request_body = contract::SubscribeRequest, responses(
+    (status = 200, description = "Stripe checkout session created", body = contract::CheckoutResponse),
+    (status = 400, description = "Invalid tier"),
+), tag = "Billing", security(("api_key" = [])))]
 /// POST /billing/subscribe — initiate a Stripe checkout for plan subscription.
 pub async fn create_subscription(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(body): Json<SubscribeRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+    Extension(caller): Extension<routes::Caller>,
+    Json(body): Json<contract::SubscribeRequest>,
+) -> Result<Json<contract::CheckoutResponse>, ApiError> {
+    routes::require_scope(&caller, "admin")?;
     let stripe = state.stripe.as_ref().ok_or_else(|| {
         ApiError::unavailable("billing not configured")
     })?;
 
-    let wid = extract_workspace_id(&state, &headers).await?;
+    let wid = extract_workspace_id(&state, caller.user_id).await?;
     let db = db_conn(&state.db).await?;
 
     let customer_id = get_or_create_stripe_customer(&state, &db, &wid).await?;
@@ -852,10 +924,19 @@ pub async fn create_subscription(
         &body.cancel_url,
     ).await.map_err(|e| ApiError::bad_gateway(format!("Stripe: {e}")))?;
 
-    Ok(Json(serde_json::json!({
-        "checkout_url": session.url,
-        "session_id": session.id,
-    })))
+    tracing::info!(
+        target: "audit",
+        action = "create_subscription",
+        workspace_id = %wid,
+        tier = body.tier,
+        session_id = session.id,
+        result = "ok",
+    );
+
+    Ok(Json(contract::CheckoutResponse {
+        checkout_url: session.url.unwrap_or_default(),
+        session_id: session.id,
+    }))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -898,39 +979,21 @@ async fn get_or_create_stripe_customer(
     Ok(customer.id)
 }
 
-/// Extract workspace_id from the request extensions (set by auth_middleware).
-async fn extract_workspace_id(state: &AppState, headers: &HeaderMap) -> Result<uuid::Uuid, ApiError> {
-    let api_key = headers
-        .get("x-api-key")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| ApiError::unauthorized("missing X-Api-Key header"))?;
-
+/// Look up the primary (owner) workspace for a given user.
+/// Deterministic: picks the oldest owned workspace, matching the pattern
+/// used by `get_or_create_stripe_customer`.
+async fn extract_workspace_id(state: &AppState, user_id: uuid::Uuid) -> Result<uuid::Uuid, ApiError> {
     let db = db_conn(&state.db).await?;
 
     let row = db.query_opt(
-        "SELECT wm.workspace_id FROM users u \
-         JOIN workspace_members wm ON wm.user_id = u.id \
-         WHERE u.id::text = $1 AND u.deleted_at IS NULL \
+        "SELECT wm.workspace_id FROM workspace_members wm \
+         WHERE wm.user_id = $1 AND wm.role = 'owner' \
+         ORDER BY wm.created_at ASC \
          LIMIT 1",
-        &[&api_key],
+        &[&user_id],
     ).await.map_err(|e| ApiError::internal(format!("workspace lookup: {e}")))?;
 
     row.map(|r| r.get("workspace_id"))
-        .ok_or_else(|| ApiError::not_found("workspace not found for this API key"))
+        .ok_or_else(|| ApiError::not_found("workspace not found for this user"))
 }
 
-// ── Request types ───────────────────────────────────────────────────────────
-
-#[derive(serde::Deserialize)]
-pub struct TopupRequest {
-    pub amount_cents: u64,
-    pub success_url:  String,
-    pub cancel_url:   String,
-}
-
-#[derive(serde::Deserialize)]
-pub struct SubscribeRequest {
-    pub tier:        String,
-    pub success_url: String,
-    pub cancel_url:  String,
-}

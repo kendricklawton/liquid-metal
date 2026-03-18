@@ -34,12 +34,32 @@ const DEFAULT_IDLE_TIMEOUT_SECS: i64 = 300;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "daemon=info,liquid_metal_daemon=info".into()),
-        )
-        .init();
+    let _tracer_provider = common::config::init_tracing("daemon");
+
+    // ── PID file lock — prevent two daemons on the same node ────────────────
+    let pid_file_path = env_or("DAEMON_PID_FILE", "/run/liquid-metal-daemon.pid");
+    #[cfg(target_os = "linux")]
+    let _pid_lock = {
+        use std::io::Write;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&pid_file_path)
+            .with_context(|| format!("opening PID file {pid_file_path}"))?;
+        let fd = std::os::unix::io::AsRawFd::as_raw_fd(&file);
+        let lock_result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if lock_result != 0 {
+            anyhow::bail!(
+                "another daemon is already running (PID file {pid_file_path} is locked). \
+                 If this is stale, delete the file and retry."
+            );
+        }
+        // Write our PID for debugging.
+        let mut file = file;
+        writeln!(file, "{}", std::process::id())?;
+        file // keep the File alive (holds the lock) for the process lifetime
+    };
 
     let nats_url = env_or("NATS_URL", "nats://127.0.0.1:4222");
     let db_url   = require_env("DATABASE_URL")?;
@@ -67,23 +87,59 @@ async fn main() -> Result<()> {
     let bucket = Arc::new(env_or("OBJECT_STORAGE_BUCKET", "liquid-metal-artifacts"));
 
     // Postgres pool
+    let pool_size: usize = env_or("DATABASE_POOL_SIZE", "8").parse().unwrap_or(8);
     let pg_cfg: tokio_postgres::Config = db_url.parse().context("invalid DATABASE_URL")?;
     let pool = Arc::new(if let Some(tls) = common::config::pg_tls()? {
         let mgr = deadpool_postgres::Manager::new(pg_cfg, tls);
-        deadpool_postgres::Pool::builder(mgr).max_size(8).build()
+        deadpool_postgres::Pool::builder(mgr).max_size(pool_size).build()
             .context("building postgres pool (TLS)")?
     } else {
         let mgr = deadpool_postgres::Manager::new(pg_cfg, tokio_postgres::NoTls);
-        deadpool_postgres::Pool::builder(mgr).max_size(8).build()
+        deadpool_postgres::Pool::builder(mgr).max_size(pool_size).build()
             .context("building postgres pool")?
     });
+    tracing::info!(pool_size, "postgres pool configured");
 
     // S3 client
-    let s3 = Arc::new(storage::build_client());
+    let s3 = Arc::new(storage::build_client()?);
 
     // VM registry — rebuilt from DB on startup, updated on each provision/deprovision
     let registry = deprovision::new_registry();
     let liquid_registry = deprovision::new_liquid_registry();
+
+    // Mark Liquid (Wasm) services as stopped on restart. Unlike Metal (Firecracker
+    // runs as a separate process), Wasm listeners run in-process — they die with the
+    // daemon. Any `running` Liquid service from a previous instance is unreachable.
+    //
+    // Also finalize any 'draining' services left by a daemon crash mid-suspend.
+    // These are already route-evicted; just need their status moved to 'suspended'.
+    let stale_liquid_slugs: Vec<String> = {
+        if let Ok(db) = pool.get().await {
+            // Finalize orphaned drains — daemon crashed between drain start and suspend.
+            let draining = db.execute(
+                "UPDATE services SET status = 'suspended', upstream_addr = NULL \
+                 WHERE node_id = $1 AND status = 'draining' AND deleted_at IS NULL",
+                &[&cfg.node_id],
+            ).await.unwrap_or(0);
+            if draining > 0 {
+                tracing::info!(count = draining, "finalized orphaned draining services → suspended");
+            }
+
+            let rows = db.query(
+                "UPDATE services SET status = 'stopped', upstream_addr = NULL \
+                 WHERE node_id = $1 AND engine = 'liquid' AND status = 'running' AND deleted_at IS NULL \
+                 RETURNING slug",
+                &[&cfg.node_id],
+            ).await.unwrap_or_default();
+            let slugs: Vec<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
+            if !slugs.is_empty() {
+                tracing::info!(count = slugs.len(), "marked stale Liquid services as stopped (listeners died with previous daemon)");
+            }
+            slugs
+        } else {
+            vec![]
+        }
+    };
 
     // Initialize in-use TAP index set from DB to avoid collisions after restart
     provision::init_tap_indices(&pool, &cfg.node_id).await;
@@ -99,6 +155,14 @@ async fn main() -> Result<()> {
     // Delete orphaned cgroup directories from crash/restart cycles.
     #[cfg(target_os = "linux")]
     provision::cleanup_orphaned_cgroups(&pool, &cfg.node_id).await;
+
+    // Kill orphaned Firecracker processes and clean up kernel resources for
+    // services stuck in 'provisioning' or 'failed' — left by a daemon crash
+    // during provision or rollback.
+    #[cfg(target_os = "linux")]
+    provision::cleanup_stale_provisioning(
+        &pool, &cfg.node_id, cfg.physical_cores, &cfg.artifact_dir,
+    ).await;
 
     // Warn if artifact partition is running low on disk space.
     provision::check_disk_space(&cfg.artifact_dir);
@@ -153,11 +217,125 @@ async fn main() -> Result<()> {
 
             if !taps.is_empty() {
                 tracing::info!(count = taps.len(), "re-attaching eBPF filters for running VMs");
-                ebpf::reattach_all(&taps);
+                let failed = ebpf::reattach_all(&taps);
+
+                // Kill any VM whose eBPF filter could not be restored — running
+                // without tenant isolation is not acceptable.
+                for (tap_name, service_id) in &failed {
+                    tracing::error!(service_id, tap = tap_name.as_str(), "killing unisolated VM");
+                    if let Ok(svc_id) = service_id.parse::<uuid::Uuid>() {
+                        db.execute(
+                            "UPDATE services SET status = 'crashed', upstream_addr = NULL \
+                             WHERE id = $1 AND deleted_at IS NULL",
+                            &[&svc_id],
+                        ).await.ok();
+                    }
+                    // Kernel cleanup happens below via the registry rebuild + watchdog.
+                    // For immediate safety, SIGKILL the FC process now.
+                    if let Some(row) = db.query_opt(
+                        "SELECT fc_pid FROM services WHERE id::text = $1 AND fc_pid IS NOT NULL",
+                        &[service_id],
+                    ).await.ok().flatten() {
+                        let pid: i32 = row.get(0);
+                        unsafe { libc::kill(pid, libc::SIGKILL); }
+                    }
+                }
             }
         }
     }
 
+
+    // ── eBPF isolation health checker (Linux only) ──────────────────────────
+    // Runs every 30s: asks the kernel whether each active TAP still has a BPF
+    // TC egress classifier attached. If a filter is missing, the VM is running
+    // without tenant isolation — kill it immediately, no second chances.
+    //
+    // This catches scenarios that reattach_all doesn't:
+    //   - Manual `tc filter del` by an operator or rogue script
+    //   - TAP device deleted by an external process
+    //   - Kernel module reload clearing TC state
+    //   - Bug in our code that drops the Ebpf handle
+    #[cfg(target_os = "linux")]
+    {
+        let pool_ebpf    = pool.clone();
+        let registry_ebpf = registry.clone();
+        let node_id_ebpf = cfg.node_id.clone();
+        let ebpf_check_secs: u64 = env_or("EBPF_CHECK_INTERVAL_SECS", "30").parse().unwrap_or(30);
+        tokio::spawn(async move {
+            use daemon::ebpf;
+            use tokio::time::{Duration, interval};
+            let mut ticker = interval(Duration::from_secs(ebpf_check_secs));
+            tracing::info!(interval_secs = ebpf_check_secs, "eBPF isolation health checker started");
+
+            loop {
+                ticker.tick().await;
+
+                let missing = ebpf::audit_filters().await;
+                if missing.is_empty() {
+                    continue;
+                }
+
+                tracing::error!(
+                    count = missing.len(),
+                    taps  = ?missing,
+                    "CRITICAL: eBPF isolation breach detected — killing unisolated VMs"
+                );
+
+                let db = match pool_ebpf.get().await {
+                    Ok(d)  => d,
+                    Err(e) => {
+                        tracing::error!(error = %e, "cannot get DB connection to handle isolation breach");
+                        continue;
+                    }
+                };
+
+                for tap_name in &missing {
+                    // Look up the service by TAP name on this node.
+                    let row = db.query_opt(
+                        "SELECT id, fc_pid FROM services \
+                         WHERE tap_name = $1 AND node_id = $2 \
+                           AND status = 'running' AND deleted_at IS NULL",
+                        &[tap_name, &node_id_ebpf],
+                    ).await.ok().flatten();
+
+                    let Some(row) = row else {
+                        // TAP is in our active map but no matching running service in DB.
+                        // Detach the stale entry.
+                        ebpf::detach(tap_name);
+                        continue;
+                    };
+
+                    let svc_id: uuid::Uuid = row.get("id");
+                    let fc_pid: Option<i32> = row.get("fc_pid");
+
+                    // SIGKILL the Firecracker process immediately — every packet
+                    // from this VM is a potential isolation violation.
+                    if let Some(pid) = fc_pid {
+                        unsafe { libc::kill(pid, libc::SIGKILL); }
+                        tracing::error!(
+                            service_id = %svc_id,
+                            tap = tap_name.as_str(),
+                            fc_pid = pid,
+                            "SIGKILL sent to unisolated VM"
+                        );
+                    }
+
+                    // Mark crashed in DB and clear upstream so proxy stops routing.
+                    db.execute(
+                        "UPDATE services SET status = 'crashed', upstream_addr = NULL \
+                         WHERE id = $1 AND deleted_at IS NULL",
+                        &[&svc_id],
+                    ).await.ok();
+
+                    // Remove from registry so the crash watcher doesn't double-process.
+                    registry_ebpf.lock().await.remove(&svc_id.to_string());
+
+                    // Clean up our eBPF tracking entry.
+                    ebpf::detach(tap_name);
+                }
+            }
+        });
+    }
 
     // Rebuild VM registry from DB — services provisioned by a previous daemon
     // instance need handles so deprovision events can clean them up.
@@ -205,6 +383,22 @@ async fn main() -> Result<()> {
     let nc = common::config::nats_connect(&nats_url).await?;
     let js = async_nats::jetstream::new(nc.clone());
 
+    // Evict stale Liquid routes from the proxy cache now that NATS is connected.
+    // The proxy reconciler would catch these within 60s, but publishing immediately
+    // prevents 502s for the first minute after daemon restart.
+    if !stale_liquid_slugs.is_empty() {
+        use common::events::{RouteRemovedEvent, SUBJECT_ROUTE_REMOVED};
+        for slug in &stale_liquid_slugs {
+            let event = RouteRemovedEvent { slug: slug.clone() };
+            if let Ok(payload) = serde_json::to_vec(&event) {
+                if let Err(e) = nc.publish(SUBJECT_ROUTE_REMOVED, payload.into()).await {
+                    tracing::warn!(error = %e, "NATS publish route_removed failed (stale liquid cleanup)");
+                }
+            }
+        }
+        tracing::info!(count = stale_liquid_slugs.len(), "published route evictions for stale Liquid services");
+    }
+
     // Save plain-client clones for the pulse subscriber and idle checker tasks
     // before nc is moved into Arc inside ProvisionCtx.
     let nc_pulse = nc.clone();
@@ -247,16 +441,25 @@ async fn main() -> Result<()> {
                 Ok(s)  => s,
                 Err(e) => { tracing::warn!(error = %e, "pulse subscriber setup failed"); return; }
             };
-            tracing::info!("traffic pulse subscriber ready (batched, 5s window)");
+            let pulse_window: u64 = env_or("PULSE_BATCH_WINDOW_SECS", "5").parse().unwrap_or(5);
+            tracing::info!(pulse_window, "traffic pulse subscriber ready (batched)");
+
+            // Cap prevents memory exhaustion if slugs arrive faster than flush windows.
+            // A single node cannot run more services than this, so legitimate traffic
+            // will never hit the ceiling. Missing a pulse is safe — the batch window
+            // is 5s and idle timeout is 5 minutes+.
+            const PULSE_PENDING_MAX: usize = 10_000;
 
             let mut pending: HashSet<String> = HashSet::new();
-            let mut flush_tick = interval(Duration::from_secs(5));
+            let mut flush_tick = interval(Duration::from_secs(pulse_window));
 
             loop {
                 tokio::select! {
                     Some(msg) = sub.next() => {
                         if let Ok(event) = serde_json::from_slice::<TrafficPulseEvent>(&msg.payload) {
-                            pending.insert(event.slug);
+                            if pending.len() < PULSE_PENDING_MAX {
+                                pending.insert(event.slug);
+                            }
                         }
                     }
                     _ = flush_tick.tick() => {
@@ -285,9 +488,10 @@ async fn main() -> Result<()> {
     if idle_timeout_secs > 0 {
         let pool    = pool.clone();
         let node_id = cfg.node_id.clone();
+        let idle_check_secs: u64 = env_or("IDLE_CHECK_INTERVAL_SECS", "60").parse().unwrap_or(60);
         tokio::spawn(async move {
             use tokio::time::{Duration, interval};
-            let mut ticker = interval(Duration::from_secs(60));
+            let mut ticker = interval(Duration::from_secs(idle_check_secs));
 
             loop {
                 ticker.tick().await;
@@ -301,6 +505,7 @@ async fn main() -> Result<()> {
                     "UPDATE services SET status = 'stopped', upstream_addr = NULL \
                      WHERE engine = 'metal' AND status = 'running' \
                        AND node_id = $1 AND deleted_at IS NULL \
+                       AND run_mode = 'serverless' \
                        AND COALESCE(last_request_at, created_at) \
                            < NOW() - interval '1 second' * $2 \
                      RETURNING id::text, slug",
@@ -320,12 +525,44 @@ async fn main() -> Result<()> {
                         "idle timeout — deprovisioning"
                     );
                     let event = DeprovisionEvent {
-                        service_id: sid,
+                        service_id: sid.clone(),
                         slug,
                         engine: Engine::Metal,
                     };
-                    if let Ok(payload) = serde_json::to_vec(&event) {
-                        js_idle.publish(SUBJECT_DEPROVISION, payload.into()).await.ok();
+                    let payload = match serde_json::to_vec(&event) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            tracing::error!(service_id = sid, error = %e, "failed to serialize DeprovisionEvent");
+                            continue;
+                        }
+                    };
+
+                    // Retry NATS publish up to 3 times. If all retries fail,
+                    // revert the service back to 'running' so the next idle
+                    // check or crash watchdog can pick it up — prevents ghost VMs.
+                    let mut published = false;
+                    for attempt in 1..=3u32 {
+                        match js_idle.publish(SUBJECT_DEPROVISION, payload.clone().into()).await {
+                            Ok(_) => { published = true; break; }
+                            Err(e) => {
+                                tracing::warn!(
+                                    service_id = sid, attempt,
+                                    error = %e, "idle deprovision publish failed — retrying"
+                                );
+                                tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
+                            }
+                        }
+                    }
+                    if !published {
+                        tracing::error!(
+                            service_id = sid,
+                            "idle deprovision publish failed after 3 attempts — reverting to running"
+                        );
+                        let _ = db.execute(
+                            "UPDATE services SET status = 'running' \
+                             WHERE id = $1::uuid AND status = 'stopped' AND deleted_at IS NULL",
+                            &[&sid],
+                        ).await;
                     }
                 }
             }
@@ -341,9 +578,10 @@ async fn main() -> Result<()> {
         let pool    = pool.clone();
         let node_id = cfg.node_id.clone();
         let js_orphan = js.clone();
+        let orphan_sweep_secs: u64 = env_or("ORPHAN_SWEEP_INTERVAL_SECS", "60").parse().unwrap_or(60);
         tokio::spawn(async move {
             use tokio::time::{Duration, interval};
-            let mut ticker = interval(Duration::from_secs(60));
+            let mut ticker = interval(Duration::from_secs(orphan_sweep_secs));
 
             loop {
                 ticker.tick().await;
@@ -382,7 +620,9 @@ async fn main() -> Result<()> {
 
                     let event = DeprovisionEvent { service_id: sid, slug, engine };
                     if let Ok(payload) = serde_json::to_vec(&event) {
-                        js_orphan.publish(SUBJECT_DEPROVISION, payload.into()).await.ok();
+                        if let Err(e) = js_orphan.publish(SUBJECT_DEPROVISION, payload.into()).await {
+                            tracing::warn!(error = %e, "NATS publish deprovision failed (orphan sweep)");
+                        }
                     }
                 }
             }
@@ -401,23 +641,56 @@ async fn main() -> Result<()> {
         let node_id     = cfg.node_id.clone();
         let nats_crash  = ctx.nats.clone();
         let cfg_crash   = cfg.clone();
+        let crash_check_secs: u64 = env_or("VM_CRASH_CHECK_INTERVAL_SECS", "10").parse().unwrap_or(10);
         tokio::spawn(async move {
             use tokio::time::{Duration, interval};
-            let mut ticker = interval(Duration::from_secs(10));
+            let mut ticker = interval(Duration::from_secs(crash_check_secs));
             loop {
                 ticker.tick().await;
-                let crashed: Vec<(String, deprovision::VmHandle)> = {
-                    let reg = registry.lock().await;
-                    reg.iter()
-                        .filter(|(_, h)| {
-                            // /proc/{pid} exists iff the process is alive.
-                            !std::path::Path::new(&format!("/proc/{}", h.fc_pid)).exists()
-                        })
-                        .map(|(id, h)| (id.clone(), h.clone()))
+                // Collect crashed VMs and remove from registry atomically.
+                // This prevents a race where a new provision for the same
+                // service_id completes between detection and cleanup — the
+                // new handle would have a different fc_pid and must not be
+                // touched by this watchdog cycle.
+                // Check each tracked VM: try waitpid (works for direct children),
+                // fall back to /proc/{pid} existence (works for jailer grandchildren).
+                let crashed: Vec<(String, deprovision::VmHandle, Option<i32>)> = {
+                    let mut reg = registry.lock().await;
+                    let mut dead: Vec<(String, Option<i32>)> = Vec::new();
+                    for (id, h) in reg.iter() {
+                        let pid = h.fc_pid as libc::pid_t;
+                        let mut status: libc::c_int = 0;
+                        let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                        if ret > 0 {
+                            // Direct child exited — extract exit code.
+                            let code = if libc::WIFEXITED(status) {
+                                Some(libc::WEXITSTATUS(status))
+                            } else if libc::WIFSIGNALED(status) {
+                                Some(128 + libc::WTERMSIG(status))
+                            } else {
+                                None
+                            };
+                            dead.push((id.clone(), code));
+                        } else if ret == 0 {
+                            // Still running (direct child). Skip.
+                        } else {
+                            // waitpid failed (ECHILD) — not our direct child (jailer case).
+                            // Fall back to /proc existence check.
+                            if !std::path::Path::new(&format!("/proc/{}", h.fc_pid)).exists() {
+                                dead.push((id.clone(), None));
+                            }
+                        }
+                    }
+                    dead.into_iter()
+                        .filter_map(|(id, code)| reg.remove(&id).map(|h| (id, h, code)))
                         .collect()
                 };
-                for (service_id, handle) in crashed {
-                    tracing::error!(service_id, fc_pid = handle.fc_pid, "VM crash detected — process no longer alive");
+                for (service_id, handle, exit_code) in &crashed {
+                    tracing::error!(
+                        service_id, fc_pid = handle.fc_pid,
+                        exit_code = ?exit_code,
+                        "VM crash detected — process no longer alive"
+                    );
                     // Update DB: mark crashed + clear upstream.
                     if let Ok(db) = pool.get().await {
                         let svc_id: uuid::Uuid = match service_id.parse() {
@@ -436,40 +709,53 @@ async fn main() -> Result<()> {
                             // Evict from proxy cache.
                             let removed = RouteRemovedEvent { slug: slug.clone() };
                             if let Ok(payload) = serde_json::to_vec(&removed) {
-                                nats_crash.publish(SUBJECT_ROUTE_REMOVED, payload.into()).await.ok();
+                                if let Err(e) = nats_crash.publish(SUBJECT_ROUTE_REMOVED, payload.into()).await {
+                                    tracing::warn!(error = %e, "NATS publish route_removed failed (crash watcher)");
+                                }
                             }
                             // Publish crash event for observability.
                             let crash = ServiceCrashedEvent {
                                 service_id: service_id.clone(),
                                 slug,
-                                exit_code: None,
+                                exit_code: *exit_code,
                             };
                             if let Ok(payload) = serde_json::to_vec(&crash) {
-                                nats_crash.publish(SUBJECT_SERVICE_CRASHED, payload.into()).await.ok();
+                                if let Err(e) = nats_crash.publish(SUBJECT_SERVICE_CRASHED, payload.into()).await {
+                                    tracing::warn!(error = %e, "NATS publish service_crashed failed");
+                                }
                             }
                         }
                     }
-                    // Clean up kernel resources (TAP, cgroup, CPU pin).
+                }
+                // Clean up kernel resources (TAP, cgroup, CPU pin).
+                // Registry entries were already removed above to prevent
+                // the stale-handle race with concurrent provisions.
+                for (service_id, handle, _) in crashed {
                     provision::release_tap_index(&handle.tap_name).await;
                     deprovision::metal(
                         &service_id, handle, cfg_crash.physical_cores, &cfg_crash.artifact_dir,
                     ).await;
-                    registry.lock().await.remove(&service_id);
                 }
             }
         });
     }
 
     // ── Metal usage reporter ─────────────────────────────────────────────────
-    // Every 60s, publishes MetalUsageEvent for each running Metal service
-    // on this node. Consumed by the API billing aggregator.
+    // Publishes MetalUsageEvent for each running Metal service on this node.
+    // Consumed by the API billing aggregator.
+    //
+    // Failed publishes (NATS outage) are buffered in-memory and retried on the
+    // next tick. Without this, a 5-minute NATS outage loses 5 billing ticks —
+    // services run for free during the gap.
     {
         let pool    = pool.clone();
         let node_id = cfg.node_id.clone();
         let nats    = ctx.nats.clone();
+        let usage_interval_secs: u64 = env_or("USAGE_REPORT_INTERVAL_SECS", "60").parse().unwrap_or(60);
         tokio::spawn(async move {
             use tokio::time::{Duration, interval};
-            let mut ticker = interval(Duration::from_secs(60));
+            let mut ticker = interval(Duration::from_secs(usage_interval_secs));
+            let mut backlog: Vec<MetalUsageEvent> = Vec::new();
             loop {
                 ticker.tick().await;
                 let db = match pool.get().await {
@@ -486,56 +772,130 @@ async fn main() -> Result<()> {
                     Ok(r)  => r,
                     Err(e) => { tracing::warn!(error = %e, "usage reporter query failed"); continue; }
                 };
+                // Deduplicate: skip services already in the backlog from a
+                // previous failed publish. Without this, a NATS outage causes
+                // duplicate events that overbill on recovery.
+                let backlog_sids: std::collections::HashSet<String> = backlog
+                    .iter()
+                    .map(|e| e.service_id.clone())
+                    .collect();
                 for row in &rows {
-                    let event = MetalUsageEvent {
-                        service_id:    row.get::<_, String>("id"),
+                    let sid: String = row.get::<_, String>("id");
+                    if backlog_sids.contains(&sid) {
+                        continue;
+                    }
+                    backlog.push(MetalUsageEvent {
+                        service_id:    sid,
                         workspace_id:  row.get::<_, String>("workspace_id"),
-                        duration_secs: 60,
+                        duration_secs: usage_interval_secs,
                         vcpu:          row.get::<_, i32>("vcpu") as u32,
                         memory_mb:     row.get::<_, i32>("memory_mb") as u32,
-                    };
-                    if let Ok(payload) = serde_json::to_vec(&event) {
-                        nats.publish(SUBJECT_USAGE_METAL, payload.into()).await.ok();
+                    });
+                }
+
+                // Flush backlog — retry everything accumulated since the last
+                // successful publish. On success the event is removed; on
+                // failure it stays in the backlog for the next tick.
+                let mut i = 0;
+                while i < backlog.len() {
+                    if let Ok(payload) = serde_json::to_vec(&backlog[i]) {
+                        match nats.publish(SUBJECT_USAGE_METAL, payload.into()).await {
+                            Ok(_)  => { backlog.swap_remove(i); }
+                            Err(_) => { i += 1; } // keep in backlog
+                        }
+                    } else {
+                        backlog.swap_remove(i); // unparseable — drop
                     }
                 }
-                if !rows.is_empty() {
-                    tracing::debug!(count = rows.len(), "usage: reported Metal compute ticks");
+
+                // Safety valve: if the backlog grows past 10k events (NATS down
+                // for hours), drop the oldest half to prevent OOM. We lose
+                // billing accuracy but keep the daemon alive.
+                const METAL_BACKLOG_MAX: usize = 10_000;
+                if backlog.len() > METAL_BACKLOG_MAX {
+                    tracing::error!(
+                        backlog = backlog.len(),
+                        "usage: metal backlog exceeded {} — dropping oldest half",
+                        METAL_BACKLOG_MAX,
+                    );
+                    backlog.drain(..backlog.len() / 2);
+                }
+
+                if !backlog.is_empty() {
+                    tracing::warn!(backlog = backlog.len(), "usage: metal events buffered (NATS unreachable)");
                 }
             }
         });
     }
 
     // ── Liquid usage reporter ─────────────────────────────────────────────
-    // Every 60s, drains invocation counters from the liquid registry and
-    // publishes LiquidUsageEvent for each active Wasm service.
+    // Drains invocation counters from the liquid registry and publishes
+    // LiquidUsageEvent for each active Wasm service.
+    //
+    // Critical difference from Metal: the atomic counter is swapped to zero
+    // BEFORE publish. If the publish fails, those invocations must not be
+    // lost — they're accumulated into a per-service backlog and retried on
+    // the next tick.
     {
         let liquid_registry = liquid_registry.clone();
         let nats = ctx.nats.clone();
+        let liquid_usage_secs: u64 = env_or("USAGE_REPORT_INTERVAL_SECS", "60").parse().unwrap_or(60);
         tokio::spawn(async move {
             use std::sync::atomic::Ordering;
             use tokio::time::{Duration, interval};
-            let mut ticker = interval(Duration::from_secs(60));
+            let mut ticker = interval(Duration::from_secs(liquid_usage_secs));
+            // service_id → accumulated invocations that failed to publish.
+            let mut backlog: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
             loop {
                 ticker.tick().await;
                 let reg = liquid_registry.lock().await;
                 let mut reported = 0u32;
                 for (service_id, handle) in reg.iter() {
-                    let invocations = handle.invocations.swap(0, Ordering::Relaxed);
-                    if invocations == 0 {
+                    let fresh = handle.invocations.swap(0, Ordering::Relaxed);
+                    // Merge fresh count with any previously failed backlog.
+                    let total = backlog.remove(service_id).unwrap_or(0) + fresh;
+                    if total == 0 {
                         continue;
                     }
                     let event = LiquidUsageEvent {
                         workspace_id: handle.workspace_id.clone(),
                         service_id:   service_id.clone(),
-                        invocations,
+                        invocations:  total,
                     };
                     if let Ok(payload) = serde_json::to_vec(&event) {
-                        nats.publish(SUBJECT_USAGE_LIQUID, payload.into()).await.ok();
+                        match nats.publish(SUBJECT_USAGE_LIQUID, payload.into()).await {
+                            Ok(_)  => { reported += 1; }
+                            Err(_) => {
+                                // Put back — will be retried next tick.
+                                backlog.insert(service_id.clone(), total);
+                            }
+                        }
                     }
-                    reported += 1;
                 }
+                // Prune backlog entries for services that have been deprovisioned.
+                // Without this, a service that fails to publish and is then removed
+                // from the registry leaves an orphan entry that grows forever.
+                backlog.retain(|sid, _| reg.contains_key(sid));
+
+                // Safety valve: cap backlog to prevent unbounded growth if NATS
+                // is down and many services are active simultaneously.
+                const LIQUID_BACKLOG_MAX: usize = 10_000;
+                if backlog.len() > LIQUID_BACKLOG_MAX {
+                    tracing::error!(
+                        backlog = backlog.len(),
+                        "usage: liquid backlog exceeded {} — clearing",
+                        LIQUID_BACKLOG_MAX,
+                    );
+                    backlog.clear();
+                }
+
+                // Drop the lock before logging.
+                drop(reg);
                 if reported > 0 {
                     tracing::debug!(count = reported, "usage: reported Liquid invocation ticks");
+                }
+                if !backlog.is_empty() {
+                    tracing::warn!(backlog = backlog.len(), "usage: liquid events buffered (NATS unreachable)");
                 }
             }
         });
@@ -544,6 +904,16 @@ async fn main() -> Result<()> {
     // ── Suspend consumer ──────────────────────────────────────────────────
     // Listens for SuspendEvent (workspace balance depleted) and deprovisions
     // all running services for that workspace on this node.
+    //
+    // Graceful drain: routes are evicted FIRST (proxy stops sending new
+    // requests), then we wait SUSPEND_DRAIN_SECS for in-flight requests to
+    // complete before killing VMs / removing Wasm handlers.
+    //
+    // This lets the last request finish cleanly. The overage is small:
+    //   max_overage = billing_tick (60s) + drain (30s) = 90s of compute
+    //   Pro tier (2 vCPU, 512 MB): ~5,100 µcr ≈ $0.005
+    // The negative balance is tracked honestly (deduct_credits allows
+    // topup_balance to go negative) and recovered on next top-up.
     {
         let pool            = pool.clone();
         let node_id         = cfg.node_id.clone();
@@ -551,12 +921,13 @@ async fn main() -> Result<()> {
         let registry        = registry.clone();
         let liquid_registry = liquid_registry.clone();
         let cfg             = cfg.clone();
+        let drain_secs: u64 = env_or("SUSPEND_DRAIN_SECS", "30").parse().unwrap_or(30);
         tokio::spawn(async move {
             let mut sub = match nats.subscribe(SUBJECT_SUSPEND).await {
                 Ok(s)  => s,
                 Err(e) => { tracing::warn!(error = %e, "suspend subscriber setup failed"); return; }
             };
-            tracing::info!("suspend subscriber ready");
+            tracing::info!(drain_secs, "suspend subscriber ready");
             while let Some(msg) = sub.next().await {
                 let event: SuspendEvent = match serde_json::from_slice(&msg.payload) {
                     Ok(e)  => e,
@@ -571,20 +942,61 @@ async fn main() -> Result<()> {
                     Ok(id) => id,
                     Err(e) => { tracing::warn!(error = %e, "invalid workspace_id in SuspendEvent"); continue; }
                 };
+
+                // Phase 1: Mark as draining and evict routes. The proxy stops
+                // sending new requests, but existing TCP connections (in-flight
+                // requests) continue until their response completes.
                 let rows = match db.query(
-                    "UPDATE services SET status = 'suspended', upstream_addr = NULL \
+                    "UPDATE services SET status = 'draining' \
                      WHERE workspace_id = $1 AND node_id = $2 \
                        AND status = 'running' AND deleted_at IS NULL \
                      RETURNING id::text, slug, engine",
                     &[&wid, &node_id],
                 ).await {
                     Ok(r)  => r,
-                    Err(e) => { tracing::error!(error = %e, "suspend query failed"); continue; }
+                    Err(e) => { tracing::error!(error = %e, "suspend drain query failed"); continue; }
                 };
+
+                // Evict routes immediately — proxy drops new requests.
                 for row in &rows {
-                    let sid:  String = row.get("id");
                     let slug: String = row.get("slug");
-                    let eng:  String = row.get("engine");
+                    if let Ok(payload) = serde_json::to_vec(&RouteRemovedEvent { slug }) {
+                        if let Err(e) = nats.publish(SUBJECT_ROUTE_REMOVED, payload.into()).await {
+                            tracing::warn!(error = %e, "NATS publish route_removed failed (suspend handler)");
+                        }
+                    }
+                }
+
+                if rows.is_empty() {
+                    continue;
+                }
+
+                // Phase 2: Drain — wait for in-flight requests to finish.
+                // For Liquid (Wasm): dispatch() holds an Arc<WasmService>, so
+                // in-flight requests complete even after we remove the handle.
+                // For Metal: the VM stays alive, so proxied TCP connections
+                // finish naturally before we SIGTERM.
+                tracing::info!(
+                    workspace_id = event.workspace_id,
+                    count = rows.len(),
+                    drain_secs,
+                    "draining in-flight requests before suspend"
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(drain_secs)).await;
+
+                // Phase 3: Hard suspend — kill VMs, remove Wasm handlers, clear DB.
+                if let Err(e) = db.execute(
+                    "UPDATE services SET status = 'suspended', upstream_addr = NULL \
+                     WHERE workspace_id = $1 AND node_id = $2 \
+                       AND status = 'draining' AND deleted_at IS NULL",
+                    &[&wid, &node_id],
+                ).await {
+                    tracing::error!(error = %e, "suspend finalize query failed");
+                }
+
+                for row in &rows {
+                    let sid: String = row.get("id");
+                    let eng: String = row.get("engine");
 
                     if eng == "metal" {
                         let handle = registry.lock().await.remove(&sid);
@@ -594,15 +1006,9 @@ async fn main() -> Result<()> {
                     } else if eng == "liquid" {
                         liquid_registry.lock().await.remove(&sid);
                     }
+                }
 
-                    // Evict from route cache.
-                    if let Ok(payload) = serde_json::to_vec(&RouteRemovedEvent { slug }) {
-                        nats.publish(SUBJECT_ROUTE_REMOVED, payload.into()).await.ok();
-                    }
-                }
-                if !rows.is_empty() {
-                    tracing::warn!(workspace_id = event.workspace_id, count = rows.len(), "suspended services");
-                }
+                tracing::warn!(workspace_id = event.workspace_id, count = rows.len(), "suspended services (drain complete)");
             }
         });
     }
@@ -631,7 +1037,12 @@ async fn main() -> Result<()> {
             // Wasm compilation (Module::new) can take 60s+ in debug builds for
             // large binaries. Default ack_wait is 30s — too short, causes
             // redelivery loops that pile up competing compilations.
-            ack_wait: std::time::Duration::from_secs(300),
+            ack_wait: std::time::Duration::from_secs(
+                env_or("PROVISION_ACK_WAIT_SECS", "300").parse().unwrap_or(300)
+            ),
+            // Cap redelivery to avoid infinite retry loops on transient failures.
+            // Permanent failures ACK immediately (see error handler below).
+            max_deliver: 3,
             ..Default::default()
         })
         .await
@@ -653,14 +1064,16 @@ async fn main() -> Result<()> {
     // pending messages — indicates the daemon can't keep up with deploy volume.
     {
         let mut prov_consumer = provision_consumer.clone();
+        let lag_interval_secs: u64 = env_or("LAG_MONITOR_INTERVAL_SECS", "30").parse().unwrap_or(30);
+        let lag_threshold: u64 = env_or("PROVISION_LAG_THRESHOLD", "50").parse().unwrap_or(50);
         tokio::spawn(async move {
             use tokio::time::{Duration, interval};
-            let mut ticker = interval(Duration::from_secs(30));
+            let mut ticker = interval(Duration::from_secs(lag_interval_secs));
             loop {
                 ticker.tick().await;
                 if let Ok(info) = prov_consumer.info().await {
                     let pending = info.num_pending;
-                    if pending > 50 {
+                    if pending > lag_threshold {
                         tracing::warn!(
                             pending,
                             "provision consumer lag > 50 — consider increasing NODE_MAX_CONCURRENT_PROVISIONS or adding nodes"
@@ -669,6 +1082,69 @@ async fn main() -> Result<()> {
                         tracing::debug!(pending, "provision consumer lag");
                     }
                 }
+            }
+        });
+    }
+
+    // ── Health check endpoint ────────────────────────────────────────────────
+    {
+        let health_port = env_or("HEALTH_PORT", "9090");
+        let health_bind = format!("0.0.0.0:{health_port}");
+        let node_id = cfg.node_id.clone();
+        let registry_health = registry.clone();
+        let liquid_health = liquid_registry.clone();
+        let started = std::time::Instant::now();
+
+        let listener = tokio::net::TcpListener::bind(&health_bind)
+            .await
+            .context("binding health check listener")?;
+        tracing::info!(%health_bind, "health check server listening");
+
+        tokio::spawn(async move {
+            use hyper::server::conn::http1;
+            use hyper::service::service_fn;
+            use hyper::{Request, Response, StatusCode};
+            use http_body_util::Full;
+            use hyper::body::Bytes;
+
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(x)  => x,
+                    Err(e) => { tracing::debug!(error = %e, "health accept error"); continue; }
+                };
+                let node_id = node_id.clone();
+                let registry = registry_health.clone();
+                let liquid = liquid_health.clone();
+                let started = started;
+
+                tokio::spawn(async move {
+                    let io = hyper_util::rt::TokioIo::new(stream);
+                    let handler = service_fn(move |_req: Request<hyper::body::Incoming>| {
+                        let node_id = node_id.clone();
+                        let registry = registry.clone();
+                        let liquid = liquid.clone();
+                        async move {
+                            let vm_count = registry.lock().await.len();
+                            let wasm_count = liquid.lock().await.len();
+                            let uptime = started.elapsed().as_secs();
+                            let body = serde_json::json!({
+                                "status": "ok",
+                                "node_id": node_id,
+                                "uptime_secs": uptime,
+                                "metal_vms": vm_count,
+                                "liquid_services": wasm_count,
+                            });
+                            Ok::<_, hyper::Error>(
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header("content-type", "application/json")
+                                    .body(Full::new(Bytes::from(body.to_string())))
+                                    .unwrap()
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new().serve_connection(io, handler).await;
+                });
             }
         });
     }
@@ -747,10 +1223,19 @@ async fn main() -> Result<()> {
                 let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
                 let ctx    = ctx.clone();
 
+                let provision_timeout_secs: u64 = env_or("PROVISION_TIMEOUT_SECS", "600")
+                    .parse().unwrap_or(600);
+
                 tasks.spawn(async move {
                     let _permit = permit;
-                    match provision::provision(&ctx, &event).await {
-                        Ok(svc) => {
+                    let timeout = std::time::Duration::from_secs(provision_timeout_secs);
+                    let result = tokio::time::timeout(
+                        timeout,
+                        provision::provision(&ctx, &event),
+                    ).await;
+
+                    match result {
+                        Ok(Ok(svc)) => {
                             tracing::info!(
                                 id            = %svc.id,
                                 engine        = ?svc.engine,
@@ -760,9 +1245,61 @@ async fn main() -> Result<()> {
                             );
                             msg.ack().await.ok();
                         }
-                        Err(e) => {
-                            tracing::error!(error = %e, app = event.app_name, "provision failed — NACKing");
-                            msg.ack_with(AckKind::Nak(None)).await.ok();
+                        Ok(Err(e)) => {
+                            let kind = provision::rollback_provision(&ctx, &event, &e).await;
+                            match kind {
+                                common::events::FailureKind::Permanent => {
+                                    tracing::error!(error = %e, app = event.app_name, "provision permanently failed — not retrying");
+                                    msg.ack().await.ok();
+                                }
+                                common::events::FailureKind::Transient => {
+                                    let attempt = msg.info().map(|i| i.delivered as u64).unwrap_or(1);
+                                    let backoff = std::time::Duration::from_secs(15 * attempt);
+                                    tracing::warn!(
+                                        error = %e,
+                                        app = event.app_name,
+                                        attempt,
+                                        backoff_secs = backoff.as_secs(),
+                                        "transient provision failure — retrying"
+                                    );
+                                    // Reset status so the retry attempt picks it up as provisioning
+                                    if let Ok(db) = ctx.pool.get().await {
+                                        if let Ok(sid) = event.service_id.parse::<uuid::Uuid>() {
+                                            let _ = db.execute(
+                                                "UPDATE services SET status = 'provisioning' WHERE id = $1",
+                                                &[&sid],
+                                            ).await;
+                                        }
+                                    }
+                                    msg.ack_with(AckKind::Nak(Some(backoff))).await.ok();
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            let timeout_err = anyhow::anyhow!(
+                                "provision timed out after {provision_timeout_secs}s"
+                            );
+                            let kind = provision::rollback_provision(&ctx, &event, &timeout_err).await;
+                            match kind {
+                                common::events::FailureKind::Permanent => {
+                                    tracing::error!(app = event.app_name, timeout_secs = provision_timeout_secs, "provision timed out — permanent failure");
+                                    msg.ack().await.ok();
+                                }
+                                common::events::FailureKind::Transient => {
+                                    let attempt = msg.info().map(|i| i.delivered as u64).unwrap_or(1);
+                                    let backoff = std::time::Duration::from_secs(15 * attempt);
+                                    tracing::warn!(app = event.app_name, attempt, backoff_secs = backoff.as_secs(), "provision timed out — retrying");
+                                    if let Ok(db) = ctx.pool.get().await {
+                                        if let Ok(sid) = event.service_id.parse::<uuid::Uuid>() {
+                                            let _ = db.execute(
+                                                "UPDATE services SET status = 'provisioning' WHERE id = $1",
+                                                &[&sid],
+                                            ).await;
+                                        }
+                                    }
+                                    msg.ack_with(AckKind::Nak(Some(backoff))).await.ok();
+                                }
+                            }
                         }
                     }
                 });
@@ -830,7 +1367,9 @@ async fn main() -> Result<()> {
 
                     // Evict the slug from every Pingora instance's route cache.
                     if let Ok(payload) = serde_json::to_vec(&RouteRemovedEvent { slug: event.slug.clone() }) {
-                        ctx.nats.publish(SUBJECT_ROUTE_REMOVED, payload.into()).await.ok();
+                        if let Err(e) = ctx.nats.publish(SUBJECT_ROUTE_REMOVED, payload.into()).await {
+                            tracing::warn!(error = %e, "NATS publish route_removed failed (deprovision)");
+                        }
                     }
 
                     msg.ack().await.ok();
@@ -855,10 +1394,65 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Drain all in-flight tasks before exiting
-    while let Some(result) = tasks.join_next().await {
-        if let Err(e) = result {
-            tracing::error!(error = ?e, "task panicked during drain");
+    // Drain all in-flight tasks before exiting (with timeout to prevent hang)
+    let drain_timeout_secs: u64 = env_or("SHUTDOWN_DRAIN_TIMEOUT_SECS", "30")
+        .parse().unwrap_or(30);
+    let drain_deadline = std::time::Duration::from_secs(drain_timeout_secs);
+
+    if tokio::time::timeout(drain_deadline, async {
+        while let Some(result) = tasks.join_next().await {
+            if let Err(e) = result {
+                tracing::error!(error = ?e, "task panicked during drain");
+            }
+        }
+    }).await.is_err() {
+        tracing::error!(
+            remaining = tasks.len(),
+            timeout_secs = drain_timeout_secs,
+            "drain timeout exceeded — aborting remaining tasks"
+        );
+        tasks.abort_all();
+    }
+
+    // ── Stop all running VMs on this node ───────────────────────────────────
+    // Prevents ghost Firecracker processes surviving a daemon restart.
+    // Nomad's stagger (30s) gives the new daemon time to re-provision.
+    #[cfg(target_os = "linux")]
+    {
+        let vms: Vec<(String, deprovision::VmHandle)> = {
+            let mut reg = registry.lock().await;
+            reg.drain().collect()
+        };
+        if !vms.is_empty() {
+            tracing::info!(count = vms.len(), "shutting down running VMs before exit");
+            if let Ok(db) = pool.get().await {
+                for (service_id, _) in &vms {
+                    let svc_id: uuid::Uuid = match service_id.parse() {
+                        Ok(id) => id,
+                        Err(_) => continue,
+                    };
+                    let row = db.query_opt(
+                        "UPDATE services SET status = 'stopped', upstream_addr = NULL \
+                         WHERE id = $1 AND node_id = $2 AND status = 'running' AND deleted_at IS NULL \
+                         RETURNING slug",
+                        &[&svc_id, &cfg.node_id],
+                    ).await.ok().flatten();
+
+                    if let Some(row) = row {
+                        let slug: String = row.get("slug");
+                        if let Ok(payload) = serde_json::to_vec(&RouteRemovedEvent { slug }) {
+                            if let Err(e) = ctx.nats.publish(SUBJECT_ROUTE_REMOVED, payload.into()).await {
+                                tracing::warn!(error = %e, "NATS publish route_removed failed (shutdown cleanup)");
+                            }
+                        }
+                    }
+                }
+            }
+            for (service_id, handle) in vms {
+                provision::release_tap_index(&handle.tap_name).await;
+                deprovision::metal(&service_id, handle, cfg.physical_cores, &cfg.artifact_dir).await;
+            }
+            tracing::info!("all VMs stopped");
         }
     }
 

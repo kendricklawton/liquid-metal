@@ -1,15 +1,18 @@
-//! Object Storage client builder (Vultr Object Storage — S3-compatible).
+//! Object Storage client builder (S3-compatible — MinIO locally, Vultr in prod).
 //!
-//! Reads credentials from env vars at startup:
-//!   OBJECT_STORAGE_ENDPOINT  — e.g. https://ord1.vultrobjects.com
+//! Required env vars (no defaults — fail fast per 12-factor III):
+//!   OBJECT_STORAGE_ENDPOINT    — e.g. http://localhost:9000 or https://ord1.vultrobjects.com
 //!   OBJECT_STORAGE_ACCESS_KEY
 //!   OBJECT_STORAGE_SECRET_KEY
-//!   OBJECT_STORAGE_REGION    — defaults to "us-ord" (Chicago)
+//!
+//! Optional:
+//!   OBJECT_STORAGE_REGION      — defaults to "us-east-1"
 
+use anyhow::Result;
 use aws_config::Region;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::Builder;
-use common::config::env_or;
+use common::config::{env_or, require_env};
 
 /// Ensure the bucket exists and has an explicit private ACL.
 ///
@@ -54,11 +57,20 @@ pub async fn ensure_bucket(client: &aws_sdk_s3::Client, bucket: &str) {
     }
 }
 
-pub async fn build_client() -> aws_sdk_s3::Client {
-    let endpoint  = env_or("OBJECT_STORAGE_ENDPOINT", "https://ord1.vultrobjects.com");
-    let access    = env_or("OBJECT_STORAGE_ACCESS_KEY", "");
-    let secret    = env_or("OBJECT_STORAGE_SECRET_KEY", "");
-    let region    = env_or("OBJECT_STORAGE_REGION", "us-ord");
+/// Build the S3 client from environment variables.
+///
+/// Required (no defaults — fail fast per 12-factor III):
+///   OBJECT_STORAGE_ENDPOINT   — MinIO locally, Vultr in prod
+///   OBJECT_STORAGE_ACCESS_KEY
+///   OBJECT_STORAGE_SECRET_KEY
+///
+/// Optional:
+///   OBJECT_STORAGE_REGION     — defaults to "us-east-1"
+pub fn build_client() -> Result<aws_sdk_s3::Client> {
+    let endpoint = require_env("OBJECT_STORAGE_ENDPOINT")?;
+    let access   = require_env("OBJECT_STORAGE_ACCESS_KEY")?;
+    let secret   = require_env("OBJECT_STORAGE_SECRET_KEY")?;
+    let region   = env_or("OBJECT_STORAGE_REGION", "us-east-1");
 
     let creds = Credentials::new(access, secret, None, None, "env");
 
@@ -70,5 +82,5 @@ pub async fn build_client() -> aws_sdk_s3::Client {
         .behavior_version_latest()
         .build();
 
-    aws_sdk_s3::Client::from_conf(cfg)
+    Ok(aws_sdk_s3::Client::from_conf(cfg))
 }

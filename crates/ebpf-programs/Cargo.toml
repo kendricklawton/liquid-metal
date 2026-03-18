@@ -4,19 +4,33 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# This crate is NOT a member of the root workspace.
-# It compiles to BPF bytecode (bpfel-unknown-none target) and is built
-# by crates/daemon/build.rs, then embedded into the daemon binary via
-# include_bytes_aligned!. See crates/ebpf-programs/.cargo/config.toml.
+# ── Why this crate is special ────────────────────────────────────────────────
+#
+# This crate is NOT a member of the root workspace. It compiles to BPF
+# bytecode targeting `bpfel-unknown-none` (little-endian BPF, no OS) — a
+# completely different ISA from the rest of the project.
+#
+# Build chain:
+#   1. crates/daemon/build.rs invokes `cargo build --target bpfel-unknown-none`
+#      with RUSTUP_TOOLCHAIN=nightly (BPF needs -Z build-std=core)
+#   2. Output is a BPF ELF object (not a normal binary)
+#   3. build.rs copies it to OUT_DIR
+#   4. ebpf.rs embeds it via include_bytes_aligned! and loads it into the
+#      kernel at runtime via the bpf() syscall (through the Aya library)
+#
+# See .cargo/config.toml for the default target and build-std settings.
 
 [[bin]]
-name = "tc-filter"
+name = "tc-filter"   # produces the "tc-filter" BPF ELF object
 path = "src/main.rs"
 
 [dependencies]
-aya-ebpf = { version = "0.1", features = ["macros"] }
+# aya-ebpf: BPF-side SDK. Provides #[classifier] macro, TcContext for packet
+# access, and BPF helper wrappers. This is the kernel-side counterpart to the
+# `aya` crate used in ebpf.rs (userspace loader).
+aya-ebpf = "0.1"
 
 [profile.release]
-lto         = true
-opt-level   = "z"
-panic       = "abort"
+lto       = true    # link-time optimization — smaller BPF object
+opt-level = "z"     # optimize for size (BPF programs have instruction limits)
+panic     = "abort" # no unwinding in kernel space

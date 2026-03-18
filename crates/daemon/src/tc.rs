@@ -33,7 +33,7 @@ pub async fn apply(tap: &str, quota: &ResourceQuota) -> Result<()> {
     Ok(())
 }
 
-/// Remove all qdiscs from a TAP device (called on deprovision).
+/// Remove all qdiscs from a TAP device and its IFB peer (called on deprovision).
 pub async fn remove(tap: &str) {
     let _ = Command::new("tc")
         .args(["qdisc", "del", "dev", tap, "root"])
@@ -43,7 +43,16 @@ pub async fn remove(tap: &str) {
         .args(["qdisc", "del", "dev", tap, "ingress"])
         .status()
         .await;
-    tracing::debug!(tap, "tc qdiscs removed");
+
+    // Delete the IFB device created by set_ingress (tap0 → ifb0).
+    // Best-effort: may not exist if ingress shaping was never configured.
+    let ifb = tap.replace("tap", "ifb");
+    let _ = Command::new("ip")
+        .args(["link", "del", &ifb])
+        .status()
+        .await;
+
+    tracing::debug!(tap, ifb = %ifb, "tc qdiscs + IFB removed");
 }
 
 /// Cap egress (VM → host/internet) with a tbf qdisc on the TAP root.

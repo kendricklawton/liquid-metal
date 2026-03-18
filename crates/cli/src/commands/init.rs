@@ -1,39 +1,21 @@
 use std::io::{self, Write};
 
 use anyhow::{bail, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::client::ApiClient;
+use common::contract::{CreateProjectRequest, CreateProjectResponse, ProjectResponse};
+
 use crate::config::Config;
-
-#[derive(Serialize)]
-struct CreateProjectRequest<'a> {
-    workspace_id: &'a str,
-    name: &'a str,
-    slug: &'a str,
-}
-
-#[derive(Deserialize)]
-struct Project {
-    id: String,
-}
-
-#[derive(Deserialize)]
-struct CreateProjectResponse {
-    project: Project,
-}
-
-#[derive(Deserialize)]
-struct ExistingProject {
-    id: String,
-    slug: String,
-}
+use crate::context::CommandContext;
+use crate::output::{OutputMode, print_ok};
 
 #[derive(Serialize)]
 struct ServiceSection<'a> {
     name: &'a str,
     engine: &'a str,
     project_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -48,15 +30,15 @@ struct LiquidMetalConfig<'a> {
     build: BuildSection,
 }
 
-pub async fn run(config: &Config, name_override: Option<String>, engine_override: Option<String>) -> Result<()> {
-    let token = config.require_token()?;
-    let workspace_id = config
+pub async fn run(config: &Config, name_override: Option<String>, engine_override: Option<String>, output: OutputMode) -> Result<()> {
+    let ctx = CommandContext::new(config, output)?;
+    let workspace_id = ctx.config
         .workspace_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("no workspace found — run `flux login` first"))?;
 
     if std::path::Path::new("liquid-metal.toml").exists() {
-        bail!("liquid-metal.toml already exists — edit it directly or delete it to re-init");
+        bail!("liquid-metal.toml already exists — edit it directly or delete it to re-initialize");
     }
 
     let cwd = std::env::current_dir()?;
@@ -80,14 +62,13 @@ pub async fn run(config: &Config, name_override: Option<String>, engine_override
         name, workspace_id
     );
 
-    let client = ApiClient::new(config.api_url(), Some(token));
-    let project_id = match client
+    let project_id = match ctx.client
         .post::<_, CreateProjectResponse>(
             "/projects",
             &CreateProjectRequest {
-                workspace_id,
-                name: &name,
-                slug: &name,
+                workspace_id: workspace_id.to_string(),
+                name: name.clone(),
+                slug: name.clone(),
             },
         )
         .await
@@ -95,7 +76,7 @@ pub async fn run(config: &Config, name_override: Option<String>, engine_override
         Ok(r) => r.project.id,
         Err(e) if e.to_string().contains("409") => {
             // Project already exists — look it up and reuse it.
-            let projects: Vec<ExistingProject> = client
+            let projects: Vec<ProjectResponse> = ctx.client
                 .get(&format!("/projects?workspace_id={}", workspace_id))
                 .await?;
             let existing = projects
@@ -110,11 +91,13 @@ pub async fn run(config: &Config, name_override: Option<String>, engine_override
         Err(e) => return Err(e),
     };
 
+    let is_metal = engine == "metal";
     let cfg = LiquidMetalConfig {
         service: ServiceSection {
             name: &name,
             engine: &engine,
             project_id: &project_id,
+            port: if is_metal { Some(8080) } else { None },
         },
         build: BuildSection {
             command: build.command.clone(),
@@ -124,13 +107,15 @@ pub async fn run(config: &Config, name_override: Option<String>, engine_override
 
     std::fs::write("liquid-metal.toml", toml::to_string(&cfg)?)?;
 
-    println!("Created liquid-metal.toml");
-    println!("  service: {}", name);
-    println!("  project: {}", project_id);
-    println!("  engine:  {}", engine);
-    println!("  build:   {}", build.command);
-    println!("  output:  {}\n", build.output);
-    println!("Run `flux deploy` when ready.");
+    let mut msg = format!(
+        "Created liquid-metal.toml\n  service: {}\n  project: {}\n  engine:  {}",
+        name, project_id, engine
+    );
+    if is_metal {
+        msg.push_str("\n  port:    8080");
+    }
+    msg.push_str(&format!("\n  build:   {}\n  output:  {}\n\nRun `flux deploy` when ready.", build.command, build.output));
+    print_ok(output, &msg);
     Ok(())
 }
 
