@@ -1,0 +1,404 @@
+{% extends "base.html" %}
+
+{% block title %}Liquid Metal{% endblock %}
+{% block description %}A home for Go, Rust, and Zig. Ship a compiled binary, get an endpoint. No containers, no YAML.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+
+  {# ── HERO ──────────────────────────────────────────────────────────────── #}
+  <div class="relative mt-12">
+    <section class="relative flex flex-col items-center justify-center text-center" style="height:calc(100vh - 3rem);">
+      <canvas id="metal-grid" class="absolute inset-0 w-full h-full" style="pointer-events:none;"></canvas>
+      <div class="relative z-10 w-full flex flex-col items-center gap-8 max-w-4xl mx-auto px-4">
+
+        <div class="flex items-center gap-2 flex-wrap justify-center">
+          <span class="glass-card px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest">Go</span>
+          <span class="glass-card px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest">Rust</span>
+          <span class="glass-card px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest">Zig</span>
+        </div>
+
+        <h1 class="text-4xl sm:text-6xl font-black tracking-tighter">
+          A home for<br/>
+          <span class="text-zwl-muted dark:text-zw-muted">compiled languages.</span>
+        </h1>
+
+        <p class="text-base sm:text-lg text-zwl-muted dark:text-zw-muted max-w-xl leading-relaxed">
+          Deploy platforms weren't built for languages that compile to native binaries.
+          We were. Ship your Go, Rust, or Zig binary and get a URL.
+        </p>
+
+        <div class="flex flex-col items-center gap-3">
+          <div class="flex flex-wrap items-center justify-center gap-4">
+            <a href="/auth/login" class="inline-flex items-center px-8 py-3.5 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+              Start Deploying
+            </a>
+            <a href="/docs" class="glass-btn inline-flex items-center px-8 py-3.5 text-xs font-bold uppercase tracking-widest transition-colors">
+              Read the Docs
+            </a>
+          </div>
+          <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Free tier &mdash; no credit card required</span>
+        </div>
+
+        <div class="glass-card grid grid-cols-3 divide-x divide-zwl-border dark:divide-zw-border">
+          <div class="px-6 py-4 flex flex-col gap-1 items-center">
+            <span class="text-lg font-black font-mono">125ms</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal boot</span>
+          </div>
+          <div class="px-6 py-4 flex flex-col gap-1 items-center">
+            <span class="text-lg font-black font-mono">&lt;1ms</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid start</span>
+          </div>
+          <div class="px-6 py-4 flex flex-col gap-1 items-center">
+            <span class="text-lg font-black font-mono">10Gbps</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Bandwidth</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+
+  {# ── TERMINAL ──────────────────────────────────────────────────────────── #}
+  <section
+    class="py-20 border-b border-zwl-border dark:border-zw-border"
+    x-data="{ lang: 0 }"
+  >
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// write code, ship binary, get url</p>
+    <h2 class="text-2xl font-black tracking-tight mb-8">Compile. Deploy. Done.</h2>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+
+      {# ── Source code panel ─────────────────────────────────────────────── #}
+      <div class="glass-card overflow-hidden">
+        <div class="flex border-b border-zwl-border dark:border-zw-border">
+          <button @click="lang = 0" class="cursor-pointer flex-1 py-2.5 border-b-2 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
+            :class="lang === 0 ? 'border-current' : 'border-transparent text-zwl-muted dark:text-zw-muted'">Go</button>
+          <button @click="lang = 1" class="cursor-pointer flex-1 py-2.5 border-b-2 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
+            :class="lang === 1 ? 'border-current' : 'border-transparent text-zwl-muted dark:text-zw-muted'">Rust</button>
+          <button @click="lang = 2" class="cursor-pointer flex-1 py-2.5 border-b-2 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
+            :class="lang === 2 ? 'border-current' : 'border-transparent text-zwl-muted dark:text-zw-muted'">Zig</button>
+        </div>
+        <div class="px-5 py-2 border-b border-zwl-border dark:border-zw-border">
+          <span class="text-[10px] font-mono" x-text="['main.go', 'main.rs', 'main.zig'][lang]"></span>
+        </div>
+        <div class="px-5 py-5 overflow-hidden">
+          {# Go #}
+          <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre">package main
+
+import (
+	"fmt"
+	"net/http"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintln(w, "hello from liquid metal")
+}
+
+func main() {
+	http.HandleFunc("/", handler)
+	http.ListenAndServe(":8080", nil)
+}</pre>
+          {# Rust #}
+          <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre">use std::net::TcpListener;
+use std::io::Write;
+
+fn main() {
+    let listener = TcpListener::bind("0.0.0.0:8080").unwrap();
+
+    for stream in listener.incoming() {
+        let mut stream = stream.unwrap();
+        let response = b"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal";
+        stream.write_all(response).ok();
+    }
+}</pre>
+          {# Zig #}
+          <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre">const std = @import("std");
+
+pub fn main() !void {
+    const addr = try std.net.Address.resolveIp("0.0.0.0", 8080);
+    var server = try addr.listen(.{});
+    defer server.deinit();
+
+    while (true) {
+        const conn = try server.accept();
+        _ = conn.stream.write("HTTP/1.1 200 OK\r\n\r\nhello from liquid metal");
+        conn.stream.close();
+    }
+}</pre>
+        </div>
+        <div class="border-t border-zwl-border dark:border-zw-border px-5 py-2.5 flex items-center gap-2">
+          <span class="text-zwl-muted dark:text-zw-muted text-xs">$</span>
+          <span class="text-xs font-semibold">flux deploy</span>
+          <span class="ml-auto flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 bg-zwl-fg dark:bg-zw-fg"></span>
+            <span class="text-[10px] text-zwl-muted dark:text-zw-muted">READY</span>
+          </span>
+        </div>
+      </div>
+
+      {# ── Config + deploy log ───────────────────────────────────────────── #}
+      <div class="flex flex-col gap-4">
+        <div class="glass-card overflow-hidden">
+          <div class="px-5 py-2 border-b border-zwl-border dark:border-zw-border flex items-center justify-between">
+            <span class="text-[10px] text-zwl-muted dark:text-zw-muted">liquid-metal.toml</span>
+            <span class="text-[9px] font-bold px-1.5 py-0.5 border border-zwl-border dark:border-zw-border uppercase tracking-widest"
+              x-text="lang === 2 ? 'liquid' : 'metal'"></span>
+          </div>
+          <div class="px-5 py-5">
+            <pre x-show="lang === 0" class="text-xs leading-relaxed text-zwl-muted dark:text-zw-muted whitespace-pre">[service]
+name = "hello-world"
+engine = "metal"
+port = 8080
+
+[build]
+command = "go build -o app ."
+output = "app"</pre>
+            <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed text-zwl-muted dark:text-zw-muted whitespace-pre">[service]
+name = "rust-api"
+engine = "metal"
+port = 8080
+
+[build]
+command = "cargo build --target x86_64-unknown-linux-musl --release"
+output = "target/x86_64-unknown-linux-musl/release/rust-api"</pre>
+            <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed text-zwl-muted dark:text-zw-muted whitespace-pre">[service]
+name = "zig-wasm"
+engine = "liquid"
+
+[liquid]
+wasm = "main.wasm"</pre>
+          </div>
+        </div>
+
+        <div class="glass-card overflow-hidden">
+          <div class="px-5 py-2 border-b border-zwl-border dark:border-zw-border flex items-center justify-between">
+            <span class="text-[10px] text-zwl-muted dark:text-zw-muted">deploy log</span>
+            <span class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 bg-zwl-fg dark:bg-zw-fg" style="animation:pulse 2s infinite"></span>
+              <span class="text-[9px] font-bold uppercase tracking-widest">live</span>
+            </span>
+          </div>
+          <div class="px-5 py-4 text-[11px] leading-loose text-zwl-muted dark:text-zw-muted">
+            <div>
+              <span>$</span>
+              <span class="font-semibold ml-1"
+                x-text="'flux deploy --name ' + ['hello-world','rust-api','zig-wasm'][lang]"></span>
+            </div>
+            <div class="mt-2 flex flex-col gap-0.5">
+              <div>&#8594; reading liquid-metal.toml</div>
+              <div x-show="lang === 0">&#8594; go build <span>done</span> (0.8s)</div>
+              <div x-show="lang === 1" x-cloak>&#8594; cargo build --release <span>done</span> (1.4s)</div>
+              <div x-show="lang === 2" x-cloak>&#8594; zig build-exe -target wasm32-wasi <span>done</span></div>
+              <div>&#8594; uploading artifact <span>done</span></div>
+              <div x-show="lang !== 2" class="mt-1">
+                <div>&#8594; provisioning metal vm</div>
+                <div class="pl-3">&#10003; rootfs injected</div>
+                <div class="pl-3">&#10003; tap0 &#8594; br0 ready</div>
+                <div class="pl-3">&#10003; vm boot <span class="font-semibold">127ms</span></div>
+              </div>
+              <div x-show="lang === 2" x-cloak class="mt-1">
+                <div>&#8594; loading wasm module</div>
+                <div class="pl-3">&#10003; wasmtime executor ready</div>
+                <div class="pl-3">&#10003; cold start <span class="font-semibold">&lt;1ms</span></div>
+              </div>
+              <div class="mt-2 flex items-center gap-2">
+                <span class="font-bold">&#10003;</span>
+                <span class="font-semibold">service live</span>
+                <span class="ml-1" x-text="['hello-world','rust-api','zig-wasm'][lang] + '.lm.dev'"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  {# ── WHY ─────────────────────────────────────────────────────────────── #}
+  <section class="py-20 border-b border-zwl-border dark:border-zw-border">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// the problem</p>
+    <h2 class="text-2xl font-black tracking-tight mb-4">Deploy platforms forgot about compiled languages.</h2>
+    <p class="text-sm text-zwl-muted dark:text-zw-muted max-w-2xl mb-12 leading-relaxed">
+      Most platforms want a Dockerfile, a runtime, or a framework. If you write Go, Rust, or Zig,
+      you already have a binary. You shouldn't need to wrap it in a container just to deploy it.
+      Liquid Metal takes your compiled binary and runs it &mdash; directly on hardware or as WebAssembly.
+    </p>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="glass-card p-8 flex flex-col gap-4">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
+          <i data-lucide="server" style="width:14px;height:14px;"></i>
+        </div>
+        <h3 class="text-xs font-bold uppercase tracking-widest">Metal &mdash; Firecracker</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">Your binary gets its own Firecracker microVM. Dedicated vCPU, dedicated RAM, its own kernel. Boots in 125ms. No shared tenants.</p>
+      </div>
+      <div class="glass-card p-8 flex flex-col gap-4">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
+          <i data-lucide="zap" style="width:14px;height:14px;"></i>
+        </div>
+        <h3 class="text-xs font-bold uppercase tracking-widest">Liquid &mdash; Wasm</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">Compile to .wasm and run it in Wasmtime. Sub-millisecond cold starts, per-invocation billing. No VM overhead for lightweight workloads.</p>
+      </div>
+      <div class="glass-card p-8 flex flex-col gap-4">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
+          <i data-lucide="binary" style="width:14px;height:14px;"></i>
+        </div>
+        <h3 class="text-xs font-bold uppercase tracking-widest">Your binary, as-is</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">No SDK. No wrapper. No runtime dependency. If <code>go build</code>, <code>cargo build</code>, or <code>zig build</code> produces it, we run it.</p>
+      </div>
+    </div>
+  </section>
+
+  {# ── ARCHITECTURE ──────────────────────────────────────────────────────── #}
+  <section class="py-20 border-b border-zwl-border dark:border-zw-border">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// under the hood</p>
+    <h2 class="text-2xl font-black tracking-tight mb-12">No containers. No orchestrators. Just metal.</h2>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="glass-card p-6 flex flex-col gap-4">
+        <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted">LAYER 01 /</span>
+        <h3 class="text-sm font-bold uppercase tracking-widest">Bare Metal</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed border-l-2 pl-3 border-zwl-border dark:border-zw-border">Dedicated servers. No Kubernetes. No container orchestration. Your workload runs close to the silicon on 10 Gbps unmetered bandwidth.</p>
+      </div>
+      <div class="glass-card p-6 flex flex-col gap-4">
+        <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted">LAYER 02 /</span>
+        <h3 class="text-sm font-bold uppercase tracking-widest">Your Engine</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed border-l-2 pl-3 border-zwl-border dark:border-zw-border">Metal: Firecracker KVM &mdash; boots in 125ms with jailer + eBPF isolation. Liquid: Wasmtime &mdash; WASI sandboxed, sub-ms cold start.</p>
+      </div>
+      <div class="glass-card p-6 flex flex-col gap-4">
+        <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted">LAYER 03 /</span>
+        <h3 class="text-sm font-bold uppercase tracking-widest">Your Code</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed border-l-2 pl-3 border-zwl-border dark:border-zw-border">Your static binary or .wasm runs as-is. Full networking control. No container shim between your code and the machine.</p>
+      </div>
+    </div>
+  </section>
+
+  {# ── CTA ───────────────────────────────────────────────────────────────── #}
+  <section class="py-24 flex flex-col items-center text-center gap-6">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted">// get started</p>
+    <h2 class="text-3xl font-black tracking-tight">
+      Your binary deserves<br/>a real home.
+    </h2>
+    <p class="text-sm text-zwl-muted dark:text-zw-muted max-w-md">
+      Stop wrapping compiled code in Docker containers. Write Go, Rust, or Zig. Compile. Deploy. Done.
+    </p>
+    <div class="flex flex-wrap items-center justify-center gap-4">
+      <a href="/auth/login" class="inline-flex items-center px-10 py-4 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+        Start for Free
+      </a>
+      <a href="/pricing" class="glass-btn inline-flex items-center px-10 py-4 text-xs font-bold uppercase tracking-widest transition-colors">
+        See Plans
+      </a>
+    </div>
+    <p class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted">Free tier &mdash; no credit card required</p>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  // ── Metal grid — strikes + pulses ─────────────────────────────────────────
+  var c = document.getElementById('metal-grid');
+  if (!c) return;
+  var ctx = c.getContext('2d'), raf, W, H, frame = 0, strikes = [], pulses = [];
+  var GAP = 44, COLS, ROWS, GX, GY;
+
+  function rs() {
+    var b = c.getBoundingClientRect();
+    W = b.width; H = b.height;
+    c.width  = Math.round(W * devicePixelRatio);
+    c.height = Math.round(H * devicePixelRatio);
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    COLS = Math.round(W / GAP) || 1;
+    ROWS = Math.round(H / GAP) || 1;
+    GX = W / COLS; GY = H / ROWS;
+  }
+
+  function addStrike() {
+    var colors = ['rgba(52,211,153,', 'rgba(0,172,215,'];
+    var color = colors[Math.floor(Math.random() * colors.length)];
+    if (Math.random() < 0.35) {
+      strikes.push({ h: true,  row: Math.floor(Math.random() * ROWS), pos: 0, spd: 0.8 + Math.random() * 1.2, len: 3 + Math.floor(Math.random() * 4), color: color });
+    } else {
+      strikes.push({ h: false, col: Math.floor(Math.random() * COLS), pos: 0, spd: 0.8 + Math.random() * 1.2, len: 3 + Math.floor(Math.random() * 4), color: color });
+    }
+  }
+
+  function addPulse() {
+    pulses.push({ cx: Math.floor(Math.random() * COLS) * GX, cy: Math.floor(Math.random() * ROWS) * GY, r: 0, maxR: Math.min(W, H) * 0.65, spd: Math.min(W, H) * 0.007 });
+  }
+
+  function init() { rs(); strikes = []; pulses = []; frame = 0; for (var s = 0; s < 8; s++) addStrike(); }
+
+  function tick() {
+    if (!document.getElementById('metal-grid')) { cancelAnimationFrame(raf); window.removeEventListener('resize', init); return; }
+    ctx.clearRect(0, 0, W, H);
+    var dk = document.documentElement.classList.contains('dark');
+
+    // Grid dots
+    var dotColor = dk ? 'rgba(113,113,122,0.75)' : 'rgba(161,161,170,0.35)';
+    for (var col = 0; col <= COLS; col++) {
+      for (var row = 0; row <= ROWS; row++) {
+        ctx.beginPath(); ctx.arc(col * GX, row * GY, 1, 0, 6.2832);
+        ctx.fillStyle = dotColor; ctx.fill();
+      }
+    }
+    // Grid lines
+    ctx.strokeStyle = dk ? 'rgba(82,82,91,0.55)' : 'rgba(212,212,216,0.65)';
+    ctx.lineWidth = 0.5;
+    for (var col = 0; col <= COLS; col++) { ctx.beginPath(); ctx.moveTo(col * GX, 0); ctx.lineTo(col * GX, H); ctx.stroke(); }
+    for (var row = 0; row <= ROWS; row++) { ctx.beginPath(); ctx.moveTo(0, row * GY); ctx.lineTo(W, row * GY); ctx.stroke(); }
+
+    frame++;
+    if (frame % 50 === 0 && strikes.length < 22) addStrike();
+    if (frame % 200 === 0) addPulse();
+
+    // Pulses
+    for (var i = pulses.length - 1; i >= 0; i--) {
+      var p = pulses[i];
+      p.r += p.spd;
+      if (p.r > p.maxR) { pulses.splice(i, 1); continue; }
+      var pa = 0.15 * (1 - p.r / p.maxR);
+      ctx.beginPath(); ctx.arc(p.cx, p.cy, p.r, 0, 6.2832);
+      ctx.strokeStyle = 'rgba(52,211,153,' + pa + ')'; ctx.lineWidth = 1; ctx.stroke();
+    }
+
+    // Strikes
+    for (var i = strikes.length - 1; i >= 0; i--) {
+      var s = strikes[i];
+      s.pos += s.spd;
+      if (s.h) {
+        if (s.pos > COLS + s.len) { strikes.splice(i, 1); continue; }
+        var gy = s.row * GY;
+        for (var k = s.len; k >= 0; k--) {
+          var tc = Math.round(s.pos) - k;
+          if (tc < 0 || tc >= COLS) continue;
+          var frac = 1 - (k / s.len), alpha = frac * 0.7;
+          ctx.beginPath(); ctx.moveTo(tc * GX, gy); ctx.lineTo((tc + 1) * GX, gy);
+          ctx.strokeStyle = s.color + (alpha * 0.8) + ')'; ctx.lineWidth = k === 0 ? 2.2 : 1.4; ctx.stroke();
+          ctx.beginPath(); ctx.arc(tc * GX, gy, k === 0 ? 4 : 2, 0, 6.2832);
+          ctx.fillStyle = s.color + alpha + ')'; ctx.fill();
+        }
+      } else {
+        if (s.pos > ROWS + s.len) { strikes.splice(i, 1); continue; }
+        var ri = Math.round(s.pos), gx = s.col * GX;
+        for (var k = s.len; k >= 0; k--) {
+          var tr = ri - k;
+          if (tr < 0 || tr >= ROWS) continue;
+          var frac = 1 - (k / s.len), alpha = frac * 0.7;
+          ctx.beginPath(); ctx.moveTo(gx, tr * GY); ctx.lineTo(gx, (tr + 1) * GY);
+          ctx.strokeStyle = s.color + (alpha * 0.8) + ')'; ctx.lineWidth = k === 0 ? 2.2 : 1.4; ctx.stroke();
+          ctx.beginPath(); ctx.arc(gx, tr * GY, k === 0 ? 4 : 2, 0, 6.2832);
+          ctx.fillStyle = s.color + alpha + ')'; ctx.fill();
+        }
+      }
+    }
+    raf = requestAnimationFrame(tick);
+  }
+
+  init(); tick();
+  window.addEventListener('resize', init);
+})();
+</script>
+{% endblock %}

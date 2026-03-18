@@ -1,0 +1,85 @@
+/* Liquid Metal — IBM machinist theme
+ *
+ * Zenwritten palette. No glass. No glow. Flat + monochrome.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Zenwritten Light */
+  --lm-bg:        #eeeeee;
+  --lm-surface:   #d7d7d7;
+  --lm-border:    #aca9a9;
+  --lm-muted:     #5c5c5c;
+  --lm-fg:        #353535;
+}
+
+.dark {
+  /* Zenwritten Dark */
+  --lm-bg:        #191919;
+  --lm-surface:   #404040;
+  --lm-border:    #4a4546;
+  --lm-muted:     #8e8e8e;
+  --lm-fg:        #bbbbbb;
+}
+
+/* ── Alpine.js ────────────────────────────────────────────────────────────── */
+[x-cloak] { display: none !important; }
+
+/* ── Section label ────────────────────────────────────────────────────────── */
+.lm-label {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lm-muted);
+}
+
+/* ── Panel (replaces glass) ───────────────────────────────────────────────── */
+.glass {
+  background: var(--lm-surface);
+  border: 1px solid var(--lm-border);
+}
+
+.glass-card {
+  background: var(--lm-surface);
+  border: 1px solid var(--lm-border);
+}
+
+.glass-card--featured {
+  border-width: 2px;
+  border-color: var(--lm-fg);
+}
+
+/* ── Accent borders (language tags on splash) ─────────────────────────────── */
+.border-accent-go      { border-color: var(--lm-border); }
+.border-accent-rust    { border-color: var(--lm-border); }
+.border-accent-zig     { border-color: var(--lm-border); }
+.border-accent-green   { border-color: var(--lm-border); }
+.border-accent-subtle  { border-color: var(--lm-border); }
+.border-accent-danger  { border-color: var(--lm-border); }
+.border-accent-whisper { border-color: var(--lm-border); }
+
+/* ── Button ───────────────────────────────────────────────────────────────── */
+.glass-btn {
+  background: var(--lm-surface);
+  border: 1px solid var(--lm-border);
+  transition: background 150ms;
+}
+.glass-btn:hover {
+  background: var(--lm-border);
+}
+
+/* ── Status badges ────────────────────────────────────────────────────────── */
+.status-running      { color: var(--lm-fg); }
+.status-provisioning { color: var(--lm-muted); }
+.status-stopped      { color: var(--lm-muted); }
+.status-failed       { color: var(--lm-fg); }
+.status-crashed      { color: var(--lm-fg); }
+.status-suspended    { color: var(--lm-muted); }
+.status-canceled     { color: var(--lm-muted); }
+
+/* ── Pulse (deploy log indicator) ─────────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}

@@ -63,3 +63,4 @@ infra/terraform/*.tfplan
 
 # ── GCP service account keys (Terraform state backend) ────────────────────────
 keys/
+RESUME.md

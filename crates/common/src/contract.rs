@@ -1,0 +1,443 @@
+//! Shared HTTP request/response types for the Liquid Metal API contract.
+//!
+//! These types are the canonical shapes exchanged between the API, CLI, and web
+//! crates over REST/JSON. Keeping them in `common` eliminates duplication and
+//! guarantees wire-format consistency across all three consumers.
+//!
+//! **Design rules:**
+//! - All types derive both `Serialize` and `Deserialize` (producers and consumers
+//!   share the same definition).
+//! - Owned `String` fields everywhere — no lifetimes. CLI and web crates
+//!   previously used borrowed `&str` in request types; those stay local as
+//!   thin wrappers that serialize into these shapes.
+//! - `Option<T>` for fields that may be absent in either direction.
+
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
+// ── Auth ────────────────────────────────────────────────────────────────────
+
+/// POST /auth/provision, POST /auth/cli/provision request body.
+///
+/// Used by both the web BFF (browser OIDC callback) and CLI (device flow).
+/// The `invite_code` field is only sent by the CLI for new-user registration;
+/// the web BFF path is gated by `X-Internal-Secret` instead.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ProvisionRequest {
+    pub email: String,
+    pub first_name: String,
+    pub last_name: String,
+    #[serde(default)]
+    pub oidc_sub: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite_code: Option<String>,
+}
+
+/// Response from POST /auth/provision and POST /auth/cli/provision.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ProvisionResponse {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub tier: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub oidc_sub: Option<String>,
+    /// Scoped API key (`lm_*`) for CLI auth. Only set on cli_provision responses.
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+// ── Users ───────────────────────────────────────────────────────────────────
+
+/// GET /users/me response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UserResponse {
+    pub id: String,
+    pub email: String,
+    pub name: String,
+}
+
+// ── Workspaces ──────────────────────────────────────────────────────────────
+
+/// Single workspace object returned by GET /workspaces.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct WorkspaceResponse {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub tier: String,
+}
+
+// ── Projects ────────────────────────────────────────────────────────────────
+
+/// Single project object returned by GET /projects and POST /projects.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ProjectResponse {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub slug: String,
+}
+
+/// POST /projects request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreateProjectRequest {
+    pub workspace_id: String,
+    pub name: String,
+    pub slug: String,
+}
+
+/// POST /projects response wrapper.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreateProjectResponse {
+    pub project: ProjectResponse,
+}
+
+// ── Services ────────────────────────────────────────────────────────────────
+
+/// Single service object returned by GET /services.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ServiceResponse {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub engine: String,
+    pub status: String,
+    #[serde(default)]
+    pub run_mode: Option<String>,
+    #[serde(default)]
+    pub upstream_addr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+/// Single log line returned by GET /services/:id/logs.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LogLineResponse {
+    #[serde(default)]
+    pub ts: Option<String>,
+    pub message: String,
+}
+
+// ── Deploy ──────────────────────────────────────────────────────────────────
+
+/// POST /deployments/upload-url request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UploadUrlRequest {
+    pub engine: String,
+    pub deploy_id: String,
+    pub project_id: String,
+}
+
+/// POST /deployments/upload-url response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UploadUrlResponse {
+    pub upload_url: String,
+    pub artifact_key: String,
+}
+
+/// POST /deployments request body.
+///
+/// `vcpu` and `memory_mb` are platform-managed — derived from the workspace
+/// tier at deploy time. Customers only specify `port` (the port their binary
+/// listens on). Resource allocation is an internal concern, not a user knob.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DeployRequest {
+    pub name: String,
+    pub slug: String,
+    pub engine: String,
+    pub project_id: String,
+    pub artifact_key: String,
+    pub sha256: String,
+    /// Metal-only: the port the user's binary listens on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u32>,
+}
+
+/// Inner service object in the deploy response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DeployedService {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub status: String,
+}
+
+/// POST /deployments response wrapper.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DeployResponse {
+    pub service: DeployedService,
+}
+
+// ── Delete ──────────────────────────────────────────────────────────────────
+
+/// POST /services/:id/delete response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DeleteServiceResponse {
+    pub id: String,
+    pub slug: String,
+    pub deleted: bool,
+}
+
+// ── Env Vars ────────────────────────────────────────────────────────────────
+
+/// GET /services/:id/env response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct EnvVarsResponse {
+    pub vars: std::collections::HashMap<String, String>,
+}
+
+/// POST /services/:id/env request body (set/merge).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SetEnvVarsRequest {
+    pub vars: std::collections::HashMap<String, String>,
+}
+
+/// POST /services/:id/env/unset request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UnsetEnvVarsRequest {
+    pub keys: Vec<String>,
+}
+
+// ── Scale ───────────────────────────────────────────────────────────────────
+
+/// POST /services/:id/scale request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ScaleRequest {
+    pub mode: String,
+}
+
+/// POST /services/:id/scale response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ScaleResponse {
+    pub id: String,
+    pub slug: String,
+    pub run_mode: String,
+}
+
+// ── Domains ─────────────────────────────────────────────────────────────────
+
+/// Single domain object.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DomainResponse {
+    pub id: String,
+    pub domain: String,
+    pub is_verified: bool,
+    pub verification_type: String,
+    pub verification_token: String,
+    pub tls_status: String,
+    pub created_at: String,
+}
+
+/// POST /services/:id/domains request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AddDomainRequest {
+    pub domain: String,
+}
+
+/// POST /services/:id/domains/:domain_id/verify response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct VerifyDomainResponse {
+    pub domain: String,
+    pub is_verified: bool,
+    pub message: String,
+}
+
+// ── Deploy History ──────────────────────────────────────────────────────────
+
+/// Single deployment history entry.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DeploymentHistoryEntry {
+    pub id: String,
+    pub slug: String,
+    pub engine: String,
+    pub artifact_key: String,
+    pub commit_sha: Option<String>,
+    pub created_at: String,
+    #[serde(default)]
+    pub is_active: Option<bool>,
+}
+
+/// GET /services/:id/deploys response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DeploymentHistoryResponse {
+    pub deploys: Vec<DeploymentHistoryEntry>,
+}
+
+/// POST /services/:id/rollback request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct RollbackRequest {
+    #[serde(default)]
+    pub deploy_id: Option<String>,
+}
+
+// ── Invite codes ────────────────────────────────────────────────────────────
+
+/// POST /admin/invites request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreateInvitesRequest {
+    #[serde(default)]
+    pub count: Option<i64>,
+}
+
+/// POST /admin/invites response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreateInvitesResponse {
+    pub codes: Vec<String>,
+}
+
+// ── Billing ─────────────────────────────────────────────────────────────────
+
+/// POST /billing/topup request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TopupRequest {
+    pub amount_cents: u64,
+    pub success_url: String,
+    pub cancel_url: String,
+}
+
+/// POST /billing/subscribe request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SubscribeRequest {
+    pub tier: String,
+    pub success_url: String,
+    pub cancel_url: String,
+}
+
+/// Response from POST /billing/topup and POST /billing/subscribe.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CheckoutResponse {
+    pub checkout_url: String,
+    pub session_id: String,
+}
+
+/// GET /billing/balance response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct BalanceResponse {
+    pub tier: String,
+    pub balance_credits: i64,
+    pub topup_credits: i64,
+    pub total_credits: i64,
+    pub billing_period_start: Option<String>,
+    pub billing_period_end: Option<String>,
+    pub plan: PlanInfo,
+}
+
+/// Plan limits embedded in the balance response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PlanInfo {
+    pub price_cents: i32,
+    pub credit_cents: i32,
+    pub max_services: i32,
+    pub max_vcpu: i32,
+    pub max_memory_mb: i32,
+    pub allows_always_on: bool,
+    pub max_wasm_invocations: i64,
+}
+
+/// GET /billing/usage response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UsageResponse {
+    pub period_start: String,
+    pub metal: MetalUsage,
+    pub liquid: LiquidUsage,
+    pub total_cost_microcredits: i64,
+}
+
+/// Metal usage breakdown within the usage response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct MetalUsage {
+    pub vcpu_minutes: i64,
+    pub memory_mb_minutes: i64,
+    pub cost_microcredits: i64,
+}
+
+/// Liquid usage breakdown within the usage response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LiquidUsage {
+    pub invocations: i64,
+    pub cost_microcredits: i64,
+}
+
+/// GET /billing/ledger response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LedgerResponse {
+    pub entries: Vec<LedgerEntry>,
+}
+
+/// Single ledger entry.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LedgerEntry {
+    pub id: String,
+    pub amount: i64,
+    pub kind: String,
+    pub description: Option<String>,
+    pub reference_id: Option<String>,
+    pub balance_after: i64,
+    pub created_at: String,
+}
+
+// ── API Keys ─────────────────────────────────────────────────────────────────
+
+/// POST /api-keys request body.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+    /// Scopes: "read", "write", "admin". Defaults to ["read"].
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Optional expiry in days from now.
+    #[serde(default)]
+    pub expires_in_days: Option<u32>,
+}
+
+/// POST /api-keys response — the only time the raw token is returned.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreateApiKeyResponse {
+    pub id: String,
+    pub name: String,
+    pub token: String,
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+/// Single API key in GET /api-keys list (token is never returned again).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ApiKeyResponse {
+    pub id: String,
+    pub name: String,
+    pub token_prefix: String,
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+    pub created_at: String,
+}
+
+/// GET /api-keys response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ApiKeyListResponse {
+    pub keys: Vec<ApiKeyResponse>,
+}
+
+/// DELETE /api-keys/:id response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DeleteApiKeyResponse {
+    pub id: String,
+    pub deleted: bool,
+}
+
+// ── Health ───────────────────────────────────────────────────────────────────
+
+/// GET /healthz response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct HealthResponse {
+    pub status: String,
+    pub db: String,
+    pub nats: String,
+}

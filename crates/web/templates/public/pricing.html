@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Plans{% endblock %}
+{% block description %}Start free. Scale when you're ready. No surprise bills.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  <div class="mb-16">
+    <p class="lm-label mb-3">// plans</p>
+    <h1 class="text-4xl font-black tracking-tight mb-3">Simple, transparent pricing</h1>
+    <p class="text-zwl-muted dark:text-zw-muted max-w-lg">Start free. Scale when you're ready. No surprise bills.</p>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-4 mb-16">
+
+    {# Hobby #}
+    <div class="glass-card p-8 flex flex-col">
+      <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-4">HOBBY</p>
+      <div class="mb-6">
+        <span class="text-4xl font-black font-mono">$0</span>
+        <span class="text-zwl-muted dark:text-zw-muted font-mono text-sm ml-1">/month</span>
+      </div>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8">For learning and side projects.</p>
+      <a href="/auth/login" class="glass-btn block w-full text-center text-[11px] font-mono font-bold uppercase tracking-widest px-6 py-3 transition-colors mb-8">
+        Get Started
+      </a>
+      <ul class="space-y-3 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
+        <li class="flex items-center gap-2"><span>&#10003;</span> 2 services</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Metal + Liquid engines</li>
+        <li class="flex items-center gap-2"><span>&#10007;</span> Always-on</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> 5-min idle timeout</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Community support</li>
+      </ul>
+    </div>
+
+    {# Pro #}
+    <div class="glass-card glass-card--featured p-8 flex flex-col">
+      <p class="text-[10px] font-mono font-bold uppercase tracking-widest mb-4">
+        PRO <span class="ml-2 text-[9px] text-zwl-muted dark:text-zw-muted font-normal normal-case tracking-normal">most popular</span>
+      </p>
+      <div class="mb-6">
+        <span class="text-4xl font-black font-mono">$10</span>
+        <span class="text-zwl-muted dark:text-zw-muted font-mono text-sm ml-1">/month</span>
+      </div>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8">For production workloads.</p>
+      <a href="/auth/login" class="block w-full text-center bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-[11px] font-mono font-bold uppercase tracking-widest px-6 py-3 hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors mb-8">
+        Start Pro
+      </a>
+      <ul class="space-y-3 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
+        <li class="flex items-center gap-2"><span>&#10003;</span> 10 services</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Metal + Liquid engines</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Always-on available</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> $10 monthly credits</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Priority support</li>
+      </ul>
+    </div>
+
+    {# Team #}
+    <div class="glass-card p-8 flex flex-col">
+      <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-4">TEAM</p>
+      <div class="mb-6">
+        <span class="text-4xl font-black font-mono">$20</span>
+        <span class="text-zwl-muted dark:text-zw-muted font-mono text-sm ml-1">/month</span>
+      </div>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8">For teams shipping together.</p>
+      <a href="/auth/login" class="glass-btn block w-full text-center text-[11px] font-mono font-bold uppercase tracking-widest px-6 py-3 transition-colors mb-8">
+        Start Team
+      </a>
+      <ul class="space-y-3 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
+        <li class="flex items-center gap-2"><span>&#10003;</span> 25 services</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Metal + Liquid engines</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Always-on available</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> $20 monthly credits</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Dedicated support</li>
+      </ul>
+    </div>
+
+  </div>
+
+  {# Usage pricing #}
+  <div class="glass-card p-8 mb-16">
+    <p class="lm-label mb-3">// pay-as-you-go</p>
+    <h2 class="text-xl font-black tracking-tight mb-2">Usage beyond credits</h2>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8">Monthly credits cover most workloads. Overages billed at these rates.</p>
+    <div class="grid sm:grid-cols-2 gap-8 text-xs font-mono">
+      <div>
+        <p class="text-[10px] uppercase tracking-widest font-bold mb-3">Metal &mdash; Firecracker</p>
+        <ul class="space-y-1 text-zwl-muted dark:text-zw-muted">
+          <li>$0.10 <span>/ vCPU-hour</span></li>
+          <li>$0.01 <span>/ GB-hour</span></li>
+        </ul>
+      </div>
+      <div>
+        <p class="text-[10px] uppercase tracking-widest font-bold mb-3">Liquid &mdash; WebAssembly</p>
+        <ul class="space-y-1 text-zwl-muted dark:text-zw-muted">
+          <li>$0.000001 <span>/ invocation</span></li>
+          <li>1M invocations <span>= $1.00</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="text-center">
+    <a href="/auth/login" class="inline-flex items-center px-10 py-4 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold font-mono uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+      [ GET STARTED FREE ]
+    </a>
+  </div>
+
+</div>
+{% endblock %}
