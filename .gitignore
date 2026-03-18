@@ -1,5 +1,7 @@
 # ── Rust ──────────────────────────────────────────────────────────────────────
 /target
+crates/ebpf-programs/target/
+crates/ebpf-programs/Cargo.lock
 Cargo.lock.bak
 
 # ── Go ────────────────────────────────────────────────────────────────────────

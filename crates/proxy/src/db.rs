@@ -34,3 +34,28 @@ pub async fn lookup_route(pool: &Pool, slug: &str) -> Result<Option<RouteRecord>
         upstream_addr: r.get(1),
     }))
 }
+
+/// Look up the slug + upstream for a verified custom domain.
+/// Returns (slug, record) so the caller can populate the route cache under the slug key.
+pub async fn lookup_domain(pool: &Pool, domain: &str) -> Result<Option<(String, RouteRecord)>> {
+    let client = pool.get().await.context("acquiring db connection")?;
+    let row = client
+        .query_opt(
+            "SELECT s.slug, s.engine, s.upstream_addr \
+             FROM domains d JOIN services s ON s.id = d.service_id \
+             WHERE d.domain = $1 AND d.is_verified = true \
+               AND s.deleted_at IS NULL",
+            &[&domain],
+        )
+        .await
+        .context("domain lookup")?;
+
+    Ok(row.map(|r| {
+        let slug: String = r.get(0);
+        let record = RouteRecord {
+            engine: r.get(1),
+            upstream_addr: r.get(2),
+        };
+        (slug, record)
+    }))
+}

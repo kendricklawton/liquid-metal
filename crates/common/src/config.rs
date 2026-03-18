@@ -26,8 +26,14 @@ pub async fn nats_connect(url: &str) -> Result<async_nats::Client> {
                 .await
                 .context("NATS authenticated connect")?
         }
-        _ => {
-            tracing::info!("NATS: connecting without auth (NATS_USER not set)");
+        (Some(_), None) => {
+            anyhow::bail!("NATS_USER is set but NATS_PASSWORD is missing — set both or neither");
+        }
+        (None, Some(_)) => {
+            anyhow::bail!("NATS_PASSWORD is set but NATS_USER is missing — set both or neither");
+        }
+        (None, None) => {
+            tracing::info!("NATS: connecting without auth (NATS_USER/NATS_PASSWORD not set)");
             async_nats::connect(url)
                 .await
                 .context("NATS connect")?
@@ -67,4 +73,56 @@ pub fn pg_tls() -> Result<Option<tokio_postgres_rustls::MakeRustlsConnect>> {
 
     tracing::info!("Postgres: TLS enabled (CA: {ca_path})");
     Ok(Some(tokio_postgres_rustls::MakeRustlsConnect::new(tls_config)))
+}
+
+/// Initialize tracing with an optional OpenTelemetry layer.
+///
+/// When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, spans are exported via OTLP/gRPC
+/// to the configured collector (e.g., Grafana Tempo). When unset, only the
+/// standard `fmt` subscriber is used — zero overhead, no network calls.
+///
+/// Returns the tracer provider handle for graceful shutdown. Drop it at exit.
+pub fn init_tracing(service_name: &str) -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
+    use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| format!("{service_name}=info").into());
+    let fmt_layer = tracing_subscriber::fmt::layer();
+
+    if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        use opentelemetry::trace::TracerProvider;
+        use opentelemetry_otlp::WithExportConfig;
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint.clone())
+            .build()
+            .expect("OTLP span exporter");
+
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(
+                opentelemetry_sdk::Resource::builder()
+                    .with_service_name(service_name.to_string())
+                    .build(),
+            )
+            .build();
+
+        let tracer = provider.tracer(service_name.to_string());
+        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt_layer)
+            .with(otel_layer)
+            .init();
+
+        tracing::info!(%endpoint, "OpenTelemetry tracing enabled");
+        Some(provider)
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt_layer)
+            .init();
+        None
+    }
 }

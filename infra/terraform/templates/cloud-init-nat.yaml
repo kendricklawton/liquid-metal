@@ -88,6 +88,8 @@ runcmd:
     HEARTBEAT_URL_VICTORIAMETRICS=${heartbeat_url_victoriametrics}
     HEARTBEAT_URL_VICTORIALOGS=${heartbeat_url_victorialogs}
     HEARTBEAT_URL_ARTIFACTS=${heartbeat_url_artifacts}
+    # ── Alert Routing ───────────────────────────────────────────────────────
+    SLACK_WEBHOOK_URL=${slack_webhook_url}
     EOFENV
   - chmod 600 /etc/liquid-metal/secrets.env
 
@@ -105,6 +107,7 @@ runcmd:
   - |
     cat > /etc/liquid-metal/templates/nats.conf <<'EOFTPL'
     listen: 0.0.0.0:4222
+    http_port: 8222
 
     authorization {
       users: [
@@ -229,9 +232,14 @@ runcmd:
         url: http://127.0.0.1:8428
         isDefault: true
       - name: VictoriaLogs
+        uid: victorialogs
         type: victoriametrics-logs-datasource
         access: proxy
         url: http://127.0.0.1:9428
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://127.0.0.1:3200
       - name: Postgres
         uid: postgres
         type: postgres
@@ -262,6 +270,349 @@ runcmd:
 
     [plugins]
     allow_loading_unsigned_plugins = victoriametrics-logs-datasource
+    EOFTPL
+
+  # Grafana alert contact points (Slack)
+  - |
+    cat > /etc/liquid-metal/templates/grafana-contactpoints.yaml <<'EOFTPL'
+    apiVersion: 1
+    contactPoints:
+      - orgId: 1
+        name: slack
+        receivers:
+          - uid: slack-default
+            type: slack
+            settings:
+              url: $SLACK_WEBHOOK_URL
+    EOFTPL
+
+  # Grafana notification policy — route all alerts to Slack
+  - |
+    cat > /etc/liquid-metal/templates/grafana-policies.yaml <<'EOFTPL'
+    apiVersion: 1
+    policies:
+      - orgId: 1
+        receiver: slack
+        group_by: ['alertname']
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+    EOFTPL
+
+  # Grafana dashboard provisioning
+  - |
+    cat > /etc/liquid-metal/templates/grafana-dashboards.yaml <<'EOFTPL'
+    apiVersion: 1
+    providers:
+      - name: default
+        orgId: 1
+        folder: Liquid Metal
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        options:
+          path: /etc/grafana/provisioning/dashboards/json
+          foldersFromFilesStructure: false
+    EOFTPL
+
+  # Dashboard: Node Overview
+  - |
+    cat > /etc/liquid-metal/templates/dashboard-node-overview.json <<'EOFTPL'
+    {
+      "uid": "node-overview",
+      "title": "Node Overview",
+      "tags": ["liquid-metal", "infrastructure"],
+      "timezone": "utc",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [{
+          "name": "instance",
+          "type": "query",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "query": "label_values(up{job=\"node_exporter\"}, instance)",
+          "refresh": 2,
+          "includeAll": true,
+          "current": { "text": "All", "value": "$__all" }
+        }]
+      },
+      "panels": [
+        {
+          "id": 1, "type": "timeseries", "title": "CPU Usage %",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\",instance=~\"$instance\"}[5m])) * 100)", "legendFormat": "{{instance}}" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+        },
+        {
+          "id": 2, "type": "timeseries", "title": "Memory Usage %",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "(1 - (node_memory_MemAvailable_bytes{instance=~\"$instance\"} / node_memory_MemTotal_bytes{instance=~\"$instance\"})) * 100", "legendFormat": "{{instance}}" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+        },
+        {
+          "id": 3, "type": "timeseries", "title": "Disk I/O (Read)",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "rate(node_disk_read_bytes_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{instance}} {{device}}" }],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        },
+        {
+          "id": 4, "type": "timeseries", "title": "Disk I/O (Write)",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "rate(node_disk_written_bytes_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{instance}} {{device}}" }],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Network Traffic (Receive)",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "rate(node_network_receive_bytes_total{instance=~\"$instance\",device!~\"lo|veth.*|tap.*\"}[5m])", "legendFormat": "{{instance}} {{device}}" }],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        },
+        {
+          "id": 6, "type": "timeseries", "title": "Network Traffic (Transmit)",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "rate(node_network_transmit_bytes_total{instance=~\"$instance\",device!~\"lo|veth.*|tap.*\"}[5m])", "legendFormat": "{{instance}} {{device}}" }],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        },
+        {
+          "id": 7, "type": "gauge", "title": "Filesystem Usage",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/\",instance=~\"$instance\"} / node_filesystem_size_bytes{mountpoint=\"/\",instance=~\"$instance\"})) * 100", "legendFormat": "{{instance}}" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"value": 0, "color": "green"}, {"value": 70, "color": "yellow"}, {"value": 90, "color": "red"}] } } }
+        },
+        {
+          "id": 8, "type": "timeseries", "title": "System Load (1m)",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "node_load1{instance=~\"$instance\"}", "legendFormat": "{{instance}}" }]
+        }
+      ],
+      "schemaVersion": 39
+    }
+    EOFTPL
+
+  # Dashboard: API Metrics
+  - |
+    cat > /etc/liquid-metal/templates/dashboard-api-metrics.json <<'EOFTPL'
+    {
+      "uid": "api-metrics",
+      "title": "API Metrics",
+      "tags": ["liquid-metal", "api"],
+      "timezone": "utc",
+      "refresh": "10s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1, "type": "timeseries", "title": "Request Rate (req/s)",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(rate(http_requests_total{job=\"api\"}[5m])) by (path)", "legendFormat": "{{path}}" }],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "id": 2, "type": "timeseries", "title": "Error Rate (4xx+5xx)",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(rate(http_requests_total{job=\"api\",status=~\"4..|5..\"}[5m])) by (path, status)", "legendFormat": "{{path}} {{status}}" }],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "id": 3, "type": "timeseries", "title": "Latency p50",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"api\"}[5m])) by (le, path))", "legendFormat": "{{path}}" }],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 4, "type": "timeseries", "title": "Latency p95",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"api\"}[5m])) by (le, path))", "legendFormat": "{{path}}" }],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Latency p99",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"api\"}[5m])) by (le, path))", "legendFormat": "{{path}}" }],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 6, "type": "stat", "title": "Total Requests (24h)",
+          "gridPos": { "h": 4, "w": 12, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(increase(http_requests_total{job=\"api\"}[24h]))" }],
+          "fieldConfig": { "defaults": { "unit": "short" } }
+        },
+        {
+          "id": 7, "type": "stat", "title": "Error Rate % (5m)",
+          "gridPos": { "h": 4, "w": 12, "x": 12, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(rate(http_requests_total{job=\"api\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"api\"}[5m])) * 100" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "steps": [{"value": 0, "color": "green"}, {"value": 1, "color": "yellow"}, {"value": 5, "color": "red"}] } } }
+        }
+      ],
+      "schemaVersion": 39
+    }
+    EOFTPL
+
+  # Dashboard: NATS Overview
+  - |
+    cat > /etc/liquid-metal/templates/dashboard-nats-overview.json <<'EOFTPL'
+    {
+      "uid": "nats-overview",
+      "title": "NATS Overview",
+      "tags": ["liquid-metal", "nats"],
+      "timezone": "utc",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Active Connections",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "gnatsd_connz_total{job=\"nats\"}" }]
+        },
+        {
+          "id": 2, "type": "stat", "title": "Total Subscriptions",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "gnatsd_varz_subscriptions{job=\"nats\"}" }]
+        },
+        {
+          "id": 3, "type": "stat", "title": "Slow Consumers",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "gnatsd_varz_slow_consumers{job=\"nats\"}" }],
+          "fieldConfig": { "defaults": { "thresholds": { "steps": [{"value": 0, "color": "green"}, {"value": 1, "color": "red"}] } } }
+        },
+        {
+          "id": 4, "type": "stat", "title": "Server Uptime",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "gnatsd_varz_uptime{job=\"nats\"}" }],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Messages In/Out (rate)",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "rate(gnatsd_varz_in_msgs{job=\"nats\"}[5m])", "legendFormat": "in" },
+            { "expr": "rate(gnatsd_varz_out_msgs{job=\"nats\"}[5m])", "legendFormat": "out" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "msg/s" } }
+        },
+        {
+          "id": 6, "type": "timeseries", "title": "Bytes In/Out (rate)",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "rate(gnatsd_varz_in_bytes{job=\"nats\"}[5m])", "legendFormat": "in" },
+            { "expr": "rate(gnatsd_varz_out_bytes{job=\"nats\"}[5m])", "legendFormat": "out" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        },
+        {
+          "id": 7, "type": "timeseries", "title": "JetStream Storage Used",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "jetstream_server_file_store_bytes{job=\"nats\"}", "legendFormat": "file" },
+            { "expr": "jetstream_server_mem_store_bytes{job=\"nats\"}", "legendFormat": "memory" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "bytes" } }
+        },
+        {
+          "id": 8, "type": "timeseries", "title": "JetStream Consumer Pending",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "jetstream_consumer_num_pending{job=\"nats\"}", "legendFormat": "{{stream}} / {{consumer}}" }]
+        }
+      ],
+      "schemaVersion": 39
+    }
+    EOFTPL
+
+  # Grafana Tempo config (tracing backend)
+  - |
+    cat > /etc/liquid-metal/templates/tempo.yaml <<'EOFTPL'
+    server:
+      http_listen_port: 3200
+
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: "0.0.0.0:4317"
+
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /mnt/observability/tempo
+        wal:
+          path: /mnt/observability/tempo/wal
+
+    metrics_generator:
+      storage:
+        path: /mnt/observability/tempo/generator/wal
+    EOFTPL
+
+  # Gatus uptime monitor config
+  - |
+    cat > /etc/liquid-metal/templates/gatus.yaml <<'EOFTPL'
+    storage:
+      type: sqlite
+      path: /var/lib/gatus/data.db
+
+    ui:
+      title: Liquid Metal Status
+      header: Liquid Metal Platform Status
+
+    endpoints:
+      - name: API Health
+        url: "http://$NODE_A_01_HOSTNAME:7070/healthz"
+        interval: 30s
+        conditions:
+          - "[STATUS] == 200"
+          - "[RESPONSE_TIME] < 1000"
+
+      - name: HTTPS (Proxy)
+        url: "https://$DOMAIN"
+        interval: 30s
+        conditions:
+          - "[STATUS] < 500"
+          - "[CERTIFICATE_EXPIRATION] > 14d"
+
+      - name: NATS
+        url: "tcp://127.0.0.1:4222"
+        interval: 30s
+        conditions:
+          - "[CONNECTED] == true"
+
+      - name: VictoriaMetrics
+        url: "http://127.0.0.1:8428/health"
+        interval: 60s
+        conditions:
+          - "[STATUS] == 200"
+
+      - name: Grafana
+        url: "http://127.0.0.1:3001/api/health"
+        interval: 60s
+        conditions:
+          - "[STATUS] == 200"
+
+    web:
+      address: "127.0.0.1"
+      port: 8080
     EOFTPL
 
   # rclone config
@@ -317,24 +668,32 @@ runcmd:
     frontend rate_limiter
       stick-table type ip size 100k expire 30s store http_req_rate(1s)
 
-    frontend https
-      bind *:443 ssl crt /etc/letsencrypt/live/$DOMAIN/combined.pem
-      http-request track-sc0 src table rate_limiter
-      http-request deny deny_status 429 if { sc_http_req_rate(0) gt 50 }
-      http-request set-header X-Forwarded-Proto https
-      http-request set-header X-Real-IP %[src]
-      default_backend pingora
+    # ── HTTPS — TCP pass-through to Pingora (Pingora terminates TLS + SNI) ──
+    frontend https_passthrough
+      bind *:443
+      mode tcp
+      option tcplog
+      # L4 rate limiting by source IP (no content inspection in TCP mode).
+      # For HTTP-layer rate limiting, rely on Pingora's upstream proxy.
+      default_backend pingora_tls
 
+    # ── HTTP — ACME challenges go to API; everything else redirects HTTPS ──
     frontend http
       bind *:80
-      http-request redirect scheme https code 301
+      mode http
+      acl is_acme path_beg /.well-known/acme-challenge/
+      use_backend api_acme if is_acme
+      http-request redirect scheme https code 301 if !is_acme
 
-    backend pingora
-      balance roundrobin
-      option httpchk GET /health
-      http-check expect status 200
-      server node-a-01 $NODE_A_01_HOSTNAME:8080 check inter 5s fall 3 rise 2
-      server node-b-01 $NODE_B_01_HOSTNAME:8080 check inter 5s fall 3 rise 2
+    backend pingora_tls
+      mode tcp
+      # Pingora handles TLS termination + SNI cert selection.
+      server local 127.0.0.1:8443 check inter 5s fall 3 rise 2
+
+    backend api_acme
+      mode http
+      # ACME HTTP-01 challenge responder — served by the API.
+      server local 127.0.0.1:7070 check inter 5s fall 3 rise 2
     EOFTPL
 
   # VictoriaMetrics scrape config
@@ -347,6 +706,44 @@ runcmd:
           - targets:
               - "$NODE_A_01_HOSTNAME:9100"
               - "$NODE_B_01_HOSTNAME:9100"
+            labels:
+              env: liquid-metal
+      - job_name: nats
+        scrape_interval: 15s
+        metrics_path: /metrics
+        static_configs:
+          - targets:
+              - "127.0.0.1:8222"
+            labels:
+              env: liquid-metal
+      - job_name: node_exporter_nat
+        scrape_interval: 15s
+        static_configs:
+          - targets:
+              - "127.0.0.1:9100"
+            labels:
+              env: liquid-metal
+              node: nat-vps
+      - job_name: api
+        scrape_interval: 15s
+        static_configs:
+          - targets:
+              - "$NODE_A_01_HOSTNAME:9090"
+              - "$NODE_B_01_HOSTNAME:9090"
+            labels:
+              env: liquid-metal
+      - job_name: victorialogs
+        scrape_interval: 15s
+        static_configs:
+          - targets:
+              - "127.0.0.1:9428"
+            labels:
+              env: liquid-metal
+      - job_name: tempo
+        scrape_interval: 15s
+        static_configs:
+          - targets:
+              - "127.0.0.1:3200"
             labels:
               env: liquid-metal
     EOFTPL
@@ -462,6 +859,23 @@ runcmd:
     mkdir -p /etc/grafana/provisioning/datasources /etc/grafana/provisioning/plugins /etc/grafana/provisioning/alerting
     envsubst < "$TEMPLATES/grafana-datasources.yaml"   > /etc/grafana/provisioning/datasources/datasources.yaml
     envsubst < "$TEMPLATES/grafana.ini"                > /etc/grafana/grafana.ini
+    envsubst < "$TEMPLATES/grafana-contactpoints.yaml" > /etc/grafana/provisioning/alerting/contactpoints.yaml
+    cp "$TEMPLATES/grafana-policies.yaml"              /etc/grafana/provisioning/alerting/policies.yaml
+
+    # Tempo
+    mkdir -p /etc/tempo
+    cp "$TEMPLATES/tempo.yaml"                         /etc/tempo/config.yaml
+
+    # Gatus
+    mkdir -p /etc/gatus
+    envsubst < "$TEMPLATES/gatus.yaml"                 > /etc/gatus/config.yaml
+
+    # Dashboards
+    mkdir -p /etc/grafana/provisioning/dashboards/json
+    cp "$TEMPLATES/grafana-dashboards.yaml"            /etc/grafana/provisioning/dashboards/dashboards.yaml
+    cp "$TEMPLATES/dashboard-node-overview.json"       /etc/grafana/provisioning/dashboards/json/node-overview.json
+    cp "$TEMPLATES/dashboard-api-metrics.json"         /etc/grafana/provisioning/dashboards/json/api-metrics.json
+    cp "$TEMPLATES/dashboard-nats-overview.json"       /etc/grafana/provisioning/dashboards/json/nats-overview.json
 
     # rclone
     mkdir -p /root/.config/rclone
@@ -503,7 +917,7 @@ runcmd:
     # Restart services that read config files (not backup scripts — they
     # source secrets.env at runtime and pick up changes automatically).
     echo "Restarting services..."
-    systemctl restart nats pgbouncer haproxy grafana
+    systemctl restart nats pgbouncer haproxy grafana gatus
 
     echo "Secret rotation complete."
     EOFSCRIPT
@@ -547,6 +961,42 @@ runcmd:
   # Certbot
   - apt-get install -y certbot python3-certbot-dns-cloudflare
 
+  # node_exporter (NAT VPS — with textfile collector for TLS cert expiry)
+  - curl -fsSL https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz | tar -xz -C /tmp
+  - mv /tmp/node_exporter-1.8.2.linux-amd64/node_exporter /usr/local/bin/node_exporter
+  - chmod +x /usr/local/bin/node_exporter
+  - mkdir -p /var/lib/node_exporter/textfile_collector
+
+  # TLS certificate expiry check script
+  - |
+    cat > /opt/liquid-metal/check-cert-expiry.sh <<'EOFSCRIPT'
+    #!/bin/bash
+    set -euo pipefail
+    source /etc/liquid-metal/secrets.env
+    CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+    OUT="/var/lib/node_exporter/textfile_collector/cert_expiry.prom"
+    if [ -f "$CERT" ]; then
+      EXPIRY=$(openssl x509 -enddate -noout -in "$CERT" | cut -d= -f2)
+      EPOCH=$(date -d "$EXPIRY" +%s)
+      cat > "$OUT.tmp" <<PROM
+    # HELP tls_cert_expiry_timestamp_seconds TLS certificate expiry epoch
+    # TYPE tls_cert_expiry_timestamp_seconds gauge
+    tls_cert_expiry_timestamp_seconds{domain="$DOMAIN"} $EPOCH
+    PROM
+      mv "$OUT.tmp" "$OUT"
+    fi
+    EOFSCRIPT
+  - chmod +x /opt/liquid-metal/check-cert-expiry.sh
+
+  # Grafana Tempo (distributed tracing backend)
+  - curl -fsSL https://github.com/grafana/tempo/releases/download/v2.7.2/tempo_2.7.2_linux_amd64.tar.gz | tar -xz -C /usr/local/bin/ tempo
+  - chmod +x /usr/local/bin/tempo
+
+  # Gatus uptime monitor
+  - curl -fsSL https://github.com/TwiN/gatus/releases/download/v5.16.0/gatus_5.16.0_linux_amd64.tar.gz | tar -xz -C /usr/local/bin/ gatus
+  - chmod +x /usr/local/bin/gatus
+  - mkdir -p /var/lib/gatus
+
   # ── Render Configs From Secrets ─────────────────────────────────────────────
   # First render — produces all config files from templates + secrets.env.
   - mkdir -p /etc/nats /var/lib/nats/jetstream /var/log/backups /etc/pgbouncer
@@ -565,11 +1015,15 @@ runcmd:
   # ── Systemd Units ───────────────────────────────────────────────────────────
 
   # Nomad (server mode — tiebreaker only)
-  - mkdir -p /etc/nomad.d /var/lib/nomad
+  - mkdir -p /etc/nomad.d /var/lib/nomad /var/log/nomad
   - |
     cat > /etc/nomad.d/server.hcl <<EOF
     data_dir  = "/var/lib/nomad"
     log_level = "INFO"
+
+    log_file             = "/var/log/nomad/nomad.log"
+    log_rotate_duration  = "24h"
+    log_rotate_max_files = 7
 
     server {
       enabled          = true
@@ -577,7 +1031,14 @@ runcmd:
     }
 
     client {
-      enabled = false
+      enabled    = true
+      node_class = "gateway"
+      options {
+        "driver.raw_exec.enable" = "1"
+      }
+      meta {
+        gateway_role = "primary"
+      }
     }
     EOF
   - |
@@ -608,6 +1069,23 @@ runcmd:
     Restart=on-failure
     RestartSec=5
     LimitNOFILE=65536
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # node_exporter (NAT VPS)
+  - |
+    cat > /etc/systemd/system/node_exporter.service <<EOF
+    [Unit]
+    Description=Prometheus Node Exporter
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/node_exporter \
+      --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+    Restart=on-failure
+    RestartSec=5
 
     [Install]
     WantedBy=multi-user.target
@@ -662,6 +1140,132 @@ runcmd:
 
     [Service]
     ExecStart=/opt/grafana/bin/grafana server --config=/etc/grafana/grafana.ini --homepath=/opt/grafana
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # Tempo
+  - |
+    cat > /etc/systemd/system/tempo.service <<EOF
+    [Unit]
+    Description=Grafana Tempo
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/tempo -config.file=/etc/tempo/config.yaml
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # Gatus
+  - |
+    cat > /etc/systemd/system/gatus.service <<EOF
+    [Unit]
+    Description=Gatus Uptime Monitor
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/gatus --config /etc/gatus/config.yaml
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # ── HAProxy logging → file (for Promtail) ──────────────────────────────────
+  - |
+    cat > /etc/rsyslog.d/49-haproxy.conf <<'EOF'
+    local0.* /var/log/haproxy.log
+    & stop
+    EOF
+  - systemctl restart rsyslog
+
+  # Logrotate for HAProxy log file
+  - |
+    cat > /etc/logrotate.d/haproxy <<'EOF'
+    /var/log/haproxy.log {
+      daily
+      rotate 7
+      compress
+      delaycompress
+      missingok
+      notifempty
+      postrotate
+        /usr/lib/rsyslog/rsyslog-rotate
+      endscript
+    }
+    EOF
+
+  # ── Promtail (NAT VPS) ─────────────────────────────────────────────────────
+  # Ships HAProxy logs + systemd journal to local VictoriaLogs.
+  - curl -fsSL https://github.com/grafana/loki/releases/download/v3.4.2/promtail-linux-amd64.zip -o /tmp/promtail.zip
+  - unzip /tmp/promtail.zip -d /usr/local/bin/
+  - chmod +x /usr/local/bin/promtail-linux-amd64
+  - mv /usr/local/bin/promtail-linux-amd64 /usr/local/bin/promtail
+  - mkdir -p /etc/promtail /var/lib/promtail
+  - |
+    cat > /etc/promtail/config.yaml <<'EOF'
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+
+    positions:
+      filename: /var/lib/promtail/positions.yaml
+
+    clients:
+      - url: http://127.0.0.1:9428/insert/loki/api/v1/push
+        batchsize: 1048576
+        batchwait: 3s
+        backoff_config:
+          min_period: 500ms
+          max_period: 30s
+          max_retries: 10
+
+    limits_config:
+      readline_rate_enabled: true
+      readline_rate: 5000
+      readline_burst: 10000
+      readline_rate_drop: true
+
+    scrape_configs:
+      - job_name: haproxy
+        static_configs:
+          - targets:
+              - localhost
+            labels:
+              node: nat-vps
+              service: haproxy
+              __path__: /var/log/haproxy.log
+        pipeline_stages:
+          - limit:
+              rate: 1000
+              burst: 2000
+              drop: true
+
+      - job_name: journal
+        journal:
+          max_age: 12h
+          labels:
+            node: nat-vps
+        relabel_configs:
+          - source_labels: ['__journal__systemd_unit']
+            target_label: unit
+    EOF
+  - |
+    cat > /etc/systemd/system/promtail.service <<'EOF'
+    [Unit]
+    Description=Promtail
+    After=network.target victorialogs.service
+
+    [Service]
+    ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/config.yaml
     Restart=on-failure
     RestartSec=5
 
@@ -815,6 +1419,119 @@ runcmd:
             for: 0s
             annotations:
               summary: "{{ $values.A.Value }} services stuck in provisioning for >10 minutes — watchdog will auto-heal, investigate daemon logs"
+
+          - uid: cert-expiry
+            title: TLS Certificate Expiring Soon
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 3600, to: 0 }
+                datasourceUid: prometheus
+                model:
+                  expr: (tls_cert_expiry_timestamp_seconds - time()) / 86400 < 14
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: C
+                relativeTimeRange: { from: 3600, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: { type: gt, params: [0] }
+            for: 1h
+            annotations:
+              summary: "TLS certificate for {{ $labels.domain }} expires in less than 14 days"
+
+          - uid: vlogs-ingest-stalled
+            title: VictoriaLogs Ingest Stalled
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: prometheus
+                model:
+                  expr: rate(vl_rows_ingested_total[5m])
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: B
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: reduce
+                  expression: A
+                  reducer: last
+              - refId: C
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: B
+                  conditions:
+                    - evaluator: { type: lt, params: [1] }
+            for: 5m
+            annotations:
+              summary: "VictoriaLogs ingest rate has been zero for 5+ minutes — Promtail may have stopped shipping logs"
+
+          - uid: ebpf-isolation-breach
+            title: eBPF Isolation Breach (P0)
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: victorialogs
+                model:
+                  expr: '_msg:"ISOLATION BREACH" OR _msg:"eBPF isolation breach"'
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: B
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: reduce
+                  expression: A
+                  reducer: count
+              - refId: C
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: B
+                  conditions:
+                    - evaluator: { type: gt, params: [0] }
+            for: 0s
+            annotations:
+              summary: "P0: eBPF isolation breach detected — VMs may be running without network isolation. Check daemon-metal logs immediately."
+
+          - uid: tempo-ingest-stalled
+            title: Tempo Trace Ingest Stalled
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: prometheus
+                model:
+                  expr: rate(tempo_distributor_spans_received_total[5m])
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: B
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: reduce
+                  expression: A
+                  reducer: last
+              - refId: C
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: B
+                  conditions:
+                    - evaluator: { type: lt, params: [1] }
+            for: 10m
+            annotations:
+              summary: "No traces received by Tempo in 10+ minutes — OTEL tracing pipeline may be broken"
     EOF
 
   # ── Block Storage Mount ────────────────────────────────────────────────────
@@ -825,12 +1542,29 @@ runcmd:
     fi
   - mount /dev/vdb /mnt/observability
   - echo '/dev/vdb /mnt/observability ext4 defaults,nofail 0 2' >> /etc/fstab
-  - mkdir -p /mnt/observability/victoriametrics /mnt/observability/victorialogs /mnt/observability/grafana
+  - mkdir -p /mnt/observability/victoriametrics /mnt/observability/victorialogs /mnt/observability/grafana /mnt/observability/tempo
 
   # ── Start Services ──────────────────────────────────────────────────────────
   - systemctl daemon-reload
-  - systemctl enable nomad nats victoriametrics victorialogs grafana haproxy pgbouncer
-  - systemctl start nomad nats pgbouncer victoriametrics victorialogs grafana haproxy
+  - systemctl enable nomad nats node_exporter victoriametrics victorialogs tempo grafana gatus haproxy pgbouncer promtail
+  - systemctl start nomad nats pgbouncer node_exporter victoriametrics victorialogs tempo grafana gatus haproxy promtail
+
+  # Run cert expiry check once at boot, then every 6 hours via cron
+  - /opt/liquid-metal/check-cert-expiry.sh
+
+  # ── Logrotate: backup logs ──────────────────────────────────────────────────
+  - |
+    cat > /etc/logrotate.d/liquid-metal-backups <<'EOF'
+    /var/log/backups/*.log {
+      daily
+      rotate 7
+      compress
+      delaycompress
+      missingok
+      notifempty
+      create 0644 root root
+    }
+    EOF
 
   # ── Backup Crons ────────────────────────────────────────────────────────────
   - |
@@ -839,5 +1573,6 @@ runcmd:
     30 3 * * * /opt/backups/scripts/backup-victoriametrics.sh 2>&1 | tee -a /var/log/backups/victoriametrics.log
     0 4 * * * /opt/backups/scripts/backup-victorialogs.sh 2>&1 | tee -a /var/log/backups/victorialogs.log
     30 4 * * * /opt/backups/scripts/backup-artifacts.sh 2>&1 | tee -a /var/log/backups/artifacts.log
+    0 */6 * * * /opt/liquid-metal/check-cert-expiry.sh
     EOFCRON
     ) | crontab -

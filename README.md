@@ -24,9 +24,9 @@ name   = "my-app"
 engine = "metal"
 port   = 8080
 
-[metal]
-vcpu      = 1
-memory_mb = 128
+[build]
+command = "cargo build --target x86_64-unknown-linux-musl --release"
+output  = "target/x86_64-unknown-linux-musl/release/my-app"
 ```
 
 ### Liquid — WebAssembly
@@ -58,7 +58,7 @@ All Rust — platform services and CLI.
 |---|---|
 | `crates/common` | Shared types — `Engine`, `ProvisionEvent`, artifact integrity, networking primitives |
 | `crates/api` | Axum REST/JSON — `:7070`, writes Postgres, publishes to NATS |
-| `crates/web` | Axum + Askama + HTMX + Alpine.js dashboard — `:3000` *(planned)* |
+| `crates/web` | Axum + Askama + HTMX + Alpine.js dashboard — `:3000` |
 | `crates/cli` | `flux` CLI — clap + reqwest, calls API over HTTP |
 | `crates/proxy` | Pingora edge router — `slug → upstream_addr` via DB lookup |
 | `crates/daemon` | NATS consumer — Firecracker VMs (Metal) + Wasmtime (Liquid) |
@@ -70,8 +70,8 @@ All Rust — platform services and CLI.
 ```bash
 flux login      # authenticate via Zitadel OIDC device flow
 flux init       # auto-detects language, creates project, writes liquid-metal.toml
-flux deploy     # build locally → upload to S3 → provision
-flux status     # list services in the active workspace
+flux deploy     # build locally → upload to S3 → provision (live SSE progress stream)
+flux services   # list services in the active workspace (shows failure reasons)
 # → live at <name>.liquidmetal.dev
 ```
 
@@ -81,9 +81,9 @@ flux status     # list services in the active workspace
 
 ```bash
 # Start infrastructure
-task up            # Postgres + NATS + RustFS (docker compose)
+task up            # Postgres + NATS + MinIO (docker compose)
 task dev:api       # Rust API on :7070
-task dev:web       # Web dashboard on :3000 (once crates/web is built)
+task dev:web       # Web dashboard on :3000
 task dev:proxy     # Pingora on :8080
 task dev:daemon    # NATS consumer (Firecracker skipped on macOS)
 
@@ -92,7 +92,7 @@ task install:cli   # cargo install → flux lands in ~/.cargo/bin
 flux login
 flux init          # run from your service directory
 flux deploy
-flux status
+flux services
 ```
 
 ### Linux (bare metal, one-time setup)
@@ -107,7 +107,7 @@ task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
 ## What We Don't Use
 
 - No Kubernetes, K3s, or any container orchestrator
-- No AWS, Azure, Vercel, or Heroku for compute (GCP used only for backup storage)
+- No AWS, Azure, Vercel, or Heroku for compute (GCP used only for KMS, Terraform state, and disaster recovery backups)
 - No ORMs (raw SQL via `tokio-postgres`)
 - No container registry (Vultr Object Storage is the registry)
 - No gRPC / protobuf (plain REST/JSON between all services)
@@ -115,4 +115,4 @@ task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
 
 ---
 
-> For infrastructure topology, eBPF isolation, and data flow see [ARCHITECTURE.md](ARCHITECTURE.md). For codebase layout and contribution rules see [CONTRIBUTING.md](CONTRIBUTING.md). For local dev and deployment see [RUNBOOK.md](RUNBOOK.md).
+> For local dev and deployment see [RUNBOOK.md](RUNBOOK.md). For infrastructure topology and data flow see [ARCHITECTURE.md](ARCHITECTURE.md).

@@ -5,7 +5,7 @@ dotenv: [".env"]
 tasks:
   # ── Dependencies ─────────────────────────────────────────────────────────
   up:
-    desc: "Start local Postgres + NATS + RustFS (S3)"
+    desc: "Start local Postgres + NATS + MinIO (S3)"
     cmds:
       - docker compose up -d
 
@@ -19,10 +19,10 @@ tasks:
     cmds:
       - docker compose up -d nats
 
-  up:rustfs:
-    desc: "Start local RustFS (S3) only"
+  up:minio:
+    desc: "Start local MinIO (S3) only"
     cmds:
-      - docker compose up -d rustfs
+      - docker compose up -d minio
 
   down:
     desc: "Stop local dependencies"
@@ -59,6 +59,15 @@ tasks:
       RUST_LOG: "api=debug,refinery_core=info"
     cmds:
       - cargo run -p api
+
+  dev:web:
+    desc: "Run the web dashboard on :3000"
+    ignore_error: true
+    env:
+      RUST_LOG: "web=debug"
+      WEB_BIND_ADDR: "0.0.0.0:3000"
+    cmds:
+      - cargo run -p web
 
   dev:proxy:
     desc: "Run the Pingora edge proxy locally"
@@ -114,81 +123,6 @@ tasks:
       FLUX_API_URL: '{{.FLUX_API_URL | default "http://localhost:7070"}}'
     cmds:
       - cargo run -p cli -- {{.CLI_ARGS}}
-
-  # ── T480 / Linux one-time setup ───────────────────────────────────────────
-  security:setup:
-    desc: "Full security setup: jailer user, cpuset, IFB, Cilium policy (run as root, after metal:setup)"
-    cmds:
-      # Create the unprivileged user/group Firecracker runs as inside the jailer
-      - |
-        if ! id liquid-metal-vm &>/dev/null; then
-          useradd --system --no-create-home --uid 10000 --gid 10000 liquid-metal-vm 2>/dev/null || \
-          useradd --system --no-create-home --uid 10000 liquid-metal-vm
-          echo "created user liquid-metal-vm (uid=10000)"
-        else
-          echo "liquid-metal-vm user already exists"
-        fi
-      # Jailer chroot base directory
-      - mkdir -p /srv/jailer
-      # Enable cpuset controller in the liquid-metal cgroup subtree
-      - mkdir -p /sys/fs/cgroup/liquid-metal
-      - |
-        for ctrl in io cpuset; do
-          if ! grep -q "$ctrl" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
-            echo "+$ctrl" | tee /sys/fs/cgroup/cgroup.subtree_control
-          fi
-        done
-        echo "cgroup v2 controllers: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
-      # IFB module for ingress bandwidth shaping
-      - modprobe ifb numifbs=256 2>/dev/null || true
-      # Apply Cilium network isolation policy
-      - |
-        if command -v cilium &>/dev/null; then
-          cilium policy import deploy/cilium/vm-isolation.yaml && echo "Cilium policy applied"
-        else
-          echo "WARNING: cilium CLI not found — skipping network policy"
-          echo "  Install Cilium and run: cilium policy import deploy/cilium/vm-isolation.yaml"
-        fi
-      - |
-        echo ""
-        echo "Security setup complete. Add to .env:"
-        echo "  USE_JAILER=true"
-        echo "  JAILER_BIN=/usr/local/bin/jailer"
-        echo "  JAILER_CHROOT_BASE=/srv/jailer"
-        echo "  JAILER_UID=10000"
-        echo "  JAILER_GID=10000"
-        echo "  PHYSICAL_CORES=4          # physical cores on your node"
-        echo "  ROOTFS_DEVICE=8:0         # from: lsblk -o NAME,MAJ:MIN"
-
-  metal:quota-setup:
-    desc: "One-time Triple-Lock setup: cgroup v2 io controller + IFB module (run as root)"
-    cmds:
-      # Layer 2: verify cgroup v2 unified hierarchy
-      - |
-        if ! grep -q "^cgroup2" /proc/mounts 2>/dev/null; then
-          echo "ERROR: cgroup v2 not mounted."
-          echo "  Add 'systemd.unified_cgroup_hierarchy=1' to kernel cmdline and reboot."
-          exit 1
-        fi
-        echo "cgroup v2 OK"
-      # Create the liquid-metal subtree and enable the io controller
-      - mkdir -p /sys/fs/cgroup/liquid-metal
-      - |
-        if ! grep -q "\bio\b" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
-          echo "+io" | tee /sys/fs/cgroup/cgroup.subtree_control
-          echo "io controller enabled"
-        else
-          echo "io controller already enabled"
-        fi
-      # Layer 3: IFB module for ingress shaping (tap0 → ifb0, etc.)
-      - modprobe ifb numifbs=256 2>/dev/null || true
-      - echo "ifb" >> /etc/modules-load.d/liquid-metal.conf 2>/dev/null || true
-      - |
-        echo ""
-        echo "Triple-Lock setup complete."
-        echo "Set ROOTFS_DEVICE in .env to the block device of your rootfs images:"
-        echo "  lsblk -o NAME,MAJ:MIN   # find major:minor (e.g. 8:0 for /dev/sda)"
-        echo "  echo 'ROOTFS_DEVICE=8:0' >> .env"
 
   # ── Infrastructure (Terraform + Nomad) ───────────────────────────────────────
 
@@ -270,10 +204,10 @@ tasks:
   nomad:deploy:
     desc: "Deploy all Nomad jobs to the cluster"
     cmds:
-      - nomad job run infra/jobs/api.nomad.hcl
-      - nomad job run infra/jobs/daemon-metal.nomad.hcl
-      - nomad job run infra/jobs/daemon-liquid.nomad.hcl
-      - nomad job run infra/jobs/proxy.nomad.hcl
+      - nomad job run infra/nomad/api.nomad.hcl
+      - nomad job run infra/nomad/daemon-metal.nomad.hcl
+      - nomad job run infra/nomad/daemon-liquid.nomad.hcl
+      - nomad job run infra/nomad/proxy.nomad.hcl
 
   nomad:status:
     desc: "Show status of all Nomad jobs"
@@ -281,14 +215,13 @@ tasks:
       - nomad job status
 
   # ── T480 / Linux one-time setup ───────────────────────────────────────────
-
   metal:setup:
     desc: "One-time setup: br0 bridge, /run/firecracker, Firecracker binary"
     cmds:
       - mkdir -p /run/firecracker
       - ip link add br0 type bridge 2>/dev/null || true
       - ip link set br0 up
-      - ip addr add 172.20.0.1/24 dev br0 2>/dev/null || true
+      - ip addr add 172.16.0.1/16 dev br0 2>/dev/null || true
       - |
         if [ ! -f /usr/local/bin/firecracker ]; then
           echo "Downloading Firecracker v1.9.0..."
@@ -308,3 +241,69 @@ tasks:
         else
           echo "guest kernel present"
         fi
+
+  security:setup:
+    desc: "Full security setup: jailer user, cpuset, IFB module (run as root, after metal:setup)"
+    cmds:
+      # Create the unprivileged user/group Firecracker runs as inside the jailer
+      - |
+        if ! id liquid-metal-vm &>/dev/null; then
+          useradd --system --no-create-home --uid 10000 --gid 10000 liquid-metal-vm 2>/dev/null || \
+          useradd --system --no-create-home --uid 10000 liquid-metal-vm
+          echo "created user liquid-metal-vm (uid=10000)"
+        else
+          echo "liquid-metal-vm user already exists"
+        fi
+      # Jailer chroot base directory
+      - mkdir -p /srv/jailer
+      # Enable cpuset controller in the liquid-metal cgroup subtree
+      - mkdir -p /sys/fs/cgroup/liquid-metal
+      - |
+        for ctrl in io cpuset; do
+          if ! grep -q "$ctrl" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
+            echo "+$ctrl" | tee /sys/fs/cgroup/cgroup.subtree_control
+          fi
+        done
+        echo "cgroup v2 controllers: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
+      # IFB module for ingress bandwidth shaping (tap → ifb mirroring, see tc.rs)
+      - modprobe ifb numifbs=256 2>/dev/null || true
+      - |
+        echo ""
+        echo "Security setup complete. Add to .env:"
+        echo "  USE_JAILER=true"
+        echo "  JAILER_BIN=/usr/local/bin/jailer"
+        echo "  JAILER_CHROOT_BASE=/srv/jailer"
+        echo "  JAILER_UID=10000"
+        echo "  JAILER_GID=10000"
+        echo "  PHYSICAL_CORES=4          # physical cores on your node"
+        echo "  ROOTFS_DEVICE=8:0         # from: lsblk -o NAME,MAJ:MIN"
+
+  metal:quota-setup:
+    desc: "One-time Triple-Lock setup: cgroup v2 io controller + IFB module (run as root)"
+    cmds:
+      # Layer 2: verify cgroup v2 unified hierarchy
+      - |
+        if ! grep -q "^cgroup2" /proc/mounts 2>/dev/null; then
+          echo "ERROR: cgroup v2 not mounted."
+          echo "  Add 'systemd.unified_cgroup_hierarchy=1' to kernel cmdline and reboot."
+          exit 1
+        fi
+        echo "cgroup v2 OK"
+      # Create the liquid-metal subtree and enable the io controller
+      - mkdir -p /sys/fs/cgroup/liquid-metal
+      - |
+        if ! grep -q "\bio\b" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
+          echo "+io" | tee /sys/fs/cgroup/cgroup.subtree_control
+          echo "io controller enabled"
+        else
+          echo "io controller already enabled"
+        fi
+      # Layer 3: IFB module for ingress shaping (tap0 → ifb0, etc.)
+      - modprobe ifb numifbs=256 2>/dev/null || true
+      - echo "ifb" >> /etc/modules-load.d/liquid-metal.conf 2>/dev/null || true
+      - |
+        echo ""
+        echo "Triple-Lock setup complete."
+        echo "Set ROOTFS_DEVICE in .env to the block device of your rootfs images:"
+        echo "  lsblk -o NAME,MAJ:MIN   # find major:minor (e.g. 8:0 for /dev/sda)"
+        echo "  echo 'ROOTFS_DEVICE=8:0' >> .env"
