@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Docs{% endblock %}
+{% block description %}Everything you need to deploy and manage services on Liquid Metal.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  <div class="mb-16">
+    <p class="lm-label mb-3">// docs</p>
+    <h1 class="text-4xl font-black tracking-tight mb-3">Documentation</h1>
+    <p class="text-zwl-muted dark:text-zw-muted max-w-lg">Everything you need to deploy and manage services on Liquid Metal.</p>
+  </div>
+
+  {# Nav cards #}
+  <div class="grid sm:grid-cols-2 gap-4 mb-16">
+    <a href="#quickstart" class="glass-card block p-6 hover:bg-zwl-border/30 dark:hover:bg-zw-border/30 transition-colors group">
+      <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">01 /</p>
+      <h3 class="text-sm font-bold mb-1">Quickstart</h3>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted">Install the CLI, authenticate, and deploy your first service in under 5 minutes.</p>
+    </a>
+    <a href="#cli-reference" class="glass-card block p-6 hover:bg-zwl-border/30 dark:hover:bg-zw-border/30 transition-colors group">
+      <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">02 /</p>
+      <h3 class="text-sm font-bold mb-1">CLI Reference</h3>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted">Complete reference for the <code class="font-mono">flux</code> CLI &mdash; all commands, flags, and configuration.</p>
+    </a>
+    <a href="#engines" class="glass-card block p-6 hover:bg-zwl-border/30 dark:hover:bg-zw-border/30 transition-colors group">
+      <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">03 /</p>
+      <h3 class="text-sm font-bold mb-1">Compute Engines</h3>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted">Metal (Firecracker microVMs) vs Liquid (WebAssembly) &mdash; when to use which.</p>
+    </a>
+    <a href="#config" class="glass-card block p-6 hover:bg-zwl-border/30 dark:hover:bg-zw-border/30 transition-colors group">
+      <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">04 /</p>
+      <h3 class="text-sm font-bold mb-1">Configuration</h3>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted">The <code class="font-mono">liquid-metal.toml</code> file, environment variables, and project setup.</p>
+    </a>
+  </div>
+
+  {# Quickstart #}
+  <div id="quickstart" class="mb-16">
+    <p class="lm-label mb-6">// quickstart</p>
+    <div class="space-y-8">
+
+      <div>
+        <p class="text-xs font-mono font-bold text-zwl-muted dark:text-zw-muted uppercase tracking-widest mb-3">01 / Install the CLI</p>
+        <div class="glass-card px-5 py-4 font-mono text-sm">
+          <div class="text-zwl-muted dark:text-zw-muted text-xs mb-1">$</div>
+          <pre>cargo install flux
+flux --help</pre>
+        </div>
+      </div>
+
+      <div>
+        <p class="text-xs font-mono font-bold text-zwl-muted dark:text-zw-muted uppercase tracking-widest mb-3">02 / Authenticate</p>
+        <div class="glass-card px-5 py-4 font-mono text-sm">
+          <div class="text-zwl-muted dark:text-zw-muted text-xs mb-1">$</div>
+          <pre>flux login
+flux whoami</pre>
+        </div>
+      </div>
+
+      <div>
+        <p class="text-xs font-mono font-bold text-zwl-muted dark:text-zw-muted uppercase tracking-widest mb-3">03 / Initialize a project</p>
+        <div class="glass-card px-5 py-4 font-mono text-sm">
+          <div class="text-zwl-muted dark:text-zw-muted text-xs mb-1">$</div>
+          <pre>cd my-app
+flux init --engine liquid</pre>
+        </div>
+      </div>
+
+      <div>
+        <p class="text-xs font-mono font-bold text-zwl-muted dark:text-zw-muted uppercase tracking-widest mb-3">04 / Deploy</p>
+        <div class="glass-card px-5 py-4 font-mono text-sm">
+          <div class="text-zwl-muted dark:text-zw-muted text-xs mb-1">$</div>
+          <pre>flux deploy
+flux status</pre>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  {# CLI Reference #}
+  <div id="cli-reference" class="mb-16">
+    <p class="lm-label mb-6">// cli reference</p>
+    <div class="glass-card overflow-hidden">
+      <div class="grid grid-cols-3 gap-4 px-6 py-3 border-b border-zwl-border dark:border-zw-border text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">
+        <span>Command</span><span>Description</span><span>Example</span>
+      </div>
+      <div class="divide-y divide-zwl-border dark:divide-zw-border">
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux login</code><span class="text-zwl-muted dark:text-zw-muted">Authenticate via OIDC</span><code class="text-zwl-muted dark:text-zw-muted">flux login --invite CODE</code>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux init</code><span class="text-zwl-muted dark:text-zw-muted">Initialize project</span><code class="text-zwl-muted dark:text-zw-muted">flux init --engine metal</code>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux deploy</code><span class="text-zwl-muted dark:text-zw-muted">Build &amp; deploy</span><code class="text-zwl-muted dark:text-zw-muted">flux deploy</code>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux status</code><span class="text-zwl-muted dark:text-zw-muted">List services</span><code class="text-zwl-muted dark:text-zw-muted">flux status</code>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux logs</code><span class="text-zwl-muted dark:text-zw-muted">Tail service logs</span><code class="text-zwl-muted dark:text-zw-muted">flux logs my-app --limit 500</code>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux stop</code><span class="text-zwl-muted dark:text-zw-muted">Stop a service</span><code class="text-zwl-muted dark:text-zw-muted">flux stop my-app</code>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux restart</code><span class="text-zwl-muted dark:text-zw-muted">Restart a service</span><code class="text-zwl-muted dark:text-zw-muted">flux restart my-app</code>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux workspace</code><span class="text-zwl-muted dark:text-zw-muted">Manage workspaces</span><code class="text-zwl-muted dark:text-zw-muted">flux workspace list</code>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-6 py-3 text-xs font-mono">
+          <code>flux project</code><span class="text-zwl-muted dark:text-zw-muted">Manage projects</span><code class="text-zwl-muted dark:text-zw-muted">flux project list</code>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

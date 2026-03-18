@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Liquid Metal{% endblock %} | Wasm &amp; Firecracker compute</title>
+  <meta name="description" content="{% block description %}Ship a static binary or .wasm module. We boot a Firecracker microVM or run a Wasmtime executor in milliseconds.{% endblock %}">
+
+  {# Theme: respect system preference, allow manual override #}
+  <script>
+    (function() {
+      var t = localStorage.getItem('lm-theme');
+      if (t === 'dark') document.documentElement.classList.add('dark');
+      else if (t === 'light') document.documentElement.classList.remove('dark');
+      else if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
+      else document.documentElement.classList.remove('dark');
+    })();
+  </script>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          borderRadius: {
+            DEFAULT: '0', sm: '0', md: '0', lg: '0',
+            xl: '0', '2xl': '0', '3xl': '0', full: '0'
+          },
+          colors: {
+            zw: {
+              bg:      '#191919',
+              surface: '#262626',
+              border:  '#4a4546',
+              muted:   '#8e8e8e',
+              fg:      '#bbbbbb',
+            },
+            zwl: {
+              bg:      '#eeeeee',
+              surface: '#d7d7d7',
+              border:  '#aca9a9',
+              muted:   '#5c5c5c',
+              fg:      '#353535',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <script defer src="/static/js/alpine.min.js"></script>
+  <script src="/static/js/htmx.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <link rel="stylesheet" href="/static/css/app.css">
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-zwl-bg dark:bg-zw-bg text-zwl-fg dark:text-zw-fg min-h-screen flex flex-col antialiased font-mono">
+
+  {% block nav %}
+  <nav class="border-b border-zwl-border dark:border-zw-border bg-zwl-surface dark:bg-zw-bg sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-12">
+        <div class="flex items-center gap-8">
+          <a href="/" class="font-mono font-black text-sm tracking-tight uppercase">
+            Liquid Metal
+          </a>
+          <div class="hidden md:flex items-center gap-6">
+            <a href="/pricing" class="text-[11px] font-mono font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Plans</a>
+            <a href="/docs" class="text-[11px] font-mono font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Docs</a>
+            <a href="/about" class="text-[11px] font-mono font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">About</a>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <a href="/auth/login" class="text-[11px] font-mono font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">
+            Sign In
+          </a>
+          <a href="/auth/login" class="text-[11px] font-mono font-bold uppercase tracking-widest bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg px-4 py-2 hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+            Deploy Now
+          </a>
+        </div>
+      </div>
+    </div>
+  </nav>
+  {% endblock %}
+
+  <main id="main-content" class="flex-1 relative z-10">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block footer %}
+  <footer class="border-t border-zwl-border dark:border-zw-border mt-auto">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+        <a href="/" class="font-mono font-black text-sm tracking-tight uppercase">
+          Liquid Metal
+        </a>
+        <div class="flex flex-wrap items-center gap-6">
+          <a href="/pricing" class="text-[11px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Plans</a>
+          <a href="/docs" class="text-[11px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Docs</a>
+          <a href="/about" class="text-[11px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">About</a>
+          <a href="/help" class="text-[11px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Help</a>
+        </div>
+        <p class="text-[11px] font-mono text-zwl-muted dark:text-zw-muted">&copy; 2026 Liquid Metal</p>
+      </div>
+    </div>
+  </footer>
+  {% endblock %}
+
+  {% block theme_toggle %}
+  {# ── Dark / light toggle — fixed bottom-right ────────────────────────────── #}
+  <button
+    onclick="lmToggleTheme()"
+    title="Toggle theme"
+    aria-label="Toggle between light and dark mode"
+    class="fixed bottom-6 right-6 z-50 w-9 h-9 flex items-center justify-center border border-zwl-border dark:border-zw-border bg-zwl-surface dark:bg-zw-surface text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+  >
+    {# Sun shown in dark mode (click → go light) #}
+    <span class="hidden dark:flex items-center justify-center">
+      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+        <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>
+    </span>
+    {# Moon shown in light mode (click → go dark) #}
+    <span class="flex dark:hidden items-center justify-center">
+      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+    </span>
+  </button>
+  {% endblock %}
+
+  {% block scripts %}{% endblock %}
+  <script>
+    function lmToggleTheme() {
+      var html = document.documentElement;
+      if (html.classList.contains('dark')) {
+        html.classList.remove('dark');
+        localStorage.setItem('lm-theme', 'light');
+      } else {
+        html.classList.add('dark');
+        localStorage.setItem('lm-theme', 'dark');
+      }
+    }
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+    document.body.addEventListener('htmx:afterSettle', function() {
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    });
+  </script>
+</body>
+</html>

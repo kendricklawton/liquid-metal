@@ -1,0 +1,283 @@
+#cloud-config
+# ── Gateway B (standby): HAProxy + Pingora data plane ────────────────────────
+# This node runs the traffic path only — no NATS, no Nomad server, no API,
+# no observability. If gateway-a dies, the failover script moves the reserved
+# IP to this node. Existing services keep getting routed; new deploys wait
+# until gateway-a recovers.
+hostname: ${hostname}
+
+packages:
+  - haproxy
+  - curl
+  - ufw
+  - unzip
+  - jq
+  - pgbouncer
+  - postgresql-client
+
+runcmd:
+  # ── Tailscale ──────────────────────────────────────────────────────────────
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --authkey=${tailscale_auth_key} --hostname=${hostname} --advertise-tags=tag:liquid-metal
+
+  # ── Firewall ───────────────────────────────────────────────────────────────
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 3478/udp
+  - ufw --force enable
+
+  # ── SSH Hardening ──────────────────────────────────────────────────────────
+  - apt-get install -y fail2ban
+  - |
+    cat > /etc/fail2ban/jail.local <<EOF
+    [sshd]
+    enabled = true
+    port = ssh
+    maxretry = 5
+    bantime = 3600
+    findtime = 600
+    EOF
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config
+  - sed -i 's/^#\?X11Forwarding.*/X11Forwarding no/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+
+  # ── Secrets ────────────────────────────────────────────────────────────────
+  - mkdir -p /etc/liquid-metal
+  - chmod 700 /etc/liquid-metal
+  - |
+    cat > /etc/liquid-metal/secrets.env <<'EOFENV'
+    PG_HOST=${pg_host}
+    PG_PORT=${pg_port}
+    PG_DBNAME=${pg_dbname}
+    PG_USER=${pg_user}
+    PG_PASSWORD=${pg_password}
+    NATS_PASSWORD_PROXY=${nats_password_proxy}
+    NAT_VPS_HOSTNAME=${nat_vps_hostname}
+    DOMAIN=${domain}
+    VULTR_API_KEY=${vultr_api_key}
+    RESERVED_IP_ID=${reserved_ip_id}
+    EOFENV
+  - chmod 600 /etc/liquid-metal/secrets.env
+
+  # ── PgBouncer (proxy needs DB access for route cache + cert warm-up) ──────
+  - |
+    cat > /etc/pgbouncer/pgbouncer.ini <<EOF
+    [databases]
+    ${pg_dbname} = host=${pg_host} port=${pg_port} dbname=${pg_dbname}
+
+    [pgbouncer]
+    listen_addr = 127.0.0.1
+    listen_port = 6432
+    auth_type = md5
+    auth_file = /etc/pgbouncer/userlist.txt
+    pool_mode = transaction
+    max_client_conn = 100
+    default_pool_size = 10
+    EOF
+  - |
+    echo "\"${pg_user}\" \"${pg_password}\"" > /etc/pgbouncer/userlist.txt
+  - chmod 600 /etc/pgbouncer/userlist.txt
+  - chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
+
+  # ── HAProxy (identical to gateway-a — TCP pass-through to Pingora) ────────
+  - |
+    cat > /etc/haproxy/haproxy.cfg <<EOF
+    global
+      log /dev/log local0
+      chroot /var/lib/haproxy
+      stats socket /run/haproxy/admin.sock mode 660 level admin
+      stats timeout 30s
+      user haproxy
+      group haproxy
+      daemon
+      maxconn 4096
+      ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+      ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+      tune.ssl.default-dh-param 2048
+
+    defaults
+      log     global
+      mode    http
+      option  httplog
+      option  dontlognull
+      option  forwardfor
+      timeout connect 5s
+      timeout client  30s
+      timeout server  30s
+      errorfile 400 /etc/haproxy/errors/400.http
+      errorfile 403 /etc/haproxy/errors/403.http
+      errorfile 408 /etc/haproxy/errors/408.http
+      errorfile 500 /etc/haproxy/errors/500.http
+      errorfile 502 /etc/haproxy/errors/502.http
+      errorfile 503 /etc/haproxy/errors/503.http
+      errorfile 504 /etc/haproxy/errors/504.http
+
+    # ── HTTPS — TCP pass-through to Pingora (Pingora terminates TLS + SNI) ──
+    frontend https_passthrough
+      bind *:443
+      mode tcp
+      option tcplog
+      default_backend pingora_tls
+
+    # ── HTTP — ACME challenges go to API on gateway-a; everything else → HTTPS
+    frontend http
+      bind *:80
+      mode http
+      acl is_acme path_beg /.well-known/acme-challenge/
+      use_backend api_acme if is_acme
+      http-request redirect scheme https code 301 if !is_acme
+
+    backend pingora_tls
+      mode tcp
+      server local 127.0.0.1:8443 check inter 5s fall 3 rise 2
+
+    backend api_acme
+      mode http
+      # Route ACME challenges to the API on gateway-a via Tailscale.
+      # If gateway-a is down, ACME challenges will fail — but cert renewal
+      # is not time-critical (certs are valid for 90 days, renewed at 60).
+      server gateway_a ${nat_vps_hostname}:7070 check inter 5s fall 3 rise 2
+    EOF
+
+  # ── Nomad client (gateway class — receives proxy system job) ──────────────
+  - curl -fsSL https://releases.hashicorp.com/nomad/1.9.5/nomad_1.9.5_linux_amd64.zip -o /tmp/nomad.zip
+  - unzip /tmp/nomad.zip -d /usr/local/bin/
+  - chmod +x /usr/local/bin/nomad
+  - mkdir -p /etc/nomad.d /var/lib/nomad
+  - |
+    cat > /etc/nomad.d/client.hcl <<EOF
+    data_dir  = "/var/lib/nomad"
+    log_level = "INFO"
+
+    # Client only — no server on standby gateway.
+    client {
+      enabled    = true
+      node_class = "gateway"
+      options {
+        "driver.raw_exec.enable" = "1"
+      }
+      # Join the Nomad server on gateway-a via Tailscale.
+      servers = ["${nat_vps_hostname}:4647"]
+      meta {
+        gateway_role = "standby"
+      }
+    }
+    EOF
+  - |
+    cat > /etc/systemd/system/nomad.service <<EOF
+    [Unit]
+    Description=Nomad
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/local/bin/nomad agent -config=/etc/nomad.d/
+    Restart=on-failure
+    RestartSec=5
+    LimitNOFILE=65536
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # ── Failover script ────────────────────────────────────────────────────────
+  # Monitors gateway-a's HAProxy via Tailscale. After 3 consecutive failures
+  # (90 seconds), calls the Vultr API to attach the reserved IP to this node.
+  # Once gateway-a recovers, does NOT automatically fail back — manual failback
+  # avoids flapping and gives you time to investigate.
+  - mkdir -p /opt/liquid-metal
+  - |
+    cat > /opt/liquid-metal/failover.sh <<'EOFSCRIPT'
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    source /etc/liquid-metal/secrets.env
+
+    PEER="$NAT_VPS_HOSTNAME"
+    CHECK_URL="http://$PEER:8443"
+    FAIL_THRESHOLD=3
+    STATE_FILE="/var/run/gateway-failover-state"
+    FAIL_COUNT_FILE="/var/run/gateway-failover-fails"
+
+    # Initialize state files
+    [[ -f "$FAIL_COUNT_FILE" ]] || echo 0 > "$FAIL_COUNT_FILE"
+    [[ -f "$STATE_FILE" ]]      || echo "standby" > "$STATE_FILE"
+
+    CURRENT_STATE=$(cat "$STATE_FILE")
+    FAIL_COUNT=$(cat "$FAIL_COUNT_FILE")
+
+    # If we already hold the VIP, nothing to do — manual failback only.
+    if [[ "$CURRENT_STATE" == "active" ]]; then
+      exit 0
+    fi
+
+    # Health check: TCP connect to Pingora on gateway-a (via Tailscale).
+    if curl -sf --connect-timeout 5 --max-time 10 -o /dev/null "$CHECK_URL" 2>/dev/null; then
+      # Gateway-a is healthy — reset fail counter.
+      echo 0 > "$FAIL_COUNT_FILE"
+      exit 0
+    fi
+
+    # Failed — increment counter.
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    echo "$FAIL_COUNT" > "$FAIL_COUNT_FILE"
+    logger -t failover "gateway-a health check failed ($FAIL_COUNT/$FAIL_THRESHOLD)"
+
+    if [[ "$FAIL_COUNT" -lt "$FAIL_THRESHOLD" ]]; then
+      exit 0
+    fi
+
+    # Threshold reached — take over the reserved IP.
+    logger -t failover "FAILOVER: taking reserved IP $RESERVED_IP_ID"
+
+    # Get our own Vultr instance ID.
+    MY_INSTANCE_ID=$(curl -sf http://169.254.169.254/v1.json | jq -r '.instanceid')
+
+    # Attach the reserved IP to this instance.
+    HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+      -X PATCH "https://api.vultr.com/v2/reserved-ips/$RESERVED_IP_ID" \
+      -H "Authorization: Bearer $VULTR_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "{\"instance_id\": \"$MY_INSTANCE_ID\"}")
+
+    if [[ "$HTTP_CODE" == "204" || "$HTTP_CODE" == "200" ]]; then
+      echo "active" > "$STATE_FILE"
+      logger -t failover "FAILOVER COMPLETE: reserved IP attached to $MY_INSTANCE_ID"
+    else
+      logger -t failover "FAILOVER FAILED: Vultr API returned HTTP $HTTP_CODE"
+    fi
+    EOFSCRIPT
+  - chmod +x /opt/liquid-metal/failover.sh
+
+  # Run failover check every 30 seconds via systemd timer.
+  - |
+    cat > /etc/systemd/system/gateway-failover.service <<EOF
+    [Unit]
+    Description=Gateway failover health check
+
+    [Service]
+    Type=oneshot
+    ExecStart=/opt/liquid-metal/failover.sh
+    EOF
+  - |
+    cat > /etc/systemd/system/gateway-failover.timer <<EOF
+    [Unit]
+    Description=Gateway failover check (every 30s)
+
+    [Timer]
+    OnBootSec=60
+    OnUnitActiveSec=30
+
+    [Install]
+    WantedBy=timers.target
+    EOF
+
+  # ── Start services ─────────────────────────────────────────────────────────
+  - systemctl daemon-reload
+  - systemctl enable nomad haproxy pgbouncer gateway-failover.timer
+  - systemctl start nomad pgbouncer haproxy gateway-failover.timer
