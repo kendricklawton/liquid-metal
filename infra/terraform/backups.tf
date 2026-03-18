@@ -21,7 +21,10 @@ resource "google_storage_bucket" "postgres_backups" {
 
   lifecycle_rule {
     condition { age = 30 }
-    action { type = "SetStorageClass"; storage_class = "NEARLINE" }
+    action {
+      type = "SetStorageClass"
+      storage_class = "NEARLINE"
+    }
   }
   lifecycle_rule {
     condition { age = 90 }
@@ -38,7 +41,10 @@ resource "google_storage_bucket" "victoriametrics_backups" {
 
   lifecycle_rule {
     condition { age = 30 }
-    action { type = "SetStorageClass"; storage_class = "NEARLINE" }
+    action {
+      type = "SetStorageClass"
+      storage_class = "NEARLINE"
+    }
   }
   lifecycle_rule {
     condition { age = 90 }
@@ -55,11 +61,16 @@ resource "google_storage_bucket" "victorialogs_backups" {
 
   lifecycle_rule {
     condition { age = 30 }
-    action { type = "SetStorageClass"; storage_class = "NEARLINE" }
+    action {
+      type = "SetStorageClass"
+      storage_class = "NEARLINE"
+    }
   }
   lifecycle_rule {
     condition { age = 90 }
-    action { type = "Delete" }
+    action {
+      type = "Delete"
+    }
   }
 }
 
@@ -72,11 +83,16 @@ resource "google_storage_bucket" "nomad_backups" {
 
   lifecycle_rule {
     condition { age = 30 }
-    action { type = "SetStorageClass"; storage_class = "NEARLINE" }
+    action {
+      type = "SetStorageClass"
+      storage_class = "NEARLINE"
+    }
   }
   lifecycle_rule {
     condition { age = 90 }
-    action { type = "Delete" }
+    action {
+      type = "Delete"
+    }
   }
 }
 
@@ -91,15 +107,23 @@ resource "google_storage_bucket" "artifacts_backups" {
   # Nearline after 30d, Coldline after 90d, delete after 180d.
   lifecycle_rule {
     condition { age = 30 }
-    action { type = "SetStorageClass"; storage_class = "NEARLINE" }
+    action {
+      type = "SetStorageClass"
+      storage_class = "NEARLINE"
+    }
   }
   lifecycle_rule {
     condition { age = 90 }
-    action { type = "SetStorageClass"; storage_class = "COLDLINE" }
+    action {
+      type = "SetStorageClass"
+      storage_class = "COLDLINE"
+    }
   }
   lifecycle_rule {
     condition { age = 180 }
-    action { type = "Delete" }
+    action {
+      type = "Delete"
+    }
   }
 }
 

@@ -65,7 +65,10 @@ pub struct JailerPaths {
 /// After this returns the Firecracker API socket is ready to accept PUT
 /// requests. The caller should then call `firecracker::start_vm` with
 /// `sock_path = paths.socket` and the guest-relative artifact paths.
-pub async fn spawn(cfg: &JailerConfig<'_>) -> Result<(u32, JailerPaths)> {
+///
+/// `serial_log` — host path where FC serial console output (ttyS0) is captured.
+/// The caller is responsible for creating parent directories.
+pub async fn spawn(cfg: &JailerConfig<'_>, serial_log: &str) -> Result<(u32, JailerPaths)> {
     let chroot_root = format!(
         "{}/firecracker/{}/root",
         cfg.chroot_base, cfg.vm_id
@@ -94,8 +97,14 @@ pub async fn spawn(cfg: &JailerConfig<'_>) -> Result<(u32, JailerPaths)> {
         "--api-sock",        "/run/api.sock",
         "--id",              cfg.vm_id,
     ]);
-    cmd.stdout(std::process::Stdio::null())
-       .stderr(std::process::Stdio::null());
+    // Capture serial console (ttyS0) output to a log file for debugging startup failures.
+    // Firecracker sends guest kernel + PID 1 stdout/stderr to its own stdout.
+    let serial_file = std::fs::File::create(serial_log)
+        .with_context(|| format!("creating serial log: {serial_log}"))?;
+    let stderr_file = serial_file.try_clone()
+        .context("cloning serial log file for stderr")?;
+    cmd.stdout(serial_file)
+       .stderr(stderr_file);
 
     let mut child = cmd
         .process_group(0)
@@ -126,13 +135,65 @@ pub async fn spawn(cfg: &JailerConfig<'_>) -> Result<(u32, JailerPaths)> {
 }
 
 /// Clean up jailer chroot directory after the VM has stopped.
+///
+/// If the jailer left bind mounts inside the namespace (e.g. /dev, /proc)
+/// that weren't unmounted before the FC process exited, `remove_dir_all`
+/// would fail. We parse `/proc/mounts` for any mounts under the chroot
+/// and `umount2(MNT_DETACH)` them in reverse order (deepest first) before
+/// attempting removal.
 pub async fn cleanup(chroot_base: &str, vm_id: &str) {
     let chroot = format!("{}/firecracker/{}", chroot_base, vm_id);
+
+    // Unmount any stale bind mounts left by the jailer.
+    if let Err(e) = unmount_stale(&chroot).await {
+        tracing::warn!(vm_id, error = %e, "failed to unmount stale mounts in chroot");
+    }
+
     if let Err(e) = fs::remove_dir_all(&chroot).await {
         tracing::warn!(vm_id, error = %e, "jailer chroot cleanup failed");
     } else {
         tracing::debug!(vm_id, "jailer chroot removed");
     }
+}
+
+/// Parse `/proc/mounts` for mount points under `chroot_prefix` and lazily
+/// detach them in reverse depth order so `remove_dir_all` can succeed.
+async fn unmount_stale(chroot_prefix: &str) -> std::io::Result<()> {
+    let mounts = fs::read_to_string("/proc/mounts").await?;
+
+    // Collect mount points under this chroot, sorted deepest-first.
+    let mut targets: Vec<String> = mounts
+        .lines()
+        .filter_map(|line| {
+            let mountpoint = line.split_whitespace().nth(1)?;
+            if mountpoint.starts_with(chroot_prefix) {
+                Some(mountpoint.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Reverse sort so deepest paths are unmounted first.
+    targets.sort_by(|a, b| b.len().cmp(&a.len()));
+
+    for target in &targets {
+        let c_path = std::ffi::CString::new(target.as_str())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        let ret = unsafe { libc::umount2(c_path.as_ptr(), libc::MNT_DETACH) };
+        if ret == 0 {
+            tracing::debug!(mountpoint = target.as_str(), "unmounted stale bind mount");
+        } else {
+            let err = std::io::Error::last_os_error();
+            tracing::warn!(
+                mountpoint = target.as_str(),
+                error = %err,
+                "umount2 failed for stale mount"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// Hard-link `src` to `dst`. Falls back to copy on cross-device filesystems.

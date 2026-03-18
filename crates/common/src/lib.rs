@@ -1,5 +1,6 @@
 pub mod artifact;
 pub mod config;
+pub mod contract;
 pub mod events;
 pub mod features;
 pub mod networking;

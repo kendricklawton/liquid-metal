@@ -1,77 +1,244 @@
-## Liquid Metal: Engineering Protocol
+# CLAUDE.md — Liquid Metal
 
-### Product Thesis
-
-Liquid Metal is a **PaaS (not IaaS)** delivering hardware-isolated compute with infrastructure transparency. We provide predictable performance (vCPU/RAM) without the "mystery resource pool" abstraction of Vercel or the management overhead of Kubernetes.
-
-* **Metal**: Firecracker microVMs. Linux binaries, ext4 rootfs, TAP networking. ~100-250ms cold start.
-* **Liquid**: Wasmtime/WASI execution. In-process, memory-only, no disk/TAP. <1ms startup.
-* **Zero-Trust Infrastructure**: No K8s. No managed orchestrators. Bare metal or death.
+> This file is the single source of truth for AI-assisted development on this codebase.
+> If something here contradicts what you infer from the code, this file wins.
 
 ---
 
-### Tech Stack & Constraints
+## What This Is
 
-* **Languages**: Rust (platform services), Go (tooling). Zig may be used to cross-compile the CLI for Windows targets.
-* **Web**: `crates/web` — Axum + Askama templates + HTMX + Alpine.js (minimal). **No SPAs. No Leptos. No JS framework.**
-* **Database**: PostgreSQL (Raw SQL via `tokio-postgres`, no ORMs).
-* **Messaging**: NATS JetStream (The source of truth for provisioning).
-* **Proxy**: Pingora (Cloudflare's framework) for edge routing.
-* **Security**: Firecracker + Jailer + eBPF (Aya) for tenant isolation.
-* **UI Aesthetic**: `rounded-none`. Strict utilitarianism.
+Liquid Metal is a PaaS. Not IaaS. Not "infrastructure building blocks." A PaaS.
 
----
+Users run `flux deploy` and get a URL. They don't pick instance types, configure load balancers, or write Dockerfiles. We decide how their code runs. We own the opinions. Two execution engines, one platform:
 
-### System Architecture & Data Flow
+- **Metal** — Firecracker microVMs. Real Linux, real isolation, real networking. KVM-backed, ext4 rootfs, TAP devices, ~100-250ms cold start. For anything that targets `x86_64-unknown-linux-musl`.
+- **Liquid** — Wasmtime/WASI. In-process, memory-only, sub-millisecond cold start. For `.wasm` modules. No disk, no TAP, no VM.
 
-1. **CLI (`flux`, `crates/cli`)**: Reads `liquid-metal.toml`, uploads artifacts to S3, calls Rust API via REST/JSON.
-2. **Web (`crates/web`)**: Axum + Askama + HTMX dashboard on port `:3000`. Handles Zitadel OIDC browser auth. Calls Rust API internally via REST/JSON. **Never touches Postgres or NATS directly. Planned — not yet built.**
-3. **API (`crates/api`)**: The Brain. Axum REST/JSON on port `:7070`. Validates `X-Api-Key`. Writes to Postgres, publishes `ProvisionEvent` to NATS.
-4. **Daemon (`crates/daemon`)**: NATS Consumer. Orchestrates Firecracker (Linux) or Wasmtime (multi-platform).
-5. **Proxy (`crates/proxy`)**: Pingora maps `slug → upstream_addr` via DB lookup.
+The distinction matters. Metal gives you a kernel. Liquid gives you a sandbox. Don't blur them.
 
 ---
 
-### Crate & Module Map
+## Architecture — The Short Version
 
-#### Rust Workspace (`/crates`)
+```
+User → flux CLI → API (:7070) → Postgres + NATS
+                                       ↓
+                              Daemon (NATS consumer)
+                              ├── Metal: Firecracker VM
+                              └── Liquid: Wasmtime
+                                       ↓
+                              Proxy (Pingora) ← User traffic
+```
 
-* `common`: Shared `Engine` enums, `ProvisionEvent`, config helpers, and slugify.
-* `api`: Axum REST/JSON. Port `:7070`. Validates `X-Api-Key`. Writes to Postgres, publishes to NATS.
-* `web`: Axum + Askama + HTMX dashboard. Port `:3000`. Browser OIDC auth (Zitadel). Calls API via HTTP. **Planned — not yet built.**
-* `cli`: `flux` CLI. Reads `liquid-metal.toml`, calls API via REST/JSON with `reqwest`. Cross-compiled for Windows via Zig if needed.
-* `proxy`: Pingora-based edge router.
-* `daemon`: The worker. Firecracker/Wasmtime logic. Linux-only code gated via `#[cfg(target_os = "linux")]`.
-* `ebpf-programs`: TC egress classifiers (Aya). *Excluded from workspace.*
+Five binaries. One database. One message bus. That's the whole system. If you're about to add a sixth binary or a second database, stop and reconsider.
+
+### The Crates
+
+| Crate | Port | What It Does | What It Doesn't Do |
+|-------|------|-------------|-------------------|
+| `common` | — | Shared types, contracts, config | Execute anything |
+| `api` | `:7070` | REST/JSON brain. Postgres writes, NATS publishes | Talk to Firecracker, run Wasm |
+| `web` | `:3000` | Askama + HTMX dashboard. OIDC browser auth | Touch Postgres or NATS directly |
+| `cli` | — | `flux` binary. Reads `liquid-metal.toml`, calls API | Make infrastructure decisions |
+| `daemon` | — | NATS consumer. Provisions VMs, runs Wasm | Serve HTTP to users |
+| `proxy` | `:8443` | Pingora edge router. Slug → upstream | Write to the database |
+| `ebpf-programs` | — | TC egress classifiers (Aya) | Exist in the workspace |
+
+The `web` crate is a stateless BFF. Sessions live in AES-GCM encrypted cookies. It calls the API over HTTP using `X-Internal-Secret` + `X-On-Behalf-Of` headers. It never imports `tokio-postgres`. If you find yourself adding a database connection to `web`, you've made a wrong turn.
+
+### Data Flow Invariant
+
+All mutations flow through one path: **API → Postgres → NATS → Daemon**. The API is the only writer to Postgres. The daemon is the only thing that touches Firecracker or Wasmtime. The proxy is read-only against the database. Violate this and you'll create split-brain bugs that are impossible to debug in production.
 
 ---
 
-### Rules of the House
+## Constraints — Non-Negotiable
 
-1. **The Lib/Main Split**: All Rust crates must use `lib.rs` for logic and `main.rs` for the entry point to ensure integration testability.
-2. **REST/JSON only**: CLI and web communicate with the API over plain HTTP. No gRPC, no ConnectRPC, no protobuf.
-3. **Configuration**: Zero hardcoded addresses. Use env vars (`NATS_URL`, `DATABASE_URL`, etc.).
-4. **Deployment**: Binaries/Wasm modules are stored in S3-compatible storage using `uuid_v7` for immutable versioning.
-5. **Compute Isolation**:
-   * **Serverless (Metal)**: 5-minute idle timeout.
-   * **Always-on (Metal)**: Continuous drain (Pro/Team only).
-   * **Liquid**: Per-invocation billing.
-6. **Web rendering**: Server-side HTML via Askama templates. HTMX for partial swaps (log tailing, status polling). Alpine.js for local toggle/modal state only. No client-side routing. No SPAs.
+These aren't preferences. They're load-bearing walls.
+
+### 1. The Lib/Main Split
+
+Every crate uses `lib.rs` for logic and `main.rs` as a thin entry point. This is how we get integration testability without Docker. The test harness in `crates/api/tests/` imports `api::app()` and drives it with `tower::ServiceExt`. If you put logic in `main.rs`, you've made it untestable.
+
+### 2. REST/JSON Only
+
+CLI and web talk to the API over plain HTTP. No gRPC. No protobuf. No ConnectRPC. No WebSockets (yet). The simplicity is the feature. A `curl` command is a valid debugging tool for every endpoint.
+
+### 3. Contracts Live in `common::contract`
+
+All API request and response types are defined in `crates/common/src/contract.rs`. CLI, web, and API all import from here. Never define a response struct locally in a consumer crate. If you need a new field, add it to the contract. One source of truth, no drift.
+
+### 4. Raw SQL, No ORM
+
+We use `tokio-postgres` with hand-written SQL. No Diesel. No SeaORM. No SQLx macros. Queries are readable, debuggable, and you can paste them into `psql`. If a query is getting complex, it's the query that needs simplifying, not the abstraction layer that needs thickening.
+
+### 5. No Kubernetes, Ever
+
+No K8s. No K3s. No container orchestrators. Nomad schedules our binaries via `raw_exec`. The daemons talk to Firecracker directly. If you catch yourself thinking "this would be easier with a CRD," you're solving the wrong problem.
+
+### 6. Server-Side HTML
+
+The web dashboard renders HTML on the server with Askama templates. HTMX handles partial page updates (log tailing, status polling). Alpine.js handles local UI state (toggles, modals). No React. No Vue. No Leptos. No client-side routing. No SPA. The `rounded-none` CSS class is used unironically.
+
+### 7. Zero Hardcoded Addresses
+
+Every connection string, every URL, every port comes from an environment variable. See `.env.example` for the full list. If you add a new external dependency, add its config to `.env.example` with a comment explaining what it is and how to get one.
 
 ---
 
-### Development Commands
+## Auth Model
+
+Two authentication paths exist. Understand both before touching auth code.
+
+### Scoped API Keys (`lm_*` prefix)
+
+The production auth path. SHA-256 hashed, stored in `api_keys` table. Support expiration, scopes, and audit trails. The CLI gets one automatically on `flux login` (via `cli_provision`). Every API call from the CLI sends it as `X-Api-Key: lm_...`.
+
+### Internal Service Auth (`X-Internal-Secret` + `X-On-Behalf-Of`)
+
+For trusted service-to-service calls. The web BFF uses this to call the API on behalf of a logged-in user. The secret is a shared value from `INTERNAL_SECRET` env var. Supports zero-downtime rotation via comma-separated values.
+
+There is no third path. Raw UUID tokens are rejected. If middleware sees a token that doesn't start with `lm_` and isn't an internal service call, it returns 401.
+
+---
+
+## Infrastructure Topology (Beta)
+
+Three machines. One region. That's it.
+
+| Node | Role | Nomad Class | Runs |
+|------|------|------------|------|
+| NAT VPS | Gateway | `gateway` | API, Proxy, NATS, HAProxy, PgBouncer, Nomad server+client |
+| node-a-01 | Compute | `metal` | daemon-metal (Firecracker) |
+| node-b-01 | Compute | `liquid` | daemon-liquid (Wasmtime) |
+
+HAProxy on the NAT VPS owns `:443` and `:80`. It terminates TLS and forwards to Pingora on `localhost:8443`. Everything talks over Tailscale. Postgres is Vultr Managed, accessed via PgBouncer on the NAT VPS (`:6432`).
+
+Nomad job files live in `infra/nomad/`. Terraform lives in `infra/terraform/`. Node classes constrain which jobs land where. Don't add `spread` or `distinct_hosts` constraints — there's one instance of everything.
+
+---
+
+## Development
+
+### Local Setup
 
 ```bash
-# Infrastructure
-task up                   # Spin up Postgres, NATS, RustFS (S3 mock)
-task metal:setup          # (Linux Root) Setup br0, jailer, cgroups
-
-# Development
-task dev:api              # Start Rust API on :7070
-task dev:web              # Start web dashboard on :3000 (once built)
-task dev:daemon           # Start NATS consumer (NODE_ENGINE=liquid for Wasm-only on macOS)
-
-# Testing
-cargo test --workspace    # Rust suite
+task up              # Postgres + NATS + MinIO (S3 mock) via docker compose
+task dev:api         # API on :7070
+task dev:web         # Dashboard on :3000
+task dev:proxy       # Pingora on :8080
+task dev:daemon      # NATS consumer (NODE_ENGINE=liquid for Wasm-only on non-Linux)
 ```
+
+### Linux-Only (Bare Metal Dev)
+
+```bash
+sudo task metal:setup      # br0 bridge, Firecracker binary, /run/firecracker
+sudo task security:setup   # jailer user, cgroup v2, eBPF policy
+```
+
+### CLI
+
+```bash
+task install:cli     # cargo install → flux in ~/.cargo/bin
+flux login           # OIDC device flow → gets lm_* API key
+flux init            # detect language, create project, write liquid-metal.toml
+flux deploy          # build → upload to S3 → provision via NATS
+flux services        # list services in active workspace
+```
+
+### Tests
+
+Integration tests in `crates/api/tests/` require `DATABASE_URL` and `NATS_URL`. They use a real database, not mocks. The test harness provisions real users and creates real API keys.
+
+```bash
+cargo test -p api -- --include-ignored   # integration tests (needs infra)
+cargo test --workspace                   # unit tests only
+```
+
+### Infrastructure
+
+```bash
+task infra:plan              # Terraform plan (CLOUD_ENV=dev)
+task infra:apply             # Terraform apply
+task nomad:deploy            # Deploy all Nomad jobs
+task nomad:status            # Check job status
+```
+
+---
+
+## Patterns You'll See
+
+### The Outbox Pattern
+
+The API doesn't publish to NATS directly in request handlers. It writes events to an `outbox` table in the same Postgres transaction as the mutation, then a background poller picks them up and publishes to NATS. This guarantees at-least-once delivery without distributed transactions.
+
+### Feature Flags
+
+`crates/common/src/features.rs` defines feature flags read from env vars: `REQUIRE_INVITE`, `ENABLE_METAL`, `ENABLE_LIQUID`, `ENFORCE_QUOTAS`, `MAINTENANCE_MODE`. All default to the safe production value when unset. They're evaluated at request time, not compile time.
+
+### UUID v7
+
+All primary keys are UUID v7 — time-ordered, globally unique, no sequences. Deploy IDs are UUID v7 too, making each artifact immutable and naturally sorted.
+
+### Engine Gating
+
+The daemon uses `#[cfg(target_os = "linux")]` to gate Firecracker code. On non-Linux systems, only Liquid (Wasm) works. Set `NODE_ENGINE=liquid` to skip Metal entirely during local dev.
+
+---
+
+## What Not To Do
+
+- **Don't add middleware to `web` that talks to Postgres.** Web is a BFF. It calls the API.
+- **Don't create response types outside `common::contract`.** That's how you get deserialization mismatches between CLI and API at 2am.
+- **Don't mock the database in tests.** We've been burned. Use the real thing.
+- **Don't add a new message broker.** NATS does pub/sub, queues, and persistence. One bus.
+- **Don't run `cargo build`, `cargo check`, or `cargo test` without asking first.** This machine has limited RAM. Always confirm before kicking off a build.
+- **Don't add Docker to the deployment path.** Nomad runs our binaries directly via `raw_exec`. No containers in production.
+- **Don't introduce client-side routing in the web dashboard.** Server-rendered HTML with HTMX partial swaps. That's the architecture.
+- **Don't add backward-compatibility shims.** Zero production users. Clean breaks only.
+
+---
+
+## Deployment
+
+Binaries are built by GitHub Actions (`release.yml` via `cargo-dist`), uploaded as release artifacts, and deployed via `deploy.yml` which updates Nomad jobs. User artifacts (compiled binaries and `.wasm` modules) go to Vultr Object Storage (S3-compatible) under `liquid-metal-artifacts/`.
+
+The deploy flow for user services: `flux deploy` → local build → upload to S3 → API writes to Postgres + outbox → NATS event → daemon provisions (Firecracker VM or Wasmtime instance) → proxy routes traffic via slug lookup.
+
+---
+
+## File Map
+
+```
+/
+├── crates/
+│   ├── api/           # REST/JSON brain
+│   │   ├── src/routes/  # Route handlers (auth, services, api_keys, billing, etc.)
+│   │   └── tests/       # Integration tests with real Postgres
+│   ├── cli/           # flux CLI
+│   │   └── src/commands/  # Command implementations (auth/, service/, workspace, etc.)
+│   ├── common/        # Shared types — contract.rs is the canonical schema
+│   ├── daemon/        # NATS consumer — Firecracker + Wasmtime
+│   ├── proxy/         # Pingora edge router
+│   ├── web/           # Askama + HTMX dashboard
+│   └── ebpf-programs/ # TC classifiers (excluded from workspace)
+├── infra/
+│   ├── nomad/         # Job files (api, proxy, daemon-metal, daemon-liquid)
+│   └── terraform/     # Vultr + Cloudflare + Tailscale + GCP
+├── migrations/        # SQL migrations (V1..VN), run via `task migrate`
+├── .env.example       # Every env var the system uses, documented
+├── Taskfile.yml       # All dev/ops commands
+├── ARCHITECTURE.md    # Infrastructure topology and data flow
+└── RUNBOOK.md         # Operational procedures
+```
+
+---
+
+## Reference
+
+- **Docs**: `ARCHITECTURE.md` (topology), `RUNBOOK.md` (operations)
+- **Config**: `.env.example` has every env var with inline docs
+- **Migrations**: `migrations/` directory, applied via `cargo run -p api -- --migrate`
+- **Nomad jobs**: `infra/nomad/*.nomad.hcl`
+- **Terraform**: `infra/terraform/` — Vultr, Cloudflare, Tailscale, GCP (KMS + state bucket)

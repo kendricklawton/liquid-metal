@@ -1,6 +1,9 @@
 use crate::{deprovision, storage, verify, wasm_http};
 use anyhow::{Context, Result};
-use common::events::{Engine, EngineSpec, ProvisionEvent, RouteUpdatedEvent, SUBJECT_ROUTE_UPDATED};
+use common::events::{
+    DeployProgressEvent, DeployStep, Engine, EngineSpec, FailureKind, ProvisionEvent,
+    RouteUpdatedEvent, SUBJECT_DEPLOY_PROGRESS, SUBJECT_ROUTE_UPDATED,
+};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -12,6 +15,22 @@ use uuid::Uuid;
 use std::time::Duration;
 #[cfg(target_os = "linux")]
 use crate::{cgroup, cpu, ebpf, firecracker, jailer, netlink, tc};
+
+/// How long to wait for the guest binary to bind its port after VM boot.
+/// Override via `STARTUP_PROBE_TIMEOUT_SECS` (default 30s).
+#[cfg(target_os = "linux")]
+static STARTUP_PROBE_TIMEOUT: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
+    let secs: u64 = common::config::env_or("STARTUP_PROBE_TIMEOUT_SECS", "30")
+        .parse().unwrap_or(30);
+    Duration::from_secs(secs)
+});
+
+/// How many lines of serial console output to include in startup failure errors.
+#[cfg(target_os = "linux")]
+static STARTUP_PROBE_LOG_LINES: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+    common::config::env_or("STARTUP_PROBE_LOG_LINES", "50")
+        .parse().unwrap_or(50)
+});
 
 /// Tracks in-use TAP indices so freed indices can be reclaimed.
 /// Without this, the old monotonic counter would exhaust the IP address space
@@ -106,7 +125,7 @@ pub async fn init_tap_indices(pool: &deadpool_postgres::Pool, node_id: &str) {
 
 /// Allocate the smallest available TAP index. Returns the index and marks it
 /// as in-use. The caller must call `release_tap_index` on deprovision.
-async fn allocate_tap_index() -> u32 {
+async fn allocate_tap_index() -> anyhow::Result<u32> {
     let mut set = tap_indices().lock().await;
     // Find the first gap: 0, 1, 2, ... that isn't in the set.
     let mut idx = 0u32;
@@ -114,8 +133,13 @@ async fn allocate_tap_index() -> u32 {
         if idx < used { break; }
         idx = used + 1;
     }
+    anyhow::ensure!(
+        idx <= common::networking::MAX_TAP_INDEX,
+        "node at capacity: all {} TAP indices in use — cannot provision more Metal VMs",
+        common::networking::MAX_TAP_INDEX + 1
+    );
     set.insert(idx);
-    idx
+    Ok(idx)
 }
 
 /// Release a TAP index back to the pool so it can be reused.
@@ -354,7 +378,22 @@ pub fn check_disk_space(artifact_dir: &str) {
 #[cfg(not(target_os = "linux"))]
 pub fn check_disk_space(_artifact_dir: &str) {}
 
+/// Fire-and-forget progress publish. Failures are silently dropped — a missed
+/// progress event degrades CLI UX but never affects provisioning correctness.
+async fn publish_progress(nats: &async_nats::Client, service_id: &str, step: DeployStep, message: &str) {
+    if let Ok(data) = serde_json::to_vec(&DeployProgressEvent {
+        service_id: service_id.to_string(),
+        step,
+        message: message.to_string(),
+    }) {
+        let subject = format!("{}.{}", SUBJECT_DEPLOY_PROGRESS, service_id);
+        let _ = nats.publish(subject, data.into()).await;
+    }
+}
+
 pub async fn provision(ctx: &ProvisionCtx, event: &ProvisionEvent) -> Result<ProvisionedService> {
+    publish_progress(&ctx.nats, &event.service_id, DeployStep::Queued, "Picked up by daemon").await;
+
     let svc = match &event.spec {
         EngineSpec::Metal(spec)  => provision_metal(ctx, event, spec).await?,
         EngineSpec::Liquid(spec) => provision_liquid(ctx, event, spec).await?,
@@ -384,7 +423,7 @@ pub async fn provision(ctx: &ProvisionCtx, event: &ProvisionEvent) -> Result<Pro
             error = %e,
             "DB write failed after provision — tearing down to avoid resource leak"
         );
-        rollback_provision(ctx, event).await;
+        rollback_provision(ctx, event, &e).await;
         return Err(e);
     }
 
@@ -411,12 +450,63 @@ pub async fn provision(ctx: &ProvisionCtx, event: &ProvisionEvent) -> Result<Pro
 }
 
 /// Tear down resources allocated during provision when the final DB write fails.
-/// Without this, the VM/Wasm runs indefinitely but the service stays stuck in
-/// `provisioning` — the watchdog marks it `failed` but can never kill the process.
-async fn rollback_provision(ctx: &ProvisionCtx, event: &ProvisionEvent) {
+///
+/// The critical invariant: the Firecracker process must be killed *synchronously*
+/// before any async cleanup. If the daemon crashes mid-rollback, the FC process
+/// must already be dead. The startup sweep (`cleanup_stale_provisioning`) handles
+/// any remaining kernel resources (TAP, cgroup, etc.) on next boot.
+/// Inspect the error chain and decide whether the failure is worth retrying.
+fn classify_error(err: &anyhow::Error) -> FailureKind {
+    let msg = format!("{err:#}").to_lowercase();
+
+    // Permanent failures — no point retrying
+    if msg.contains("artifact integrity failed")
+        || msg.contains("startup probe failed")
+        || msg.contains("readiness probe failed")
+        || msg.contains("wasm http readiness probe failed")
+        || msg.contains("invalid elf")
+        || msg.contains("wasm compile")
+        || msg.contains("not a valid wasm module")
+    {
+        return FailureKind::Permanent;
+    }
+
+    // Everything else is transient by default — safe to retry
+    FailureKind::Transient
+}
+
+pub async fn rollback_provision(ctx: &ProvisionCtx, event: &ProvisionEvent, err: &anyhow::Error) -> FailureKind {
+    let reason = format!("{err:#}");
+    let kind = classify_error(err);
+
+    publish_progress(&ctx.nats, &event.service_id, DeployStep::Failed, &reason).await;
+
+    // Best-effort: mark the service as 'failed' in the DB *before* cleanup.
+    // Persist the failure reason and bump the attempt counter so the API/CLI
+    // can show the user what went wrong.
+    if let Ok(db) = ctx.pool.get().await {
+        if let Ok(svc_id) = event.service_id.parse::<uuid::Uuid>() {
+            let _ = db
+                .execute(
+                    "UPDATE services SET status = 'failed', failure_reason = $1, \
+                     provision_attempts = provision_attempts + 1 \
+                     WHERE id = $2 AND deleted_at IS NULL",
+                    &[&reason, &svc_id],
+                )
+                .await;
+        }
+    }
+
     match &event.spec {
         EngineSpec::Metal(_) => {
             if let Some(handle) = ctx.registry.lock().await.remove(&event.service_id) {
+                // SIGKILL immediately — this is the crash-safe part. Even if the
+                // daemon dies on the next line, the FC process is already dead.
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    libc::kill(handle.fc_pid as libc::pid_t, libc::SIGKILL);
+                }
+
                 release_tap_index(&handle.tap_name).await;
                 deprovision::metal(
                     &event.service_id,
@@ -434,6 +524,90 @@ async fn rollback_provision(ctx: &ProvisionCtx, event: &ProvisionEvent) {
             ctx.liquid_registry.lock().await.remove(&event.service_id);
         }
     }
+
+    kind
+}
+
+/// On daemon startup, find services stuck in `provisioning` or `failed` on this
+/// node and clean them up. These are orphans from a previous daemon crash during
+/// provision or rollback — the FC process may still be alive and kernel resources
+/// (TAP, cgroup, eBPF) may still be allocated.
+#[cfg(target_os = "linux")]
+pub async fn cleanup_stale_provisioning(
+    pool: &deadpool_postgres::Pool,
+    node_id: &str,
+    physical_cores: u32,
+    artifact_dir: &str,
+) {
+    let db = match pool.get().await {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::warn!(error = %e, "stale provision cleanup: db pool error — skipping");
+            return;
+        }
+    };
+
+    // Find services stuck in provisioning/failed with VM metadata on this node.
+    let rows = db
+        .query(
+            "SELECT id::text, tap_name, fc_pid, vm_id \
+             FROM services \
+             WHERE node_id = $1 \
+               AND status IN ('provisioning', 'failed') \
+               AND engine = 'metal' \
+               AND deleted_at IS NULL \
+               AND tap_name IS NOT NULL",
+            &[&node_id],
+        )
+        .await
+        .unwrap_or_default();
+
+    if rows.is_empty() {
+        return;
+    }
+
+    tracing::warn!(count = rows.len(), "found stale provisioning/failed services — cleaning up");
+
+    for row in &rows {
+        let service_id: String          = row.get(0);
+        let tap_name: String            = row.get(1);
+        let fc_pid: Option<i32>         = row.get(2);
+        let vm_id: Option<String>       = row.get(3);
+
+        // Kill the FC process if it's still alive.
+        if let Some(pid) = fc_pid {
+            if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                tracing::warn!(service_id, fc_pid = pid, "killing orphaned Firecracker process");
+                unsafe { libc::kill(pid, libc::SIGKILL); }
+            }
+        }
+
+        // Mark as crashed in DB.
+        if let Ok(svc_id) = service_id.parse::<uuid::Uuid>() {
+            let _ = db
+                .execute(
+                    "UPDATE services SET status = 'crashed', upstream_addr = NULL \
+                     WHERE id = $1 AND deleted_at IS NULL",
+                    &[&svc_id],
+                )
+                .await;
+        }
+
+        // Clean up kernel resources via the normal deprovision path.
+        let handle = deprovision::VmHandle {
+            tap_name:    tap_name.clone(),
+            fc_pid:      fc_pid.unwrap_or(0) as u32,
+            cpu_core:    0, // unknown — online_smt_sibling will be a no-op for core 0
+            vm_id:       vm_id.unwrap_or_default(),
+            use_jailer:  false,
+            chroot_base: String::new(),
+        };
+
+        release_tap_index(&tap_name).await;
+        deprovision::metal(&service_id, handle, physical_cores, artifact_dir).await;
+
+        tracing::info!(service_id, "stale provisioning service cleaned up");
+    }
 }
 
 async fn provision_metal(
@@ -442,9 +616,10 @@ async fn provision_metal(
     spec: &common::events::MetalSpec,
 ) -> Result<ProvisionedService> {
     let vm_id   = Uuid::now_v7();
-    let tap_idx = allocate_tap_index().await;
+    let tap_idx = allocate_tap_index().await?;
     let tap     = common::networking::tap_name(tap_idx);
-    let ip      = common::networking::guest_ip(tap_idx);
+    let ip      = common::networking::guest_ip(tap_idx)
+        .context("TAP index pool exhausted")?;
     let upstream_addr = format!("{}:{}", ip, spec.port);
 
     // Download rootfs artifact from Object Storage
@@ -452,14 +627,27 @@ async fn provision_metal(
         .join(&event.service_id)
         .join("rootfs.ext4");
 
+    publish_progress(&ctx.nats, &event.service_id, DeployStep::Downloading, "Downloading rootfs from object storage").await;
     storage::download(&ctx.s3, &ctx.bucket, &spec.artifact_key, &local_rootfs)
         .await
         .context("downloading rootfs from Object Storage")?;
 
     if let Some(expected) = &spec.artifact_sha256 {
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Verifying, "Verifying artifact integrity").await;
         verify::artifact(local_rootfs.to_str().unwrap_or(""), expected)
             .await
             .context("rootfs integrity check")?;
+    } else {
+        tracing::warn!(service_id = %event.service_id, "no artifact_sha256 provided — skipping rootfs integrity check");
+    }
+
+    // Defense-in-depth: catch glibc-linked binaries that slipped past the CLI.
+    // Reads only the first 64 KiB — harmless for ext4 images (won't match ELF magic).
+    if let Err(e) = common::artifact::check_elf_compat_file(
+        local_rootfs.to_str().unwrap_or(""),
+    ).await {
+        tracing::error!(service_id = %event.service_id, error = %e, "ELF compatibility check failed");
+        anyhow::bail!("artifact rejected: {e}");
     }
 
     tracing::info!(
@@ -473,57 +661,62 @@ async fn provision_metal(
         let rootfs_path = local_rootfs.to_string_lossy().into_owned();
         let mac         = format!("AA:FC:00:00:{:02X}:{:02X}", tap_idx >> 8, tap_idx & 0xFF);
         let cpu_core = cpu::next_core(ctx.cfg.physical_cores);
+        let serial_log  = PathBuf::from(&ctx.cfg.artifact_dir)
+            .join(&event.service_id)
+            .join("serial.log");
+        let serial_log_str = serial_log.to_string_lossy().into_owned();
 
         netlink::create_tap(&tap).context("create TAP")?;
-        netlink::attach_to_bridge(&tap, &ctx.cfg.bridge).await.context("attach TAP to bridge")?;
-        tc::apply(&tap, &spec.quota).await.context("tc bandwidth")?;
-        ebpf::attach(&tap, &event.service_id).context("eBPF TC attach")?;
 
-        let (fc_pid, sock_path, rootfs_guest, kernel_guest) = if ctx.cfg.use_jailer {
-            let (pid, paths) = jailer::spawn(&jailer::JailerConfig {
-                vm_id:       &vm_id.to_string(),
-                jailer_bin:  &ctx.cfg.jailer_bin,
-                fc_bin:      &ctx.cfg.fc_bin,
-                uid:         ctx.cfg.jailer_uid,
-                gid:         ctx.cfg.jailer_gid,
-                chroot_base: &ctx.cfg.chroot_base,
-                rootfs_src:  &rootfs_path,
-                kernel_src:  &ctx.cfg.kernel_path,
-            })
-            .await
-            .context("jailer spawn")?;
-            (pid, paths.socket, paths.rootfs_guest.to_string(), paths.kernel_guest.to_string())
-        } else {
-            let sock = format!("{}/{}.sock", ctx.cfg.sock_dir, vm_id);
-            let pid = spawn_firecracker_direct(&ctx.cfg.fc_bin, &vm_id.to_string(), &sock).await?;
-            (pid, sock, rootfs_path.clone(), ctx.cfg.kernel_path.clone())
-        };
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Booting, "Booting Firecracker VM").await;
 
-        let cg_path = format!("/sys/fs/cgroup/liquid-metal/{}", event.service_id);
+        // Everything after TAP creation must clean up the TAP device + index
+        // on failure, otherwise they leak until the next daemon restart.
+        let result = provision_metal_after_tap(
+            ctx, event, spec, &tap, &rootfs_path, &mac, cpu_core, vm_id, &serial_log_str,
+        ).await;
 
-        cgroup::apply(&event.service_id, fc_pid, &ctx.cfg.rootfs_dev, &spec.quota)
-            .await
-            .context("cgroup io.max")?;
+        if let Err(ref e) = result {
+            tracing::warn!(tap = tap, error = %e, "metal provision failed after TAP creation — cleaning up");
+            release_tap_index(&tap).await;
+            if let Err(del_err) = netlink::delete_tap(&tap).await {
+                tracing::warn!(tap = tap, error = %del_err, "failed to delete leaked TAP device");
+            }
+            return Err(result.unwrap_err());
+        }
 
-        cpu::pin_cgroup(&cg_path, cpu_core)
-            .await
-            .context("cpuset pin")?;
+        let (fc_pid, cpu_core) = result.unwrap();
 
-        cpu::offline_smt_sibling(cpu_core, ctx.cfg.physical_cores)
-            .await
-            .context("offline SMT sibling")?;
-
-        firecracker::start_vm(&firecracker::VmConfig {
-            sock_path:   &sock_path,
-            vcpu:        spec.vcpu,
-            memory_mb:   spec.memory_mb,
-            kernel_path: &kernel_guest,
-            rootfs_path: &rootfs_guest,
-            tap_name:    &tap,
-            guest_mac:   &mac,
-        })
-        .await
-        .context("start VM")?;
+        // Startup readiness probe: HTTP GET / to confirm the binary is listening
+        // and speaking HTTP. Without this, a binary that boots and immediately
+        // crashes leaves the service stuck in "running" state returning errors.
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::HealthCheck, "Waiting for service to respond to HTTP requests").await;
+        if let Err(e) = startup_probe(&upstream_addr, Some(&serial_log_str)).await {
+            tracing::error!(
+                service_id = event.service_id,
+                %upstream_addr,
+                error = %e,
+                "startup probe failed — binary did not bind its port"
+            );
+            publish_progress(&ctx.nats, &event.service_id, DeployStep::Failed, &format!("Startup probe failed: {e}")).await;
+            // Kill the VM and clean up — don't leave a ghost running.
+            unsafe { libc::kill(fc_pid as libc::pid_t, libc::SIGKILL); }
+            release_tap_index(&tap).await;
+            deprovision::metal(
+                &event.service_id,
+                deprovision::VmHandle {
+                    tap_name:    tap.clone(),
+                    fc_pid,
+                    cpu_core,
+                    vm_id:       vm_id.to_string(),
+                    use_jailer:  ctx.cfg.use_jailer,
+                    chroot_base: ctx.cfg.chroot_base.clone(),
+                },
+                ctx.cfg.physical_cores,
+                &ctx.cfg.artifact_dir,
+            ).await;
+            return Err(e);
+        }
 
         // Register in-memory for deprovision
         ctx.registry.lock().await.insert(
@@ -540,7 +733,8 @@ async fn provision_metal(
 
         // Persist VM metadata to DB for post-restart deprovision recovery.
         if let Ok(db) = ctx.pool.get().await {
-            let svc_id: Uuid = event.service_id.parse().unwrap_or(Uuid::nil());
+            let svc_id: Uuid = event.service_id.parse()
+                .context("service_id is not a valid UUID")?;
             let fc_pid_i32 = fc_pid as i32;
             let cpu_core_i32 = cpu_core as i32;
             let vm_id_str = vm_id.to_string();
@@ -553,6 +747,7 @@ async fn provision_metal(
         }
 
         tracing::info!(vm_id = %vm_id, %upstream_addr, fc_pid, cpu_core, "metal VM ready");
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Running, "VM is live").await;
 
         return Ok(ProvisionedService {
             id: vm_id,
@@ -570,6 +765,74 @@ async fn provision_metal(
     })
 }
 
+/// Inner helper for Metal provisioning steps that occur after TAP creation.
+/// Returns `(fc_pid, cpu_core)` on success. Separated so `provision_metal`
+/// can clean up the TAP device + index if any step here fails.
+#[cfg(target_os = "linux")]
+async fn provision_metal_after_tap(
+    ctx: &ProvisionCtx,
+    event: &ProvisionEvent,
+    spec: &common::events::MetalSpec,
+    tap: &str,
+    rootfs_path: &str,
+    mac: &str,
+    cpu_core: u32,
+    vm_id: Uuid,
+    serial_log: &str,
+) -> Result<(u32, u32)> {
+    netlink::attach_to_bridge(tap, &ctx.cfg.bridge).await.context("attach TAP to bridge")?;
+    tc::apply(tap, &spec.quota).await.context("tc bandwidth")?;
+    ebpf::attach(tap, &event.service_id).context("eBPF TC attach")?;
+
+    let (fc_pid, sock_path, rootfs_guest, kernel_guest) = if ctx.cfg.use_jailer {
+        let (pid, paths) = jailer::spawn(&jailer::JailerConfig {
+            vm_id:       &vm_id.to_string(),
+            jailer_bin:  &ctx.cfg.jailer_bin,
+            fc_bin:      &ctx.cfg.fc_bin,
+            uid:         ctx.cfg.jailer_uid,
+            gid:         ctx.cfg.jailer_gid,
+            chroot_base: &ctx.cfg.chroot_base,
+            rootfs_src:  rootfs_path,
+            kernel_src:  &ctx.cfg.kernel_path,
+        }, serial_log)
+        .await
+        .context("jailer spawn")?;
+        (pid, paths.socket, paths.rootfs_guest.to_string(), paths.kernel_guest.to_string())
+    } else {
+        let sock = format!("{}/{}.sock", ctx.cfg.sock_dir, vm_id);
+        let pid = spawn_firecracker_direct(&ctx.cfg.fc_bin, &vm_id.to_string(), &sock, serial_log).await?;
+        (pid, sock, rootfs_path.to_string(), ctx.cfg.kernel_path.clone())
+    };
+
+    let cg_path = format!("/sys/fs/cgroup/liquid-metal/{}", event.service_id);
+
+    cgroup::apply(&event.service_id, fc_pid, &ctx.cfg.rootfs_dev, &spec.quota, spec.memory_mb)
+        .await
+        .context("cgroup limits")?;
+
+    cpu::pin_cgroup(&cg_path, cpu_core)
+        .await
+        .context("cpuset pin")?;
+
+    cpu::offline_smt_sibling(cpu_core, ctx.cfg.physical_cores)
+        .await
+        .context("offline SMT sibling")?;
+
+    firecracker::start_vm(&firecracker::VmConfig {
+        sock_path:   &sock_path,
+        vcpu:        spec.vcpu,
+        memory_mb:   spec.memory_mb,
+        kernel_path: &kernel_guest,
+        rootfs_path: &rootfs_guest,
+        tap_name:    tap,
+        guest_mac:   mac,
+    })
+    .await
+    .context("start VM")?;
+
+    Ok((fc_pid, cpu_core))
+}
+
 async fn provision_liquid(
     ctx: &ProvisionCtx,
     event: &ProvisionEvent,
@@ -581,6 +844,7 @@ async fn provision_liquid(
         .join(&event.service_id)
         .join("main.wasm");
 
+    publish_progress(&ctx.nats, &event.service_id, DeployStep::Downloading, "Downloading Wasm module from object storage").await;
     storage::download(&ctx.s3, &ctx.bucket, &spec.artifact_key, &local_wasm)
         .await
         .context("downloading wasm from Object Storage")?;
@@ -588,9 +852,12 @@ async fn provision_liquid(
     let wasm_path = local_wasm.to_string_lossy().into_owned();
 
     if let Some(expected) = &spec.artifact_sha256 {
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Verifying, "Verifying artifact integrity").await;
         verify::artifact(&wasm_path, expected)
             .await
             .context("wasm integrity check")?;
+    } else {
+        tracing::warn!(service_id = %event.service_id, "no artifact_sha256 provided — skipping wasm integrity check");
     }
 
     tracing::info!(service_id = %id, app = event.app_name, "provisioning liquid (wasm)");
@@ -598,11 +865,22 @@ async fn provision_liquid(
     // Invocation counter — shared with wasm_http::dispatch (writes) and usage reporter (reads).
     let invocations = Arc::new(AtomicU64::new(0));
 
+    publish_progress(&ctx.nats, &event.service_id, DeployStep::Starting, "Starting Wasmtime runtime").await;
     // Compile the module once and start a per-request HTTP shim on a free port.
     // Pingora routes to 127.0.0.1:{port} as upstream_addr.
-    let port = wasm_http::serve(wasm_path, event.app_name.clone(), invocations.clone())
+    let port = wasm_http::serve(wasm_path, event.app_name.clone(), invocations.clone(), event.env_vars.clone())
         .await
         .context("starting wasm HTTP shim")?;
+
+    // Probe: confirm the first Wasm invocation succeeds — not just that the port is bound.
+    // wasm_http::serve() spawns the accept loop in a background task, so the port may be
+    // returned before the listener is ready. Any HTTP response (200/404/500) proves the
+    // shim is alive and the module compiled and dispatches without panicking.
+    let upstream_addr = format!("127.0.0.1:{port}");
+    publish_progress(&ctx.nats, &event.service_id, DeployStep::HealthCheck, "Verifying Wasm module responds to requests").await;
+    startup_probe(&upstream_addr, None)
+        .await
+        .context("wasm HTTP readiness probe failed")?;
 
     // Register for billing usage reporting.
     ctx.liquid_registry.lock().await.insert(
@@ -613,21 +891,105 @@ async fn provision_liquid(
         },
     );
 
-    let upstream_addr = format!("127.0.0.1:{port}");
     tracing::info!(service_id = %id, %upstream_addr, "liquid wasm ready");
+    publish_progress(&ctx.nats, &event.service_id, DeployStep::Running, "Wasm module is live").await;
 
     Ok(ProvisionedService { id, engine: Engine::Liquid, upstream_addr: Some(upstream_addr) })
 }
 
+/// HTTP startup probe: poll upstream_addr with `GET /` until any HTTP response is received
+/// (alive = HTTP layer responded, even 4xx/5xx) or `STARTUP_PROBE_TIMEOUT` expires.
+/// `serial_log` is read on timeout for Metal VMs; pass `None` for Liquid (no serial console).
+async fn startup_probe(upstream_addr: &str, serial_log: Option<&str>) -> Result<()> {
+    use hyper::Request;
+    use hyper::client::conn::http1;
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpStream;
+
+    let deadline = tokio::time::Instant::now() + *STARTUP_PROBE_TIMEOUT;
+    let mut interval = tokio::time::interval(Duration::from_millis(500));
+
+    tracing::info!(upstream_addr, timeout_secs = STARTUP_PROBE_TIMEOUT.as_secs(), "startup probe: waiting for HTTP response");
+
+    loop {
+        interval.tick().await;
+
+        // Attempt HTTP GET / — any response (200, 404, 500) proves HTTP layer is alive.
+        let probe_result: Result<()> = async {
+            let stream = TcpStream::connect(upstream_addr).await?;
+            let io = TokioIo::new(stream);
+            let (mut sender, conn) = http1::handshake(io).await?;
+            tokio::spawn(conn);
+            let req = Request::get("/")
+                .header("host", upstream_addr)
+                .body(http_body_util::Empty::<hyper::body::Bytes>::new())?;
+            sender.send_request(req).await?;
+            Ok(())
+        }
+        .await;
+
+        match probe_result {
+            Ok(()) => {
+                tracing::info!(upstream_addr, "startup probe: HTTP layer responding");
+                return Ok(());
+            }
+            Err(_) if tokio::time::Instant::now() >= deadline => {
+                let timeout_secs = STARTUP_PROBE_TIMEOUT.as_secs();
+                let serial_section = if let Some(log_path) = serial_log {
+                    let serial_output = read_tail(log_path, *STARTUP_PROBE_LOG_LINES).await;
+                    format!(
+                        "\n\nLast {lines} lines of serial console (kernel + app output):\n\
+                         ───────────────────────────────────────\n\
+                         {serial_output}\n\
+                         ───────────────────────────────────────",
+                        lines = STARTUP_PROBE_LOG_LINES.min(serial_output.lines().count()),
+                    )
+                } else {
+                    String::new()
+                };
+                anyhow::bail!(
+                    "startup probe failed: service did not respond to HTTP GET / on {upstream_addr} within {timeout_secs}s\n\n\
+                     Common causes:\n\
+                     \x20 - Application crashed on startup (panic, missing env var, segfault)\n\
+                     \x20 - Application listening on wrong port (check [service].port in liquid-metal.toml)\n\
+                     \x20 - HTTP server not started — application bound TCP but never spoke HTTP\n\
+                     \x20 - Binary is glibc-linked on a musl rootfs (should have been caught by ELF check){serial_section}"
+                );
+            }
+            Err(_) => {
+                // Not yet — keep polling
+            }
+        }
+    }
+}
+
+/// Read the last `n` lines from a file. Best-effort — returns empty string on error.
+async fn read_tail(path: &str, n: usize) -> String {
+    match tokio::fs::read_to_string(path).await {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(n);
+            lines[start..].join("\n")
+        }
+        Err(_) => "(serial log not available)".to_string(),
+    }
+}
+
 #[cfg(target_os = "linux")]
-async fn spawn_firecracker_direct(fc_bin: &str, vm_id: &str, sock_path: &str) -> Result<u32> {
+async fn spawn_firecracker_direct(fc_bin: &str, vm_id: &str, sock_path: &str, serial_log: &str) -> Result<u32> {
     let sock_dir = sock_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("/run/firecracker");
     tokio::fs::create_dir_all(sock_dir).await.context("mkdir sock dir")?;
 
+    // Capture serial console (ttyS0) output for debugging startup failures.
+    let serial_file = std::fs::File::create(serial_log)
+        .with_context(|| format!("creating serial log: {serial_log}"))?;
+    let stderr_file = serial_file.try_clone()
+        .context("cloning serial log file for stderr")?;
+
     let mut child = tokio::process::Command::new(fc_bin)
         .args(["--api-sock", sock_path, "--id", vm_id])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(serial_file)
+        .stderr(stderr_file)
         .process_group(0)
         .spawn()
         .with_context(|| format!("spawning {}", fc_bin))?;

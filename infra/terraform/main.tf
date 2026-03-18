@@ -30,6 +30,11 @@ variable "vultr_api_key" { sensitive = true }
 variable "ssh_key_id" { type = string }
 variable "bare_metal_plan" { type = string }
 variable "vps_plan" { type = string }
+variable "vps_gateway_plan" {
+  type        = string
+  default     = ""
+  description = "VPS plan for standby gateway. Defaults to vps_plan if empty."
+}
 variable "os_id" { type = number }
 
 variable "cloudflare_api_token" { sensitive = true }
@@ -53,11 +58,32 @@ variable "nats_password" { sensitive = true }
 variable "nats_password_daemon" { sensitive = true }
 variable "nats_password_proxy"  { sensitive = true }
 
-variable "heartbeat_url_nomad"            { type = string; default = "" }
-variable "heartbeat_url_postgres"         { type = string; default = "" }
-variable "heartbeat_url_victoriametrics"  { type = string; default = "" }
-variable "heartbeat_url_victorialogs"     { type = string; default = "" }
-variable "heartbeat_url_artifacts"        { type = string; default = "" }
+variable "slack_webhook_url" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "heartbeat_url_nomad"            {
+  type = string
+  default = ""
+}
+variable "heartbeat_url_postgres"         {
+  type = string
+  default = ""
+}
+variable "heartbeat_url_victoriametrics"  {
+  type = string
+  default = ""
+}
+variable "heartbeat_url_victorialogs"     {
+  type = string
+  default = ""
+}
+variable "heartbeat_url_artifacts"        {
+  type = string
+  default = ""
+}
 
 variable "gcp_project" { type = string }
 variable "gcp_region" {

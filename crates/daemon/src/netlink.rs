@@ -42,7 +42,7 @@ pub async fn attach_to_bridge(tap_name: &str, bridge: &str) -> Result<()> {
     let tap_idx = link_index(&handle, tap_name).await?;
     handle.link().set(tap_idx).up().execute().await.context("TAP up")?;
     let br_idx = link_index(&handle, bridge).await?;
-    handle.link().set(tap_idx).master(br_idx).execute().await.context("TAP → bridge")?;
+    handle.link().set(tap_idx).controller(br_idx).execute().await.context("TAP → bridge")?;
     tracing::info!(tap_name, bridge, "TAP attached");
     Ok(())
 }

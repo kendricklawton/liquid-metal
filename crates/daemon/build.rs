@@ -28,16 +28,24 @@ fn main() {
     let ebpf_dir     = manifest_dir.join("../../crates/ebpf-programs");
     let out_dir      = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    // Build all eBPF programs in the ebpf-programs crate
+    // Build all eBPF programs in the ebpf-programs crate.
+    //
+    // build-std requires nightly. The parent cargo process sets RUSTC and
+    // RUSTC_WRAPPER to the *stable* toolchain's binaries, which would override
+    // RUSTUP_TOOLCHAIN. We must remove those so nightly cargo discovers its
+    // own rustc via the normal rustup proxy mechanism.
     let status = Command::new("cargo")
         .args([
             "build",
             "--release",
             "--target", "bpfel-unknown-none",
+            "-Z", "build-std=core",
         ])
         .current_dir(&ebpf_dir)
-        // Forward nightly flags required by build-std
+        .env("RUSTUP_TOOLCHAIN", "nightly")
         .env("RUSTFLAGS", "-C panic=abort")
+        .env_remove("RUSTC")
+        .env_remove("RUSTC_WRAPPER")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()

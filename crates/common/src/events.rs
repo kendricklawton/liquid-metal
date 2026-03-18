@@ -24,6 +24,9 @@ pub struct ProvisionEvent {
     pub slug:       String,
     pub engine:     Engine,
     pub spec:       EngineSpec,
+    /// User-defined environment variables injected at runtime.
+    #[serde(default)]
+    pub env_vars:   std::collections::HashMap<String, String>,
 }
 
 /// Published by the daemon after upstream_addr is set (provision complete).
@@ -64,6 +67,45 @@ pub const SUBJECT_SERVICE_CRASHED: &str = "platform.service_crashed";
 /// Published by the API when a workspace balance reaches zero.
 /// Consumed by the daemon to suspend all running services for that workspace.
 pub const SUBJECT_SUSPEND: &str = "platform.suspend";
+
+/// Fire-and-forget. Published by the daemon at each provisioning step.
+/// Subject: `platform.deploy_progress.{service_id}`.
+/// Consumed by the API's SSE endpoint to stream live deploy status to `flux deploy`.
+pub const SUBJECT_DEPLOY_PROGRESS: &str = "platform.deploy_progress";
+
+/// Each discrete step the daemon reports during provisioning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployStep {
+    Queued,
+    Downloading,
+    Verifying,
+    Booting,      // Metal: Firecracker VM starting
+    Starting,     // Liquid: Wasmtime shim starting
+    HealthCheck,  // TCP startup probe
+    Running,      // Terminal — success
+    Failed,       // Terminal — failure
+}
+
+/// Published by the daemon at each step of provisioning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeployProgressEvent {
+    pub service_id: String,
+    pub step: DeployStep,
+    pub message: String,
+}
+
+/// Whether a provision failure is worth retrying.
+/// Transient failures (S3 timeout, DB blip) retry with backoff.
+/// Permanent failures (SHA mismatch, bad binary) stop immediately.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureKind {
+    /// Retry-eligible: S3 timeout, DB connection error, transient network failure.
+    Transient,
+    /// Do not retry: startup probe timeout, SHA mismatch, bad binary, Wasm compile error.
+    Permanent,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrafficPulseEvent {
@@ -189,7 +231,12 @@ pub struct LiquidSpec {
 ///   Layer 3 — Network    : net_* fields    (tc tbf for bandwidth; Aya eBPF TC for isolation)
 ///
 /// `None` means unlimited for that dimension.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+///
+/// `Default` provides conservative baseline limits so that a missing `quota`
+/// field in a ProvisionEvent never results in an unlimited VM:
+///   Disk:    100 MB/s read/write, 5000/2000 IOPS
+///   Network: 100 Mbps ingress/egress
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceQuota {
     // Layer 2: cgroup v2 io.max
     pub disk_read_bps:   Option<u64>,
@@ -200,4 +247,63 @@ pub struct ResourceQuota {
     // Layer 3: tc tbf bandwidth shaping on TAP (see tc.rs)
     pub net_ingress_kbps: Option<u32>,
     pub net_egress_kbps:  Option<u32>,
+}
+
+impl Default for ResourceQuota {
+    fn default() -> Self {
+        Self {
+            disk_read_bps:    Some(100 * 1024 * 1024), // 100 MB/s
+            disk_write_bps:   Some(100 * 1024 * 1024), // 100 MB/s
+            disk_read_iops:   Some(5000),
+            disk_write_iops:  Some(2000),
+            net_ingress_kbps: Some(100_000),            // 100 Mbps
+            net_egress_kbps:  Some(100_000),            // 100 Mbps
+        }
+    }
+}
+
+/// Published by the API cert_manager after a TLS cert is stored in Postgres.
+/// Consumed by proxy instances to hot-reload the cert into their in-memory SNI cache.
+pub const SUBJECT_CERT_PROVISIONED: &str = "platform.cert_provisioned";
+
+/// Published when a cert is provisioned or renewed for a custom domain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertProvisionedEvent {
+    /// Bare custom domain name, e.g. "api.mycorp.com".
+    pub domain: String,
+}
+
+impl ResourceQuota {
+    /// Build from env vars, falling back to compiled defaults for any unset var.
+    ///
+    ///   QUOTA_DISK_READ_BPS, QUOTA_DISK_WRITE_BPS     (bytes/s, 0 = unlimited)
+    ///   QUOTA_DISK_READ_IOPS, QUOTA_DISK_WRITE_IOPS   (0 = unlimited)
+    ///   QUOTA_NET_INGRESS_KBPS, QUOTA_NET_EGRESS_KBPS  (0 = unlimited)
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            disk_read_bps:    parse_quota_env("QUOTA_DISK_READ_BPS",    defaults.disk_read_bps),
+            disk_write_bps:   parse_quota_env("QUOTA_DISK_WRITE_BPS",   defaults.disk_write_bps),
+            disk_read_iops:   parse_quota_env("QUOTA_DISK_READ_IOPS",   defaults.disk_read_iops),
+            disk_write_iops:  parse_quota_env("QUOTA_DISK_WRITE_IOPS",  defaults.disk_write_iops),
+            net_ingress_kbps: parse_quota_env("QUOTA_NET_INGRESS_KBPS", defaults.net_ingress_kbps),
+            net_egress_kbps:  parse_quota_env("QUOTA_NET_EGRESS_KBPS",  defaults.net_egress_kbps),
+        }
+    }
+}
+
+/// Parse a quota env var. Unset → use `fallback`. Set to `"0"` → `None` (unlimited).
+/// Set to a positive number → `Some(n)`.
+fn parse_quota_env<T: std::str::FromStr + PartialEq + Default>(key: &str, fallback: Option<T>) -> Option<T> {
+    match std::env::var(key) {
+        Err(_) => fallback,
+        Ok(val) => match val.parse::<T>() {
+            Ok(v) if v == T::default() => None, // 0 = unlimited
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(key, val, "invalid quota value, using default");
+                fallback
+            }
+        },
+    }
 }
