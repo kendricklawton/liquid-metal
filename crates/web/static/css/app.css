@@ -39,10 +39,6 @@ body, nav, footer, .glass-card, .glass, .glass-btn {
   transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
 }
 
-/* ── Global monospace line-height fix ─────────────────────────────────────── */
-/* Monospace fonts have taller default line-height which misaligns flex items */
-.font-mono { line-height: 1.4; }
-
 /* ── Alpine.js ────────────────────────────────────────────────────────────── */
 [x-cloak] { display: none !important; }
 
