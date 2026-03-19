@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use reqwest::Client;
 
 use common::contract::{ProvisionRequest, ProvisionResponse};
@@ -25,9 +25,9 @@ pub async fn run(config: &mut Config, invite: Option<String>, output: OutputMode
     let pr = provision(&http, config.api_url(), &info, invite.as_deref()).await?;
     println!("done.");
 
-    let api_key = pr.api_key.ok_or_else(|| anyhow::anyhow!(
-        "server did not return an API key — contact support or try again"
-    ))?;
+    let api_key = pr.api_key.ok_or_else(|| {
+        anyhow::anyhow!("server did not return an API key — contact support or try again")
+    })?;
     config.token = Some(api_key);
     config.workspace_id = Some(pr.workspace_id);
     config.oidc_sub = pr.oidc_sub;
@@ -39,10 +39,13 @@ pub async fn run(config: &mut Config, invite: Option<String>, output: OutputMode
     config.access_token = Some(tokens.access_token);
     config.save()?;
 
-    print_ok(output, &format!(
-        "\nWelcome, {}!\nConfig saved to ~/.config/flux/config.yaml",
-        pr.name
-    ));
+    print_ok(
+        output,
+        &format!(
+            "\nWelcome, {}!\nConfig saved to ~/.config/flux/config.yaml",
+            pr.name
+        ),
+    );
     Ok(())
 }
 
