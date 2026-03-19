@@ -44,9 +44,16 @@
       <div>
         <p class="text-xs font-mono font-bold text-zwl-muted dark:text-zw-muted uppercase tracking-widest mb-3">01 / Install the CLI</p>
         <div class="glass-card px-5 py-4 font-mono text-sm">
-          <div class="text-zwl-muted dark:text-zw-muted text-xs mb-1">$</div>
-          <pre>cargo install flux
-flux --help</pre>
+          <div class="text-zwl-muted dark:text-zw-muted text-xs mb-2">Choose your install method:</div>
+          <pre class="text-xs leading-relaxed"><span class="text-zwl-muted dark:text-zw-muted"># macOS / Linux (Homebrew)</span>
+brew install liquidmetal/tap/flux
+
+<span class="text-zwl-muted dark:text-zw-muted"># Shell script (Linux / macOS)</span>
+curl -fsSL https://get.liquidmetal.dev | sh
+
+<span class="text-zwl-muted dark:text-zw-muted"># From source (requires Rust toolchain)</span>
+cargo install flux</pre>
+          <div class="mt-3 text-zwl-muted dark:text-zw-muted text-xs">$ flux --help</div>
         </div>
       </div>
 

@@ -23,7 +23,7 @@
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
         <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
-          Any language that compiles to a Linux x86_64 static binary (Metal) or a WASI WebAssembly module (Liquid). Go, Rust, Zig, C, and C++ work out of the box. The CLI auto-detects Go and Rust projects and configures build commands automatically.
+          Any language that compiles to a Linux x86_64 static binary (Metal) or a WASI WebAssembly module (Liquid). Go, Rust, Zig, C, and C++ work out of the box. Install the CLI via Homebrew (<code>brew install liquidmetal/tap/flux</code>) or the install script (<code>curl -fsSL https://get.liquidmetal.dev | sh</code>). The CLI auto-detects Go and Rust projects and configures build commands automatically.
         </div>
       </div>
 
@@ -33,8 +33,9 @@
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
         <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
-          <strong>Metal</strong> runs your code in a Firecracker microVM &mdash; a full Linux kernel with dedicated CPU, RAM, and disk. Best for long-running servers and workloads needing filesystem access.<br><br>
-          <strong>Liquid</strong> runs your code as a WebAssembly module inside Wasmtime. Best for request handlers and workloads where sub-millisecond startup matters.
+          Both are serverless &mdash; scale to zero, wake on request, pay per invocation.<br><br>
+          <strong>Metal</strong> runs your code in a Firecracker microVM restored from snapshot in &lt;15ms. Real Linux kernel, filesystem, networking. Best for workloads needing syscalls, FFI, or native dependencies.<br><br>
+          <strong>Liquid</strong> runs your code as a WebAssembly module in Wasmtime with &lt;1ms cold starts. Sandboxed, no kernel. Best for APIs, webhooks, and data transforms.
         </div>
       </div>
 
@@ -44,7 +45,7 @@
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
         <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
-          The Hobby tier is free with a 2-service limit. Pro ($10/month) and Team ($20/month) include monthly credits. Usage beyond credits is billed at $0.10/vCPU-hour for Metal and $0.000001/invocation for Liquid. Top up credits anytime via Stripe.
+          Every tier includes 1M free Liquid invocations/month. Metal is billed from the first request (Pro and Team only). Hobby is free with a 5-service limit (Liquid only). Pro ($10/month) and Team ($20/month) include monthly credits and Metal access. Usage: Metal at $0.60/1M invocations + $0.0001/GB-sec compute, Liquid at $0.30/1M invocations. Same rates on every plan.
         </div>
       </div>
 
@@ -54,7 +55,7 @@
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
         <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
-          Yes. The Hobby tier is free forever with up to 2 services. Services idle-timeout after 5 minutes of inactivity. No credit card required.
+          Yes. The Hobby tier is free forever with up to 5 Liquid services and 1M invocations/month. Services scale to zero after 5 minutes of inactivity. No credit card required.
         </div>
       </div>
 
@@ -71,7 +72,7 @@
       <div class="divide-y divide-zwl-border dark:divide-zw-border">
         <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
           <code class="font-mono">flux: command not found</code>
-          <span class="text-zwl-muted dark:text-zw-muted">Ensure <code class="font-mono">~/.cargo/bin</code> is on your PATH</span>
+          <span class="text-zwl-muted dark:text-zw-muted">Reinstall via <code class="font-mono">brew install liquidmetal/tap/flux</code> or <code class="font-mono">curl -fsSL https://get.liquidmetal.dev | sh</code></span>
         </div>
         <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
           <code class="font-mono">flux login fails</code>

@@ -38,17 +38,19 @@ use crate::routes::{ApiError, db_conn};
 //
 // Metal (Firecracker):
 //   $0.60 / 1M invocations = 0.6 µcr/inv. Integer: invocations * 6 / 10.
-//   $0.10 / GB-sec compute. VM memory = 128 MB = 0.128 GB.
-//     Per ms of compute: 0.128 GB × (1/1000 sec) × $0.10 × 1M µcr/$ = 0.0128 µcr/ms.
-//     Integer: duration_ms * 128 / 10_000_000 (truncates, good enough at scale).
+//   $0.0001 / GB-sec compute. VM memory = 128 MB = 0.128 GB.
+//     Per ms: 0.128 GB × 0.001 sec × $0.0001 × 1M µcr/$ = 0.0000128 µcr/ms.
+//     Integer at aggregation: total_duration_ms * 128 / 1_000_000_000.
+//     Small per-request, meaningful at scale (1M × 50ms = $0.00064).
 const METAL_INV_NUM: i64 = 6;
 const METAL_INV_DEN: i64 = 10;
-const METAL_COMPUTE_NUM: i64 = 128;           // 0.128 GB × 1000
-const METAL_COMPUTE_DEN: i64 = 10_000_000;    // converts ms to µcr at $0.10/GB-sec
+const METAL_COMPUTE_NUM: i64 = 128;
+const METAL_COMPUTE_DEN: i64 = 1_000_000_000;  // $0.0001/GB-sec with 128MB VMs
 //
 // Liquid (Wasm):
-//   $0.50 / 1M invocations = 0.5 µcr/inv. Integer: invocations / 2.
-const LIQUID_INV_DIVISOR: i64 = 2;
+//   $0.30 / 1M invocations = 0.3 µcr/inv. Integer: invocations * 3 / 10.
+const LIQUID_INV_NUM: i64 = 3;
+const LIQUID_INV_DEN: i64 = 10;
 //
 #[allow(dead_code)]
 const MICROCREDITS_PER_CENT: i64 = 10_000;
@@ -225,7 +227,7 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
         } else {
             // $0.50/1M invocations = 0.5 micro-credits per invocation.
             // Integer math: divide by 2 to get micro-credits.
-            invocations / LIQUID_INV_DIVISOR
+            invocations * LIQUID_INV_NUM / LIQUID_INV_DEN
         };
 
         if cost > 0 {
@@ -277,7 +279,7 @@ async fn verify_billing_consistency(state: &AppState) {
                     COALESCE(SUM(CASE WHEN engine = 'metal' THEN \
                         quantity * $1 / $2 + COALESCE(duration_ms, 0) * $3 / $4 \
                     ELSE 0 END), 0) + \
-                    COALESCE(SUM(CASE WHEN engine = 'liquid' THEN quantity / $5 ELSE 0 END), 0) \
+                    COALESCE(SUM(CASE WHEN engine = 'liquid' THEN quantity * $5 / $6 ELSE 0 END), 0) \
                     AS total_cost \
              FROM usage_events \
              WHERE billed = true \
@@ -287,7 +289,7 @@ async fn verify_billing_consistency(state: &AppState) {
          FROM ledger_debits ld \
          JOIN billed_costs bc ON bc.workspace_id = ld.workspace_id \
          WHERE ld.total_debited != bc.total_cost",
-        &[&METAL_INV_NUM, &METAL_INV_DEN, &METAL_COMPUTE_NUM, &METAL_COMPUTE_DEN, &LIQUID_INV_DIVISOR],
+        &[&METAL_INV_NUM, &METAL_INV_DEN, &METAL_COMPUTE_NUM, &METAL_COMPUTE_DEN, &LIQUID_INV_NUM, &LIQUID_INV_DEN],
     ).await;
 
     match result {
@@ -851,7 +853,7 @@ pub async fn get_usage(
     ).await.map_err(|e| ApiError::internal(format!("liquid usage: {e}")))?;
 
     let liquid_invocations: i64 = liquid.get("total_invocations");
-    let liquid_cost = liquid_invocations / LIQUID_INV_DIVISOR;
+    let liquid_cost = liquid_invocations * LIQUID_INV_NUM / LIQUID_INV_DEN;
 
     Ok(Json(contract::UsageResponse {
         period_start,

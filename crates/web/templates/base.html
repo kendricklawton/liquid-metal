@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Liquid Metal{% endblock %} | Wasm &amp; Firecracker compute</title>
-  <meta name="description" content="{% block description %}Ship a static binary or .wasm module. We boot a Firecracker microVM or run a Wasmtime executor in milliseconds.{% endblock %}">
+  <title>{% block title %}Liquid Metal{% endblock %} | Serverless for compiled languages</title>
+  <meta name="description" content="{% block description %}Deploy Rust and Go binaries as serverless functions. Sub-millisecond Wasm cold starts. 15ms Firecracker snapshot restore. No Dockerfiles.{% endblock %}">
 
   {# Theme: respect system preference, allow manual override #}
   <script>
@@ -29,18 +29,22 @@
           },
           colors: {
             zw: {
-              bg:      '#191919',
-              surface: '#262626',
-              border:  '#4a4546',
-              muted:   '#8e8e8e',
-              fg:      '#bbbbbb',
+              bg:      '#1b1e28',
+              surface: '#252a37',
+              border:  '#303340',
+              muted:   '#767c9d',
+              fg:      '#a6accd',
+              accent:  '#5de4c7',
+              green:   '#5de4c7',
             },
             zwl: {
-              bg:      '#eeeeee',
-              surface: '#d7d7d7',
-              border:  '#aca9a9',
-              muted:   '#5c5c5c',
-              fg:      '#353535',
+              bg:      '#fbfbfb',
+              surface: '#f0f0f0',
+              border:  '#e0e0e0',
+              muted:   '#888888',
+              fg:      '#303030',
+              accent:  '#5de4c7',
+              green:   '#5de4c7',
             }
           }
         }
@@ -56,7 +60,7 @@
 <body class="bg-zwl-bg dark:bg-zw-bg text-zwl-fg dark:text-zw-fg min-h-screen flex flex-col antialiased font-mono">
 
   {% block nav %}
-  <nav class="border-b border-zwl-border dark:border-zw-border bg-zwl-surface dark:bg-zw-bg sticky top-0 z-50">
+  <nav class="border-b border-zwl-border dark:border-zw-border bg-zwl-bg dark:bg-zw-bg sticky top-0 z-50">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex items-center justify-between h-12">
         <div class="flex items-center gap-8">
