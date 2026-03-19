@@ -16,6 +16,10 @@ pub struct VmConfig<'a> {
     pub rootfs_path: &'a str,
     pub tap_name: &'a str,
     pub guest_mac: &'a str,
+    /// Guest IP address (e.g. "172.16.0.2") — passed to kernel via ip= boot arg.
+    pub guest_ip: &'a str,
+    /// Gateway IP (br0 bridge address) — passed to kernel via ip= boot arg.
+    pub gateway: &'a str,
 }
 
 /// Configure and start a Firecracker microVM.
@@ -25,9 +29,15 @@ pub async fn start_vm(cfg: &VmConfig<'_>) -> Result<()> {
         "mem_size_mib": cfg.memory_mb
     }).to_string()).await.context("PUT /machine-config")?;
 
+    // ip= kernel parameter: ip=client::gateway:netmask::interface:autoconf
+    // The kernel configures eth0 before init runs — no userspace DHCP needed.
+    let boot_args = format!(
+        "console=ttyS0 reboot=k panic=1 pci=off ip={}::{}:{}::eth0:off init=/sbin/init",
+        cfg.guest_ip, cfg.gateway, common::networking::NETMASK,
+    );
     put(cfg.sock_path, "/boot-source", &serde_json::json!({
         "kernel_image_path": cfg.kernel_path,
-        "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+        "boot_args": boot_args
     }).to_string()).await.context("PUT /boot-source")?;
 
     put(cfg.sock_path, "/drives/rootfs", &serde_json::json!({
@@ -49,6 +59,60 @@ pub async fn start_vm(cfg: &VmConfig<'_>) -> Result<()> {
 
     tracing::info!(sock = cfg.sock_path, "microVM started");
     Ok(())
+}
+
+/// Pause a running VM. Required before creating a snapshot —
+/// Firecracker rejects CreateSnapshot on a running instance.
+pub async fn pause_vm(sock_path: &str) -> Result<()> {
+    put(sock_path, "/actions",
+        &serde_json::json!({"action_type": "Pause"}).to_string())
+        .await
+        .context("PUT /actions Pause")
+}
+
+/// Create a full snapshot of a paused VM.
+///
+/// Writes two files:
+/// - `snapshot_path` — VM state (CPU registers, device state, ~small)
+/// - `mem_path`      — Guest memory dump (size = memory_mb)
+///
+/// The VM must be paused first via `pause_vm`.
+pub async fn create_snapshot(sock_path: &str, snapshot_path: &str, mem_path: &str) -> Result<()> {
+    put(sock_path, "/snapshot/create", &serde_json::json!({
+        "snapshot_type": "Full",
+        "snapshot_path": snapshot_path,
+        "mem_file_path": mem_path
+    }).to_string())
+    .await
+    .context("PUT /snapshot/create")
+}
+
+/// Resume a paused VM. Used after snapshot creation if the VM should
+/// continue running, or after snapshot restore in Phase 2.
+pub async fn resume_vm(sock_path: &str) -> Result<()> {
+    put(sock_path, "/actions",
+        &serde_json::json!({"action_type": "Resume"}).to_string())
+        .await
+        .context("PUT /actions Resume")
+}
+
+/// Load a snapshot into a freshly spawned Firecracker process.
+///
+/// The Firecracker process must be running (API socket open) but have no
+/// VM configured — the snapshot replaces everything. `resume_vm: true`
+/// starts the VM immediately after loading.
+pub async fn load_snapshot(sock_path: &str, vmstate_path: &str, mem_path: &str) -> Result<()> {
+    put(sock_path, "/snapshot/load", &serde_json::json!({
+        "snapshot_path": vmstate_path,
+        "mem_backend": {
+            "backend_type": "File",
+            "backend_path": mem_path
+        },
+        "enable_diff_snapshots": false,
+        "resume_vm": true
+    }).to_string())
+    .await
+    .context("PUT /snapshot/load")
 }
 
 async fn put(sock_path: &str, path: &str, body: &str) -> Result<()> {

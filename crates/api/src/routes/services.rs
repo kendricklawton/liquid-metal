@@ -20,7 +20,7 @@ pub async fn list_services(
 
     let rows = db
         .query(
-            "SELECT s.id, s.name, s.slug, s.engine, s.status, s.run_mode, s.upstream_addr, s.failure_reason, s.created_at::text \
+            "SELECT s.id, s.name, s.slug, s.engine, s.status, s.upstream_addr, s.failure_reason, s.created_at::text \
              FROM services s \
              JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
@@ -41,7 +41,6 @@ pub async fn list_services(
             slug: row.get("slug"),
             engine: row.get("engine"),
             status: row.get("status"),
-            run_mode: row.get("run_mode"),
             upstream_addr: row.get("upstream_addr"),
             failure_reason: row.get("failure_reason"),
             created_at: row.get("created_at"),

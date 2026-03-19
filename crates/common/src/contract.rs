@@ -105,8 +105,6 @@ pub struct ServiceResponse {
     pub engine: String,
     pub status: String,
     #[serde(default)]
-    pub run_mode: Option<String>,
-    #[serde(default)]
     pub upstream_addr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
@@ -141,9 +139,8 @@ pub struct UploadUrlResponse {
 
 /// POST /deployments request body.
 ///
-/// `vcpu` and `memory_mb` are platform-managed — derived from the workspace
-/// tier at deploy time. Customers only specify `port` (the port their binary
-/// listens on). Resource allocation is an internal concern, not a user knob.
+/// The platform manages all resource allocation (vCPU, memory). Customers
+/// only specify `port` for Metal services (the port their binary listens on).
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct DeployRequest {
     pub name: String,
@@ -200,22 +197,6 @@ pub struct SetEnvVarsRequest {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct UnsetEnvVarsRequest {
     pub keys: Vec<String>,
-}
-
-// ── Scale ───────────────────────────────────────────────────────────────────
-
-/// POST /services/:id/scale request body.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct ScaleRequest {
-    pub mode: String,
-}
-
-/// POST /services/:id/scale response.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct ScaleResponse {
-    pub id: String,
-    pub slug: String,
-    pub run_mode: String,
 }
 
 // ── Domains ─────────────────────────────────────────────────────────────────
@@ -332,10 +313,7 @@ pub struct PlanInfo {
     pub price_cents: i32,
     pub credit_cents: i32,
     pub max_services: i32,
-    pub max_vcpu: i32,
-    pub max_memory_mb: i32,
-    pub allows_always_on: bool,
-    pub max_wasm_invocations: i64,
+    pub free_invocations: i64,
 }
 
 /// GET /billing/usage response.
@@ -350,8 +328,8 @@ pub struct UsageResponse {
 /// Metal usage breakdown within the usage response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct MetalUsage {
-    pub vcpu_minutes: i64,
-    pub memory_mb_minutes: i64,
+    pub invocations: i64,
+    pub duration_ms: i64,
     pub cost_microcredits: i64,
 }
 

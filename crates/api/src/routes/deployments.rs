@@ -2,16 +2,20 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{Extension, Json, extract::{Path, State}, response::sse::{Event, KeepAlive, Sse}};
+use axum::{
+    Extension, Json,
+    extract::{Path, State},
+    response::sse::{Event, KeepAlive, Sse},
+};
 use futures::StreamExt as _;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
+use super::{ApiError, Caller, db_conn, require_scope};
 use crate::AppState;
 use crate::envelope;
 use common::contract;
 use common::events::{DeployProgressEvent, DeployStep, SUBJECT_DEPLOY_PROGRESS};
-use super::{ApiError, Caller, db_conn, require_scope};
 
 #[utoipa::path(post, path = "/deployments/upload-url", request_body = contract::UploadUrlRequest, responses(
     (status = 200, description = "Presigned S3 upload URL", body = contract::UploadUrlResponse),
@@ -24,10 +28,15 @@ pub async fn get_upload_url(
     require_scope(&caller, "write")?;
 
     if body.deploy_id.is_empty() || body.project_id.is_empty() {
-        return Err(ApiError::bad_request("missing_fields", "deploy_id and project_id are required"));
+        return Err(ApiError::bad_request(
+            "missing_fields",
+            "deploy_id and project_id are required",
+        ));
     }
 
-    let pid: Uuid = body.project_id.parse().map_err(|_| ApiError::bad_request("invalid_project_id", "project_id must be a valid UUID"))?;
+    let pid: Uuid = body.project_id.parse().map_err(|_| {
+        ApiError::bad_request("invalid_project_id", "project_id must be a valid UUID")
+    })?;
     let db = db_conn(&state.db).await?;
 
     let row = db
@@ -55,8 +64,13 @@ pub async fn get_upload_url(
 
     let (engine_prefix, artifact_name) = match body.engine.as_str() {
         "liquid" => ("wasm", "main.wasm"),
-        "metal"  => ("metal", "app"),
-        _        => return Err(ApiError::bad_request("invalid_engine", "engine must be 'metal' or 'liquid'")),
+        "metal" => ("metal", "app"),
+        _ => {
+            return Err(ApiError::bad_request(
+                "invalid_engine",
+                "engine must be 'metal' or 'liquid'",
+            ));
+        }
     };
 
     let artifact_key = format!(
@@ -101,16 +115,27 @@ pub async fn deploy_service(
     require_scope(&caller, "write")?;
 
     if body.name.is_empty() {
-        return Err(ApiError::bad_request("missing_name", "service name is required"));
+        return Err(ApiError::bad_request(
+            "missing_name",
+            "service name is required",
+        ));
     }
     if body.name.len() > 63 {
-        return Err(ApiError::bad_request("name_too_long", "service name must be 63 characters or fewer"));
+        return Err(ApiError::bad_request(
+            "name_too_long",
+            "service name must be 63 characters or fewer",
+        ));
     }
     if body.artifact_key.is_empty() {
-        return Err(ApiError::bad_request("missing_artifact_key", "artifact_key is required"));
+        return Err(ApiError::bad_request(
+            "missing_artifact_key",
+            "artifact_key is required",
+        ));
     }
 
-    let pid: Uuid = body.project_id.parse().map_err(|_| ApiError::bad_request("invalid_project_id", "project_id must be a valid UUID"))?;
+    let pid: Uuid = body.project_id.parse().map_err(|_| {
+        ApiError::bad_request("invalid_project_id", "project_id must be a valid UUID")
+    })?;
     let mut db = db_conn(&state.db).await?;
 
     let row = db
@@ -143,29 +168,41 @@ pub async fn deploy_service(
     let tier: String = tier_row.get("tier");
     let limits = crate::quota::limits_for(&tier);
 
-    let engine: common::Engine = body.engine.parse()
-        .map_err(|_| ApiError::bad_request("invalid_engine", "engine must be 'metal' or 'liquid'"))?;
+    let engine: common::Engine = body.engine.parse().map_err(|_| {
+        ApiError::bad_request("invalid_engine", "engine must be 'metal' or 'liquid'")
+    })?;
 
     let engine_spec = match engine {
         common::Engine::Metal => {
-            let vcpu      = limits.max_vcpu;
-            let memory_mb = limits.max_memory_mb;
-            let port      = body.port.unwrap_or(0) as u16;
+            // Platform-managed: 1 vCPU, 128 MB for all Metal VMs.
+            // Users don't pick resources — serverless model.
+            let port = body.port.unwrap_or(0) as u16;
             if port == 0 {
-                return Err(ApiError::bad_request("invalid_metal_spec", "metal deploys require port >= 1"));
+                return Err(ApiError::bad_request(
+                    "invalid_metal_spec",
+                    "metal deploys require port >= 1",
+                ));
             }
             common::EngineSpec::Metal(common::MetalSpec {
-                vcpu,
-                memory_mb,
+                vcpu: 1,
+                memory_mb: 128,
                 port,
-                artifact_key:    body.artifact_key.clone(),
-                artifact_sha256: if body.sha256.is_empty() { None } else { Some(body.sha256.clone()) },
-                quota:           state.default_quota.clone(),
+                artifact_key: body.artifact_key.clone(),
+                artifact_sha256: if body.sha256.is_empty() {
+                    None
+                } else {
+                    Some(body.sha256.clone())
+                },
+                quota: state.default_quota.clone(),
             })
         }
         common::Engine::Liquid => common::EngineSpec::Liquid(common::LiquidSpec {
-            artifact_key:    body.artifact_key.clone(),
-            artifact_sha256: if body.sha256.is_empty() { None } else { Some(body.sha256.clone()) },
+            artifact_key: body.artifact_key.clone(),
+            artifact_sha256: if body.sha256.is_empty() {
+                None
+            } else {
+                Some(body.sha256.clone())
+            },
         }),
     };
 
@@ -177,12 +214,22 @@ pub async fn deploy_service(
     let engine_str = engine.as_str();
 
     let service_id = Uuid::now_v7();
-    let slug = if body.slug.is_empty() { common::slugify(&body.name) } else { body.slug.clone() };
+    let slug = if body.slug.is_empty() {
+        common::slugify(&body.name)
+    } else {
+        body.slug.clone()
+    };
     if slug.is_empty() {
-        return Err(ApiError::bad_request("invalid_name", "service name must produce a non-empty slug (use ASCII alphanumeric characters)"));
+        return Err(ApiError::bad_request(
+            "invalid_name",
+            "service name must produce a non-empty slug (use ASCII alphanumeric characters)",
+        ));
     }
     if !slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err(ApiError::bad_request("invalid_slug", "slug must contain only lowercase alphanumeric characters and dashes"));
+        return Err(ApiError::bad_request(
+            "invalid_slug",
+            "slug must contain only lowercase alphanumeric characters and dashes",
+        ));
     }
 
     // ── Capacity & limit checks (short-lived advisory lock) ────────────────
@@ -199,7 +246,8 @@ pub async fn deploy_service(
             .await
             .map_err(|_| ApiError::internal("failed to start check transaction"))?;
 
-        check_txn.execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
+        check_txn
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
             .await
             .map_err(|_| ApiError::internal("failed to acquire workspace lock"))?;
 
@@ -213,7 +261,13 @@ pub async fn deploy_service(
             .get(0);
 
         if svc_count >= limits.max_services {
-            return Err(ApiError::unprocessable("service_limit_exceeded", format!("workspace has {} services, {} tier limit is {}", svc_count, tier, limits.max_services)));
+            return Err(ApiError::unprocessable(
+                "service_limit_exceeded",
+                format!(
+                    "workspace has {} services, {} tier limit is {}",
+                    svc_count, tier, limits.max_services
+                ),
+            ));
         }
 
         let active_slug: bool = check_txn
@@ -236,7 +290,10 @@ pub async fn deploy_service(
             ));
         }
 
-        check_txn.commit().await.map_err(|_| ApiError::internal("check transaction commit failed"))?;
+        check_txn
+            .commit()
+            .await
+            .map_err(|_| ApiError::internal("check transaction commit failed"))?;
     }
 
     // ── Deploy transaction ──────────────────────────────────────────────────
@@ -252,7 +309,9 @@ pub async fn deploy_service(
          WHERE workspace_id = $1 AND slug = $2 \
            AND deleted_at IS NULL AND status IN ('stopped', 'failed')",
         &[&wid, &slug],
-    ).await.map_err(|_| ApiError::internal("old service cleanup failed"))?;
+    )
+    .await
+    .map_err(|_| ApiError::internal("old service cleanup failed"))?;
 
     txn.execute(
         "INSERT INTO services \
@@ -260,24 +319,33 @@ pub async fn deploy_service(
           artifact_key, commit_sha, vcpu, memory_mb, port) \
          VALUES ($1, $2, $3, $4, $5, $6, 'provisioning', $7, $8, $9, $10, $11)",
         &[
-            &service_id, &pid, &wid,
-            &body.name, &slug, &engine_str,
-            &body.artifact_key, &body.sha256,
-            &vcpu_i, &memory_mb_i, &port_i,
+            &service_id,
+            &pid,
+            &wid,
+            &body.name,
+            &slug,
+            &engine_str,
+            &body.artifact_key,
+            &body.sha256,
+            &vcpu_i,
+            &memory_mb_i,
+            &port_i,
         ],
-    ).await.map_err(|e| {
+    )
+    .await
+    .map_err(|e| {
         tracing::error!(error = %e, "service insert failed");
         ApiError::internal("failed to create service")
     })?;
 
     let event = common::ProvisionEvent {
-        tenant_id:  wid.to_string(),
+        tenant_id: wid.to_string(),
         service_id: service_id.to_string(),
-        app_name:   body.name.clone(),
-        slug:       slug.clone(),
-        engine:     engine.clone(),
-        spec:       engine_spec,
-        env_vars:   Default::default(),
+        app_name: body.name.clone(),
+        slug: slug.clone(),
+        engine: engine.clone(),
+        spec: engine_spec,
+        env_vars: Default::default(),
     };
 
     let payload = serde_json::to_value(&event).map_err(|e| {
@@ -287,7 +355,9 @@ pub async fn deploy_service(
     txn.execute(
         "INSERT INTO outbox (subject, payload) VALUES ($1, $2)",
         &[&common::events::SUBJECT_PROVISION, &payload],
-    ).await.map_err(|e| {
+    )
+    .await
+    .map_err(|e| {
         tracing::error!(error = %e, "outbox insert failed");
         ApiError::internal("failed to queue provision event")
     })?;
@@ -304,7 +374,9 @@ pub async fn deploy_service(
         ApiError::internal("failed to record deployment")
     })?;
 
-    txn.commit().await.map_err(|_| ApiError::internal("failed to commit deploy transaction"))?;
+    txn.commit()
+        .await
+        .map_err(|_| ApiError::internal("failed to commit deploy transaction"))?;
 
     tracing::info!(
         target: "audit",
@@ -339,7 +411,9 @@ pub async fn list_deploys(
     Path(id): Path<String>,
 ) -> Result<Json<contract::DeploymentHistoryResponse>, ApiError> {
     require_scope(&caller, "read")?;
-    let service_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_service_id", "service ID must be a valid UUID"))?;
+    let service_id: Uuid = id.parse().map_err(|_| {
+        ApiError::bad_request("invalid_service_id", "service ID must be a valid UUID")
+    })?;
     let db = db_conn(&state.db).await?;
 
     db.query_opt(
@@ -348,7 +422,8 @@ pub async fn list_deploys(
          JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
          WHERE s.id = $1 AND s.deleted_at IS NULL",
         &[&service_id, &caller.user_id],
-    ).await
+    )
+    .await
     .map_err(|_| ApiError::internal("service lookup failed"))?
     .ok_or_else(|| ApiError::not_found("service not found"))?;
 
@@ -367,13 +442,13 @@ pub async fn list_deploys(
     let deploys: Vec<contract::DeploymentHistoryEntry> = rows
         .iter()
         .map(|r| contract::DeploymentHistoryEntry {
-            id:           r.get("id"),
-            slug:         r.get("slug"),
-            engine:       r.get("engine"),
+            id: r.get("id"),
+            slug: r.get("slug"),
+            engine: r.get("engine"),
             artifact_key: r.get("artifact_key"),
-            commit_sha:   r.get("commit_sha"),
-            created_at:   r.get("created_at"),
-            is_active:    r.get("is_active"),
+            commit_sha: r.get("commit_sha"),
+            created_at: r.get("created_at"),
+            is_active: r.get("is_active"),
         })
         .collect();
 
@@ -394,7 +469,9 @@ pub async fn rollback_service(
     Json(body): Json<contract::RollbackRequest>,
 ) -> Result<Json<contract::DeployResponse>, ApiError> {
     require_scope(&caller, "write")?;
-    let service_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_service_id", "service ID must be a valid UUID"))?;
+    let service_id: Uuid = id.parse().map_err(|_| {
+        ApiError::bad_request("invalid_service_id", "service ID must be a valid UUID")
+    })?;
     let mut db = db_conn(&state.db).await?;
 
     let svc = db
@@ -416,7 +493,9 @@ pub async fn rollback_service(
     let wid: Uuid = svc.get("workspace_id");
 
     let target = if let Some(deploy_id) = &body.deploy_id {
-        let did: Uuid = deploy_id.parse().map_err(|_| ApiError::bad_request("invalid_deploy_id", "deploy ID must be a valid UUID"))?;
+        let did: Uuid = deploy_id.parse().map_err(|_| {
+            ApiError::bad_request("invalid_deploy_id", "deploy ID must be a valid UUID")
+        })?;
         db.query_opt(
             "SELECT artifact_key, commit_sha, engine, port FROM deployments WHERE id = $1 AND service_id = $2",
             &[&did, &service_id],
@@ -432,7 +511,12 @@ pub async fn rollback_service(
         )
         .await
         .map_err(|_| ApiError::internal("deploy lookup failed"))?
-        .ok_or_else(|| ApiError::unprocessable("no_previous_deploy", "no previous deployment to rollback to".to_string()))?
+        .ok_or_else(|| {
+            ApiError::unprocessable(
+                "no_previous_deploy",
+                "no previous deployment to rollback to".to_string(),
+            )
+        })?
     };
 
     let artifact_key: String = target.get("artifact_key");
@@ -440,18 +524,20 @@ pub async fn rollback_service(
     let target_engine: String = target.get("engine");
     let port: Option<i32> = target.get("port");
 
-    let engine: common::Engine = target_engine.parse().map_err(|e: String| ApiError::internal(&e))?;
+    let engine: common::Engine = target_engine
+        .parse()
+        .map_err(|e: String| ApiError::internal(&e))?;
     let engine_spec = match &engine {
         common::Engine::Metal => common::EngineSpec::Metal(common::MetalSpec {
-            vcpu:            svc.get::<_, i32>("vcpu") as u32,
-            memory_mb:       svc.get::<_, i32>("memory_mb") as u32,
-            port:            port.unwrap_or(8080) as u16,
-            artifact_key:    artifact_key.clone(),
+            vcpu: svc.get::<_, i32>("vcpu") as u32,
+            memory_mb: svc.get::<_, i32>("memory_mb") as u32,
+            port: port.unwrap_or(8080) as u16,
+            artifact_key: artifact_key.clone(),
             artifact_sha256: None,
-            quota:           state.default_quota.clone(),
+            quota: state.default_quota.clone(),
         }),
         common::Engine::Liquid => common::EngineSpec::Liquid(common::LiquidSpec {
-            artifact_key:    artifact_key.clone(),
+            artifact_key: artifact_key.clone(),
             artifact_sha256: None,
         }),
     };
@@ -467,24 +553,22 @@ pub async fn rollback_service(
     let ciphertext: Option<Vec<u8>> = env_row.get("env_ciphertext");
     let nonce: Option<Vec<u8>> = env_row.get("env_nonce");
     let env_vars = match (ciphertext, nonce) {
-        (Some(ct), Some(n)) => {
-            envelope::decrypt_env_vars(&db, &*state.kms, wid, &ct, &n)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, %service_id, "env var decryption failed");
-                    ApiError::internal("failed to decrypt environment variables")
-                })?
-        }
+        (Some(ct), Some(n)) => envelope::decrypt_env_vars(&db, &*state.kms, wid, &ct, &n)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, %service_id, "env var decryption failed");
+                ApiError::internal("failed to decrypt environment variables")
+            })?,
         _ => std::collections::HashMap::new(),
     };
 
     let event = common::ProvisionEvent {
-        tenant_id:  wid.to_string(),
+        tenant_id: wid.to_string(),
         service_id: service_id.to_string(),
-        app_name:   name.clone(),
-        slug:       slug.clone(),
-        engine:     engine,
-        spec:       engine_spec,
+        app_name: name.clone(),
+        slug: slug.clone(),
+        engine: engine,
+        spec: engine_spec,
         env_vars,
     };
 
@@ -504,12 +588,16 @@ pub async fn rollback_service(
         "UPDATE services SET status = 'provisioning', upstream_addr = NULL, \
          artifact_key = $2, commit_sha = $3 WHERE id = $1",
         &[&service_id, &artifact_key, &commit_sha],
-    ).await.map_err(|_| ApiError::internal("failed to update service for rollback"))?;
+    )
+    .await
+    .map_err(|_| ApiError::internal("failed to update service for rollback"))?;
 
     txn.execute(
         "INSERT INTO outbox (subject, payload) VALUES ($1, $2)",
         &[&common::events::SUBJECT_PROVISION, &payload],
-    ).await.map_err(|e| {
+    )
+    .await
+    .map_err(|e| {
         tracing::error!(error = %e, "outbox insert failed");
         ApiError::internal("failed to queue rollback event")
     })?;
@@ -523,7 +611,9 @@ pub async fn rollback_service(
         ApiError::internal("failed to record deployment")
     })?;
 
-    txn.commit().await.map_err(|_| ApiError::internal("failed to commit rollback transaction"))?;
+    txn.commit()
+        .await
+        .map_err(|_| ApiError::internal("failed to commit rollback transaction"))?;
 
     tracing::info!(
         target: "audit",
@@ -588,11 +678,21 @@ pub async fn stream_deploy(
     tokio::spawn(async move {
         // Already in a terminal state — send one event and close.
         if current_status == "running" {
-            tx.send(Ok(progress_sse_event(DeployStep::Running, "Service is already running"))).await.ok();
+            tx.send(Ok(progress_sse_event(
+                DeployStep::Running,
+                "Service is already running",
+            )))
+            .await
+            .ok();
             return;
         }
         if current_status == "failed" {
-            tx.send(Ok(progress_sse_event(DeployStep::Failed, "Service failed to provision"))).await.ok();
+            tx.send(Ok(progress_sse_event(
+                DeployStep::Failed,
+                "Service failed to provision",
+            )))
+            .await
+            .ok();
             return;
         }
 
@@ -607,7 +707,7 @@ pub async fn stream_deploy(
                     let Ok(ev) = serde_json::from_slice::<DeployProgressEvent>(&msg.payload) else {
                         continue;
                     };
-                    let terminal = matches!(ev.step, DeployStep::Running | DeployStep::Failed);
+                    let terminal = matches!(ev.step, DeployStep::Running | DeployStep::Ready | DeployStep::Failed);
                     tx.send(Ok(progress_sse_event(ev.step, &ev.message))).await.ok();
                     if terminal { break; }
                 }
@@ -624,14 +724,20 @@ pub async fn stream_deploy(
 
 fn progress_sse_event(step: DeployStep, message: &str) -> Event {
     let step_str = match step {
-        DeployStep::Queued      => "queued",
+        DeployStep::Queued => "queued",
         DeployStep::Downloading => "downloading",
-        DeployStep::Verifying   => "verifying",
-        DeployStep::Booting     => "booting",
-        DeployStep::Starting    => "starting",
+        DeployStep::Verifying => "verifying",
+        DeployStep::Building => "building",
+        DeployStep::Booting => "booting",
+        DeployStep::Starting => "starting",
         DeployStep::HealthCheck => "health_check",
-        DeployStep::Running     => "running",
-        DeployStep::Failed      => "failed",
+        DeployStep::Snapshotting => "snapshotting",
+        DeployStep::Ready => "ready",
+        DeployStep::Running => "running",
+        DeployStep::Failed => "failed",
     };
-    Event::default().data(format!(r#"{{"step":"{step_str}","message":{}}}"#, serde_json::json!(message)))
+    Event::default().data(format!(
+        r#"{{"step":"{step_str}","message":{}}}"#,
+        serde_json::json!(message)
+    ))
 }

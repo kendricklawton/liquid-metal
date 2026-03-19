@@ -297,6 +297,8 @@ If NATS is temporarily unreachable the publish returns an error — the row is n
 
 ### Deploy
 
+Both engines are **serverless**. The user deploys a binary; the platform handles everything else. No vCPU/RAM configuration, no Dockerfiles, no infrastructure decisions.
+
 ```
 flux deploy
   1. read liquid-metal.toml → engine, name, build command
@@ -306,23 +308,26 @@ flux deploy
   3. sha256(artifact) + generate deploy_id (uuid_v7)
   4. GET /upload-url → API returns pre-signed Object Storage PUT URL
   5. PUT artifact → Object Storage directly (no API in the upload path)
-  6. POST /services { slug, engine, spec, artifact_key, deploy_id, sha256 }
+  6. POST /services { slug, engine, artifact_key, deploy_id, sha256 }
        → API: advisory lock + INSERT services + INSERT outbox
        → COMMIT (atomic)
        → outbox poller publishes ProvisionEvent → NATS JetStream
 
-NATS → daemon
-  ├─ metal:  download base-alpine.ext4 from Object Storage (cached locally)
+NATS → daemon (provision)
+  ├─ metal:  download base-alpine.ext4 template (cached locally)
   │           download user binary from Object Storage
-  │           inject binary into rootfs template
-  │           attach eBPF TC filter (ebpf.rs)
-  │           spawn Firecracker → boot VM
-  │           UPDATE services SET upstream_addr, node_id, status='running'
-  │           publish RouteUpdatedEvent → NATS (platform.route_updated)
+  │           inject binary + env vars into rootfs (loop mount)
+  │           create TAP, attach to bridge, apply eBPF TC filter
+  │           spawn Firecracker → boot VM → startup probe (HTTP GET /)
+  │           CREATE SNAPSHOT → save VM memory + vmstate to disk
+  │           upload snapshot to Object Storage (keyed by deploy_id)
+  │           halt VM (snapshot is the deliverable, not a running VM)
+  │           UPDATE services SET status='ready', snapshot_key, node_id
+  │           publish RouteUpdatedEvent → NATS
   └─ liquid: download main.wasm from Object Storage
-             load into Wasmtime gateway (fuel: 1B ops/invocation → OutOfFuel trap on runaway)
-             UPDATE services SET upstream_addr, status='running'
-             publish RouteUpdatedEvent → NATS (platform.route_updated)
+             compile + cache Wasmtime module
+             UPDATE services SET status='ready', upstream_addr
+             publish RouteUpdatedEvent → NATS
 
 On failure:
   → classify error as Transient or Permanent (FailureKind)
@@ -331,47 +336,71 @@ On failure:
   → Transient (S3 timeout, DB blip): NAK with backoff (15s, 30s) — max 3 attempts
 ```
 
-`RouteUpdatedEvent` is consumed by every Pingora instance's background subscriber, which writes `slug → upstream_addr` into the in-process route cache. The proxy cache is warm within milliseconds of provisioning completing.
+After a Metal deploy, the service is `ready` but no VM is running. The snapshot contains the fully booted application at the point where the startup probe passed. The VM is restored from snapshot on the first request.
 
 ### Live Request
 
 ```
 Browser → Pingora
   └─ slug lookup
-      ├─ cache hit  → in-memory HashMap<slug, upstream_addr> (no DB round-trip)
-      └─ cache miss → Managed Postgres → upstream_addr → populate cache
-      ├─ metal:  proxy → TAP → Firecracker VM
-      └─ liquid: dispatch → in-process Wasmtime executor → response
+      ├─ cache hit (warm)  → upstream_addr known → proxy to backend
+      └─ cache miss / cold → DB lookup
+          ├─ service is warm (upstream_addr set) → proxy directly
+          └─ service is cold (upstream_addr NULL, snapshot exists)
+              → publish WakeEvent { service_id, slug } → NATS
+              → hold the request (queue with timeout)
+              → daemon restores VM from snapshot (~10-15ms)
+              → daemon publishes RouteUpdatedEvent with upstream_addr
+              → proxy receives event, forwards held request
+              → response returned to user
+
+  ├─ metal:  proxy → TAP → Firecracker VM (restored from snapshot)
+  └─ liquid: dispatch → in-process Wasmtime executor → response
 ```
 
-The route cache (`crates/proxy/src/cache.rs`) is an `Arc<RwLock<HashMap<String, String>>>` kept warm by a background NATS subscriber. It listens on two subjects simultaneously using `tokio::select!`:
+The route cache (`crates/proxy/src/cache.rs`) is an `Arc<RwLock<HashMap<String, String>>>` kept warm by a background NATS subscriber:
 
 | Subject                  | Event                                   | Cache action         |
 |--------------------------|----------------------------------------|----------------------|
-| `platform.route_updated` | Service provisioned / upstream_addr set | `insert(slug, addr)` |
-| `platform.route_removed` | Service stopped or deleted              | `remove(slug)`       |
+| `platform.route_updated` | Service woke / provisioned              | `insert(slug, addr)` |
+| `platform.route_removed` | Service stopped, deleted, or went idle  | `remove(slug)`       |
 
-On a cold start or cache miss it falls back to a DB lookup and then populates the cache. There is no Redis — the cache is in-process, kilobytes of data, and DB is always the authoritative source on restart. Memory is bounded by the number of **currently running** services.
+No Redis — in-process, kilobytes of data, DB is authoritative on restart.
+
+### Scale to Zero
+
+```
+Idle checker (daemon, every 60s):
+  → query services WHERE last_request_at < NOW() - idle_timeout
+  → for each idle service:
+      metal:  halt VM (SIGTERM → SIGKILL), cleanup TAP + eBPF + cgroup
+              UPDATE services SET status='ready', upstream_addr=NULL
+              publish RouteRemovedEvent → proxy evicts from cache
+              (snapshot stays in S3 — next request restores it)
+      liquid: unload Wasm module from memory
+              UPDATE services SET status='ready', upstream_addr=NULL
+              publish RouteRemovedEvent
+```
+
+The service stays in `ready` state — deployable but not consuming resources. The next request triggers a wake via snapshot restore (Metal) or module reload (Liquid).
 
 ### Stop / Delete
 
 ```
 flux stop <id>  (or flux delete <id>)
-  → DELETE/POST /services/:id/stop
+  → POST /services/:id/stop
   → API: UPDATE services SET status='stopped', upstream_addr=NULL
-  → API publishes DeprovisionEvent { service_id, slug, engine } → NATS JetStream
+  → API publishes DeprovisionEvent → NATS JetStream
 
 NATS → daemon
-  → halt VM (SIGTERM → SIGKILL) or unload Wasm module
-  → detach eBPF TC filter + remove TAP device (Metal only)
-  → cleanup cgroup + artifact cache (Metal only)
-  → publish RouteRemovedEvent { slug } → NATS (platform.route_removed)
-
-platform.route_removed → every Pingora instance
-  → cache.remove(slug)   ← slug evicted immediately
+  → halt VM or unload Wasm module (if currently warm)
+  → cleanup TAP + eBPF + cgroup (Metal only)
+  → delete snapshot from Object Storage (Metal only)
+  → delete artifact cache
+  → publish RouteRemovedEvent → proxy evicts from cache
 ```
 
-After eviction, any request for that slug gets a cache miss → DB lookup → `upstream_addr` is NULL → falls back to `api_upstream`. The service is gone.
+After stop, the service has no snapshot and no running instance. `flux deploy` is required to create a new one.
 
 ---
 

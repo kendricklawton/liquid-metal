@@ -25,7 +25,6 @@ pub use domains::*;
 pub use env::*;
 pub use logs::*;
 pub use projects::*;
-pub use scale::*;
 pub use services::*;
 pub use users::*;
 pub use workspaces::*;

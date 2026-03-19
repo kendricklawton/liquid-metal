@@ -22,7 +22,6 @@ use tokio::sync::Mutex;
 pub struct VmHandle {
     pub tap_name:    String,
     pub fc_pid:      u32,
-    pub cpu_core:    u32,
     /// UUID string used as the jailer chroot directory name.
     pub vm_id:       String,
     /// Whether this VM was launched under the jailer (needs chroot cleanup).
@@ -59,10 +58,9 @@ pub fn new_liquid_registry() -> LiquidRegistry {
 pub async fn metal(
     service_id: &str,
     handle: VmHandle,
-    physical_cores: u32,
     artifact_dir: &str,
 ) {
-    use crate::{cgroup, cpu, ebpf, netlink, tc};
+    use crate::{cgroup, ebpf, netlink, tc};
     use std::time::Duration;
 
     tracing::info!(service_id, tap = &handle.tap_name, fc_pid = handle.fc_pid, "deprovisioning metal VM");
@@ -90,16 +88,13 @@ pub async fn metal(
     // 5. Cleanup cgroup
     cgroup::cleanup(service_id).await;
 
-    // 6. Re-online SMT sibling if it was offlined
-    cpu::online_smt_sibling(handle.cpu_core, physical_cores).await;
-
-    // 7. Delete local artifact cache
+    // 6. Delete local artifact cache
     let artifact_path = format!("{}/{}", artifact_dir, service_id);
     if let Err(e) = tokio::fs::remove_dir_all(&artifact_path).await {
         tracing::debug!(service_id, error = %e, "artifact cache cleanup (may not exist)");
     }
 
-    // 8. Remove jailer chroot directory (no-op if jailer was not used)
+    // 7. Remove jailer chroot directory (no-op if jailer was not used)
     if handle.use_jailer {
         crate::jailer::cleanup(&handle.chroot_base, &handle.vm_id).await;
     }
@@ -112,7 +107,6 @@ pub async fn metal(
 pub async fn metal(
     service_id: &str,
     _handle: VmHandle,
-    _physical_cores: u32,
     _artifact_dir: &str,
 ) {
     tracing::info!(service_id, "deprovision metal (no-op on non-Linux)");

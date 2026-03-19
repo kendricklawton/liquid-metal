@@ -68,6 +68,10 @@ pub const SUBJECT_SERVICE_CRASHED: &str = "platform.service_crashed";
 /// Consumed by the daemon to suspend all running services for that workspace.
 pub const SUBJECT_SUSPEND: &str = "platform.suspend";
 
+/// JetStream durable. Published by the proxy when a request arrives for a cold service
+/// (status='ready', snapshot exists). Consumed by the daemon to restore the VM from snapshot.
+pub const SUBJECT_WAKE: &str = "platform.wake";
+
 /// Fire-and-forget. Published by the daemon at each provisioning step.
 /// Subject: `platform.deploy_progress.{service_id}`.
 /// Consumed by the API's SSE endpoint to stream live deploy status to `flux deploy`.
@@ -80,11 +84,14 @@ pub enum DeployStep {
     Queued,
     Downloading,
     Verifying,
+    Building,     // Metal: assembling rootfs (template + binary + env vars)
     Booting,      // Metal: Firecracker VM starting
     Starting,     // Liquid: Wasmtime shim starting
-    HealthCheck,  // TCP startup probe
-    Running,      // Terminal — success
-    Failed,       // Terminal — failure
+    HealthCheck,   // TCP startup probe
+    Snapshotting,  // Metal: creating VM snapshot after successful probe
+    Ready,         // Metal terminal — snapshot stored, VM halted, awaiting first request
+    Running,       // Liquid terminal — module loaded and serving
+    Failed,        // Terminal — failure
 }
 
 /// Published by the daemon at each step of provisioning.
@@ -112,6 +119,15 @@ pub struct TrafficPulseEvent {
     pub slug: String,
 }
 
+/// Published by the proxy when a request arrives for a cold Metal service.
+/// Consumed by the daemon to restore the VM from its snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WakeEvent {
+    pub service_id:   String,
+    pub slug:         String,
+    pub snapshot_key: String,
+}
+
 /// Published by the API when a service is stopped or deleted.
 /// Consumed by the daemon to halt the VM and release resources.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,14 +137,16 @@ pub struct DeprovisionEvent {
     pub engine:     Engine,
 }
 
-/// Published by the daemon every 60s per running Metal service.
+/// Published by the proxy every 60s with accumulated Metal usage per service.
+/// Metal is billed on two dimensions: invocations + compute time (GB-seconds).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetalUsageEvent {
     pub workspace_id:  String,
     pub service_id:    String,
-    pub duration_secs: u64,
-    pub vcpu:          u32,
-    pub memory_mb:     u32,
+    pub invocations:   u64,
+    /// Accumulated compute duration in milliseconds across all invocations.
+    /// Converted to GB-sec by the billing aggregator: `duration_ms / 1000 * 0.128 GB`.
+    pub duration_ms:   u64,
 }
 
 /// Published by the daemon every 60s with accumulated Wasm invocations.

@@ -119,7 +119,7 @@ pub async fn run(config: &Config, output: OutputMode, skip_elf_check: bool) -> R
             let step = ev["step"].as_str().unwrap_or("...");
             let msg  = ev["message"].as_str().unwrap_or("");
             match step {
-                "running" => {
+                "running" | "ready" => {
                     let elapsed = started.elapsed().as_secs();
                     println!("  ✓ {}", msg);
                     println!("  → https://{}.{}", deploy_resp.service.slug, domain);

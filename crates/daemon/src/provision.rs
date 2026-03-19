@@ -14,7 +14,7 @@ use uuid::Uuid;
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 #[cfg(target_os = "linux")]
-use crate::{cgroup, cpu, ebpf, firecracker, jailer, netlink, tc};
+use crate::{cgroup, ebpf, firecracker, jailer, netlink, rootfs, tc};
 
 /// How long to wait for the guest binary to bind its port after VM boot.
 /// Override via `STARTUP_PROBE_TIMEOUT_SECS` (default 30s).
@@ -52,7 +52,6 @@ pub struct ProvisionConfig {
     pub bridge:         String,   // BRIDGE,          default br0
     // cgroup v2 IO limits
     pub rootfs_dev:     String,   // ROOTFS_DEVICE,   default 8:0
-    pub physical_cores: u32,      // PHYSICAL_CORES,  default 4
     // Jailer (production isolation)
     pub use_jailer:     bool,     // USE_JAILER,      default false
     pub jailer_bin:     String,   // JAILER_BIN,      default /usr/local/bin/jailer
@@ -62,12 +61,18 @@ pub struct ProvisionConfig {
     // Node identity + artifact cache
     pub node_id:        String,   // NODE_ID,         default node-a
     pub artifact_dir:   String,   // ARTIFACT_DIR,    default /var/lib/liquid-metal/artifacts
+    // Base Alpine template for rootfs assembly
+    pub base_image_key:    String,          // BASE_IMAGE_KEY,    default templates/base-alpine-v1.ext4
+    pub base_image_sha256: Option<String>,  // BASE_IMAGE_SHA256, optional integrity check
 }
 
 pub struct ProvisionedService {
     pub id:            Uuid,
     pub engine:        Engine,
     pub upstream_addr: Option<String>,
+    /// S3 key prefix for snapshot files (Metal only, set after snapshot create).
+    /// Format: `snapshots/{service_id}/{deploy_id}/`
+    pub snapshot_key:  Option<String>,
 }
 
 /// Shared context passed into each provision task.
@@ -125,7 +130,7 @@ pub async fn init_tap_indices(pool: &deadpool_postgres::Pool, node_id: &str) {
 
 /// Allocate the smallest available TAP index. Returns the index and marks it
 /// as in-use. The caller must call `release_tap_index` on deprovision.
-async fn allocate_tap_index() -> anyhow::Result<u32> {
+pub async fn allocate_tap_index() -> anyhow::Result<u32> {
     let mut set = tap_indices().lock().await;
     // Find the first gap: 0, 1, 2, ... that isn't in the set.
     let mut idx = 0u32;
@@ -404,22 +409,46 @@ pub async fn provision(ctx: &ProvisionCtx, event: &ProvisionEvent) -> Result<Pro
         .parse()
         .context("invalid service_id UUID in event")?;
 
-    // Write status='running' to the DB. If this fails, the VM/Wasm is running
-    // but untracked — clean up all resources before propagating the error.
-    let db_result = async {
-        let db = ctx.pool.get().await.context("db pool")?;
-        db.execute(
-            "UPDATE services SET upstream_addr = $1, status = 'running', node_id = $2 WHERE id = $3",
-            &[&svc.upstream_addr, &ctx.cfg.node_id, &svc_id],
-        )
-        .await
-        .context("writing upstream_addr + node_id to services")
-    }
-    .await;
+    // Write final status to the DB.
+    //
+    // Metal (serverless): status='ready', upstream_addr=NULL, snapshot_key set.
+    //   The VM was halted after snapshotting — no resources consumed. The next
+    //   request triggers a snapshot restore (Phase 2).
+    //
+    // Liquid: status='running', upstream_addr set, snapshot_key=NULL.
+    //   The Wasm module is loaded in-process and actively serving.
+    let (status, db_result) = if svc.snapshot_key.is_some() {
+        // Metal serverless — service is ready but not running
+        let result = async {
+            let db = ctx.pool.get().await.context("db pool")?;
+            db.execute(
+                "UPDATE services SET status = 'ready', node_id = $1, snapshot_key = $2 WHERE id = $3",
+                &[&ctx.cfg.node_id, &svc.snapshot_key, &svc_id],
+            )
+            .await
+            .context("writing snapshot_key + node_id to services")
+        }
+        .await;
+        ("ready", result)
+    } else {
+        // Liquid (or future always-on) — service is running
+        let result = async {
+            let db = ctx.pool.get().await.context("db pool")?;
+            db.execute(
+                "UPDATE services SET upstream_addr = $1, status = 'running', node_id = $2 WHERE id = $3",
+                &[&svc.upstream_addr, &ctx.cfg.node_id, &svc_id],
+            )
+            .await
+            .context("writing upstream_addr + node_id to services")
+        }
+        .await;
+        ("running", result)
+    };
 
     if let Err(e) = db_result {
         tracing::error!(
             service_id = event.service_id,
+            %status,
             error = %e,
             "DB write failed after provision — tearing down to avoid resource leak"
         );
@@ -428,7 +457,8 @@ pub async fn provision(ctx: &ProvisionCtx, event: &ProvisionEvent) -> Result<Pro
     }
 
     // Publish RouteUpdated so Pingora caches update without a DB round-trip.
-    // Fire-and-forget — a failure here is logged but does not fail the provision.
+    // Only published for running services (Liquid) — Metal services have no
+    // upstream_addr until woken from snapshot (Phase 2).
     if let Some(ref addr) = svc.upstream_addr {
         if !event.slug.is_empty() {
             let payload = serde_json::to_vec(&RouteUpdatedEvent {
@@ -511,7 +541,6 @@ pub async fn rollback_provision(ctx: &ProvisionCtx, event: &ProvisionEvent, err:
                 deprovision::metal(
                     &event.service_id,
                     handle,
-                    ctx.cfg.physical_cores,
                     &ctx.cfg.artifact_dir,
                 )
                 .await;
@@ -536,7 +565,6 @@ pub async fn rollback_provision(ctx: &ProvisionCtx, event: &ProvisionEvent, err:
 pub async fn cleanup_stale_provisioning(
     pool: &deadpool_postgres::Pool,
     node_id: &str,
-    physical_cores: u32,
     artifact_dir: &str,
 ) {
     let db = match pool.get().await {
@@ -597,14 +625,13 @@ pub async fn cleanup_stale_provisioning(
         let handle = deprovision::VmHandle {
             tap_name:    tap_name.clone(),
             fc_pid:      fc_pid.unwrap_or(0) as u32,
-            cpu_core:    0, // unknown — online_smt_sibling will be a no-op for core 0
             vm_id:       vm_id.unwrap_or_default(),
             use_jailer:  false,
             chroot_base: String::new(),
         };
 
         release_tap_index(&tap_name).await;
-        deprovision::metal(&service_id, handle, physical_cores, artifact_dir).await;
+        deprovision::metal(&service_id, handle, artifact_dir).await;
 
         tracing::info!(service_id, "stale provisioning service cleaned up");
     }
@@ -622,34 +649,6 @@ async fn provision_metal(
         .context("TAP index pool exhausted")?;
     let upstream_addr = format!("{}:{}", ip, spec.port);
 
-    // Download rootfs artifact from Object Storage
-    let local_rootfs = PathBuf::from(&ctx.cfg.artifact_dir)
-        .join(&event.service_id)
-        .join("rootfs.ext4");
-
-    publish_progress(&ctx.nats, &event.service_id, DeployStep::Downloading, "Downloading rootfs from object storage").await;
-    storage::download(&ctx.s3, &ctx.bucket, &spec.artifact_key, &local_rootfs)
-        .await
-        .context("downloading rootfs from Object Storage")?;
-
-    if let Some(expected) = &spec.artifact_sha256 {
-        publish_progress(&ctx.nats, &event.service_id, DeployStep::Verifying, "Verifying artifact integrity").await;
-        verify::artifact(local_rootfs.to_str().unwrap_or(""), expected)
-            .await
-            .context("rootfs integrity check")?;
-    } else {
-        tracing::warn!(service_id = %event.service_id, "no artifact_sha256 provided — skipping rootfs integrity check");
-    }
-
-    // Defense-in-depth: catch glibc-linked binaries that slipped past the CLI.
-    // Reads only the first 64 KiB — harmless for ext4 images (won't match ELF magic).
-    if let Err(e) = common::artifact::check_elf_compat_file(
-        local_rootfs.to_str().unwrap_or(""),
-    ).await {
-        tracing::error!(service_id = %event.service_id, error = %e, "ELF compatibility check failed");
-        anyhow::bail!("artifact rejected: {e}");
-    }
-
     tracing::info!(
         vm_id = %vm_id, tap, app = event.app_name,
         %upstream_addr, use_jailer = ctx.cfg.use_jailer,
@@ -658,9 +657,23 @@ async fn provision_metal(
 
     #[cfg(target_os = "linux")]
     {
+        // Ensure the base Alpine template is cached locally (downloads from S3 on first call).
+        let template_path = rootfs::ensure_template(
+            &ctx.s3, &ctx.bucket, &ctx.cfg.base_image_key,
+            &ctx.cfg.artifact_dir, ctx.cfg.base_image_sha256.as_deref(),
+        ).await.context("ensuring base Alpine template")?;
+
+        // Build a bootable rootfs: copy template, download + inject user binary + env vars.
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Downloading, "Downloading user binary from object storage").await;
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Building, "Assembling rootfs image").await;
+        let local_rootfs = rootfs::build_rootfs(
+            &ctx.s3, &ctx.bucket, &spec.artifact_key, spec.artifact_sha256.as_deref(),
+            &event.service_id, &ctx.cfg.artifact_dir, &event.env_vars,
+            &template_path, spec.port, &ctx.cfg.node_id,
+        ).await.context("building rootfs")?;
+
         let rootfs_path = local_rootfs.to_string_lossy().into_owned();
         let mac         = format!("AA:FC:00:00:{:02X}:{:02X}", tap_idx >> 8, tap_idx & 0xFF);
-        let cpu_core = cpu::next_core(ctx.cfg.physical_cores);
         let serial_log  = PathBuf::from(&ctx.cfg.artifact_dir)
             .join(&event.service_id)
             .join("serial.log");
@@ -673,7 +686,7 @@ async fn provision_metal(
         // Everything after TAP creation must clean up the TAP device + index
         // on failure, otherwise they leak until the next daemon restart.
         let result = provision_metal_after_tap(
-            ctx, event, spec, &tap, &rootfs_path, &mac, cpu_core, vm_id, &serial_log_str,
+            ctx, event, spec, &tap, &rootfs_path, &mac, vm_id, &serial_log_str, &ip,
         ).await;
 
         if let Err(ref e) = result {
@@ -685,7 +698,7 @@ async fn provision_metal(
             return Err(result.unwrap_err());
         }
 
-        let (fc_pid, cpu_core) = result.unwrap();
+        let fc_pid = result.unwrap();
 
         // Startup readiness probe: HTTP GET / to confirm the binary is listening
         // and speaking HTTP. Without this, a binary that boots and immediately
@@ -707,52 +720,86 @@ async fn provision_metal(
                 deprovision::VmHandle {
                     tap_name:    tap.clone(),
                     fc_pid,
-                    cpu_core,
                     vm_id:       vm_id.to_string(),
                     use_jailer:  ctx.cfg.use_jailer,
                     chroot_base: ctx.cfg.chroot_base.clone(),
                 },
-                ctx.cfg.physical_cores,
                 &ctx.cfg.artifact_dir,
             ).await;
             return Err(e);
         }
 
-        // Register in-memory for deprovision
-        ctx.registry.lock().await.insert(
-            event.service_id.clone(),
+        // ── Snapshot the running VM ──────────────────────────────────────
+        // The startup probe passed — the app is healthy. Pause the VM,
+        // snapshot its memory + state, upload to S3, then halt it.
+        // The snapshot becomes the deployable artifact. The next request
+        // restores from snapshot (~10-15ms) instead of cold booting (~200ms).
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Snapshotting, "Creating VM snapshot").await;
+
+        let snap_dir = PathBuf::from(&ctx.cfg.artifact_dir)
+            .join(&event.service_id)
+            .join("snapshot");
+        tokio::fs::create_dir_all(&snap_dir).await.context("creating snapshot dir")?;
+
+        let vmstate_path = snap_dir.join("vmstate.snap");
+        let mem_path     = snap_dir.join("memory.snap");
+        let vmstate_str  = vmstate_path.to_string_lossy().into_owned();
+        let mem_str      = mem_path.to_string_lossy().into_owned();
+
+        // Pause → snapshot → kill. The VM does not resume after this.
+        let sock = if ctx.cfg.use_jailer {
+            format!("{}/firecracker/{}/root/run/api.sock", ctx.cfg.chroot_base, vm_id)
+        } else {
+            format!("{}/{}.sock", ctx.cfg.sock_dir, vm_id)
+        };
+
+        firecracker::pause_vm(&sock).await.context("pausing VM for snapshot")?;
+        firecracker::create_snapshot(&sock, &vmstate_str, &mem_str)
+            .await
+            .context("creating VM snapshot")?;
+
+        tracing::info!(service_id = event.service_id, "VM snapshot created");
+
+        // Upload snapshot files to S3
+        let snap_key_prefix = format!("snapshots/{}/{}", event.service_id, vm_id);
+        let vmstate_key = format!("{}/vmstate.snap", snap_key_prefix);
+        let mem_key     = format!("{}/memory.snap", snap_key_prefix);
+
+        storage::upload(&ctx.s3, &ctx.bucket, &vmstate_key, &vmstate_path)
+            .await
+            .context("uploading vmstate snapshot to S3")?;
+        storage::upload(&ctx.s3, &ctx.bucket, &mem_key, &mem_path)
+            .await
+            .context("uploading memory snapshot to S3")?;
+
+        tracing::info!(service_id = event.service_id, snap_key = snap_key_prefix, "snapshot uploaded to S3");
+
+        // Kill the VM — the snapshot is the artifact now.
+        unsafe { libc::kill(fc_pid as libc::pid_t, libc::SIGKILL); }
+
+        // Clean up all kernel resources (TAP, eBPF, cgroup, jailer chroot).
+        // The VM is dead; we only need the snapshot for future restores.
+        release_tap_index(&tap).await;
+        deprovision::metal(
+            &event.service_id,
             deprovision::VmHandle {
                 tap_name:    tap.clone(),
                 fc_pid,
-                cpu_core,
                 vm_id:       vm_id.to_string(),
                 use_jailer:  ctx.cfg.use_jailer,
                 chroot_base: ctx.cfg.chroot_base.clone(),
             },
-        );
+            &ctx.cfg.artifact_dir,
+        ).await;
 
-        // Persist VM metadata to DB for post-restart deprovision recovery.
-        if let Ok(db) = ctx.pool.get().await {
-            let svc_id: Uuid = event.service_id.parse()
-                .context("service_id is not a valid UUID")?;
-            let fc_pid_i32 = fc_pid as i32;
-            let cpu_core_i32 = cpu_core as i32;
-            let vm_id_str = vm_id.to_string();
-            let _ = db
-                .execute(
-                    "UPDATE services SET tap_name = $1, fc_pid = $2, cpu_core = $3, vm_id = $4 WHERE id = $5",
-                    &[&tap, &fc_pid_i32, &cpu_core_i32, &vm_id_str, &svc_id],
-                )
-                .await;
-        }
-
-        tracing::info!(vm_id = %vm_id, %upstream_addr, fc_pid, cpu_core, "metal VM ready");
-        publish_progress(&ctx.nats, &event.service_id, DeployStep::Running, "VM is live").await;
+        tracing::info!(vm_id = %vm_id, snap_key = snap_key_prefix, "metal deploy complete — snapshot ready");
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Ready, "Snapshot ready — service will wake on first request").await;
 
         return Ok(ProvisionedService {
             id: vm_id,
             engine: Engine::Metal,
-            upstream_addr: Some(upstream_addr),
+            upstream_addr: None,  // No VM running — wakes from snapshot on first request
+            snapshot_key: Some(snap_key_prefix),
         });
     }
 
@@ -761,12 +808,13 @@ async fn provision_metal(
     Ok(ProvisionedService {
         id: vm_id,
         engine: Engine::Metal,
-        upstream_addr: Some(upstream_addr),
+        upstream_addr: None,
+        snapshot_key: None,
     })
 }
 
 /// Inner helper for Metal provisioning steps that occur after TAP creation.
-/// Returns `(fc_pid, cpu_core)` on success. Separated so `provision_metal`
+/// Returns `fc_pid` on success. Separated so `provision_metal`
 /// can clean up the TAP device + index if any step here fails.
 #[cfg(target_os = "linux")]
 async fn provision_metal_after_tap(
@@ -776,10 +824,10 @@ async fn provision_metal_after_tap(
     tap: &str,
     rootfs_path: &str,
     mac: &str,
-    cpu_core: u32,
     vm_id: Uuid,
     serial_log: &str,
-) -> Result<(u32, u32)> {
+    guest_ip: &str,
+) -> Result<u32> {
     netlink::attach_to_bridge(tap, &ctx.cfg.bridge).await.context("attach TAP to bridge")?;
     tc::apply(tap, &spec.quota).await.context("tc bandwidth")?;
     ebpf::attach(tap, &event.service_id).context("eBPF TC attach")?;
@@ -804,19 +852,13 @@ async fn provision_metal_after_tap(
         (pid, sock, rootfs_path.to_string(), ctx.cfg.kernel_path.clone())
     };
 
-    let cg_path = format!("/sys/fs/cgroup/liquid-metal/{}", event.service_id);
-
     cgroup::apply(&event.service_id, fc_pid, &ctx.cfg.rootfs_dev, &spec.quota, spec.memory_mb)
         .await
         .context("cgroup limits")?;
 
-    cpu::pin_cgroup(&cg_path, cpu_core)
-        .await
-        .context("cpuset pin")?;
-
-    cpu::offline_smt_sibling(cpu_core, ctx.cfg.physical_cores)
-        .await
-        .context("offline SMT sibling")?;
+    // No CPU pinning — the Linux CFS scheduler shares cores across all VMs.
+    // This allows overselling: 20 VMs can timeshare 6 cores because most are
+    // idle most of the time. Performance degrades gracefully under contention.
 
     firecracker::start_vm(&firecracker::VmConfig {
         sock_path:   &sock_path,
@@ -826,11 +868,13 @@ async fn provision_metal_after_tap(
         rootfs_path: &rootfs_guest,
         tap_name:    tap,
         guest_mac:   mac,
+        guest_ip,
+        gateway:     common::networking::GATEWAY,
     })
     .await
     .context("start VM")?;
 
-    Ok((fc_pid, cpu_core))
+    Ok(fc_pid)
 }
 
 async fn provision_liquid(
@@ -894,7 +938,7 @@ async fn provision_liquid(
     tracing::info!(service_id = %id, %upstream_addr, "liquid wasm ready");
     publish_progress(&ctx.nats, &event.service_id, DeployStep::Running, "Wasm module is live").await;
 
-    Ok(ProvisionedService { id, engine: Engine::Liquid, upstream_addr: Some(upstream_addr) })
+    Ok(ProvisionedService { id, engine: Engine::Liquid, upstream_addr: Some(upstream_addr), snapshot_key: None })
 }
 
 /// HTTP startup probe: poll upstream_addr with `GET /` until any HTTP response is received
@@ -976,7 +1020,7 @@ async fn read_tail(path: &str, n: usize) -> String {
 }
 
 #[cfg(target_os = "linux")]
-async fn spawn_firecracker_direct(fc_bin: &str, vm_id: &str, sock_path: &str, serial_log: &str) -> Result<u32> {
+pub async fn spawn_firecracker_direct(fc_bin: &str, vm_id: &str, sock_path: &str, serial_log: &str) -> Result<u32> {
     let sock_dir = sock_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("/run/firecracker");
     tokio::fs::create_dir_all(sock_dir).await.context("mkdir sock dir")?;
 

@@ -34,22 +34,24 @@ use crate::AppState;
 use crate::routes::{ApiError, db_conn};
 
 // ── Cost constants (micro-credits) ──────────────────────────────────────────
-// $0.10/vCPU-hr = 100,000 micro-credits/vCPU-hr = 1,667 micro-credits/vCPU-min
-const METAL_VCPU_PER_MIN: i64 = 1_667;
-// $0.01/GB-hr = 10,000 micro-credits/GB-hr. Per MB-min: 10,000 / 1024 / 60 ≈ 0.163
-// We store as fixed-point: (memory_mb * 163) / 1000 per minute
-const METAL_MB_PER_MIN_NUM: i64 = 163;
-const METAL_MB_PER_MIN_DEN: i64 = 1000;
-// $0.000001/invocation = 1 micro-credit
-const LIQUID_PER_INVOCATION: i64 = 1;
-// 1 cent = 10,000 micro-credits ($1 = 100 cents = 1,000,000 micro-credits)
+// 1 micro-credit = $0.000001. $1 = 1,000,000 micro-credits.
+//
+// Metal (Firecracker):
+//   $0.60 / 1M invocations = 0.6 µcr/inv. Integer: invocations * 6 / 10.
+//   $0.10 / GB-sec compute. VM memory = 128 MB = 0.128 GB.
+//     Per ms of compute: 0.128 GB × (1/1000 sec) × $0.10 × 1M µcr/$ = 0.0128 µcr/ms.
+//     Integer: duration_ms * 128 / 10_000_000 (truncates, good enough at scale).
+const METAL_INV_NUM: i64 = 6;
+const METAL_INV_DEN: i64 = 10;
+const METAL_COMPUTE_NUM: i64 = 128;           // 0.128 GB × 1000
+const METAL_COMPUTE_DEN: i64 = 10_000_000;    // converts ms to µcr at $0.10/GB-sec
+//
+// Liquid (Wasm):
+//   $0.50 / 1M invocations = 0.5 µcr/inv. Integer: invocations / 2.
+const LIQUID_INV_DIVISOR: i64 = 2;
+//
+#[allow(dead_code)]
 const MICROCREDITS_PER_CENT: i64 = 10_000;
-
-/// Compute the cost in micro-credits for Metal compute usage.
-fn metal_cost(vcpu_mins: i64, mb_mins: i64) -> i64 {
-    vcpu_mins * METAL_VCPU_PER_MIN
-        + mb_mins * METAL_MB_PER_MIN_NUM / METAL_MB_PER_MIN_DEN
-}
 
 // ── Usage subscriber ────────────────────────────────────────────────────────
 
@@ -106,10 +108,11 @@ async fn insert_metal_usage(state: &AppState, ev: &MetalUsageEvent) -> Result<()
     let db = state.db.get().await.context("db pool")?;
     let wid: uuid::Uuid = ev.workspace_id.parse().context("invalid workspace_id")?;
     let sid: uuid::Uuid = ev.service_id.parse().context("invalid service_id")?;
+    // quantity = invocations, duration_ms stored in the duration_ms column.
     db.execute(
-        "INSERT INTO usage_events (workspace_id, service_id, engine, quantity, vcpu, memory_mb) \
-         VALUES ($1, $2, 'metal', $3, $4, $5)",
-        &[&wid, &sid, &(ev.duration_secs as i64), &(ev.vcpu as i32), &(ev.memory_mb as i32)],
+        "INSERT INTO usage_events (workspace_id, service_id, engine, quantity, duration_ms) \
+         VALUES ($1, $2, 'metal', $3, $4)",
+        &[&wid, &sid, &(ev.invocations as i64), &(ev.duration_ms as i64)],
     ).await.context("insert metal usage")?;
     Ok(())
 }
@@ -146,39 +149,46 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
     let txn = db.build_transaction().start().await?;
 
     // Aggregate unbilled Metal usage per workspace.
-    // The CTE locks rows with FOR UPDATE SKIP LOCKED so that concurrent
-    // API instances (each running their own billing_aggregator) don't
-    // double-bill the same usage events. The second instance skips rows
-    // already locked by the first, matching the outbox poller pattern.
+    // Metal is billed on two dimensions: invocations ($0.60/1M) + compute GB-sec ($0.10/GB-sec).
     let metal_rows = txn.query(
         "WITH locked AS ( \
-             SELECT id, workspace_id, quantity, vcpu, memory_mb \
+             SELECT id, workspace_id, quantity, COALESCE(duration_ms, 0) AS dur_ms \
              FROM usage_events \
              WHERE billed = false AND engine = 'metal' \
              FOR UPDATE SKIP LOCKED \
          ) \
-         SELECT workspace_id, \
-                SUM(((quantity + 59) / 60) * vcpu)    AS vcpu_minutes, \
-                SUM(((quantity + 59) / 60) * memory_mb) AS mb_minutes, \
-                array_agg(id) AS ids \
-         FROM locked \
-         GROUP BY workspace_id",
+         SELECT l.workspace_id, \
+                SUM(l.quantity) AS total_invocations, \
+                SUM(l.dur_ms)  AS total_duration_ms, \
+                array_agg(l.id) AS ids, \
+                COALESCE(w.tier, 'hobby') AS tier \
+         FROM locked l \
+         LEFT JOIN workspaces w ON w.id = l.workspace_id \
+         GROUP BY l.workspace_id, w.tier",
         &[],
     ).await.context("aggregate metal usage")?;
 
     for row in &metal_rows {
-        let wid:         uuid::Uuid    = row.get("workspace_id");
-        let vcpu_mins:   i64           = row.get("vcpu_minutes");
-        let mb_mins:     i64           = row.get("mb_minutes");
-        let ids:         Vec<uuid::Uuid> = row.get("ids");
+        let wid:          uuid::Uuid    = row.get("workspace_id");
+        let invocations:  i64           = row.get("total_invocations");
+        let duration_ms:  i64           = row.get("total_duration_ms");
+        let ids:          Vec<uuid::Uuid> = row.get("ids");
+        let tier:         String         = row.get("tier");
 
-        let cost = metal_cost(vcpu_mins, mb_mins);
+        let cost = if tier == "hobby" {
+            0
+        } else {
+            // Invocation cost: $0.60/1M = 0.6 µcr/inv
+            let inv_cost = invocations * METAL_INV_NUM / METAL_INV_DEN;
+            // Compute cost: $0.10/GB-sec, VM = 0.128 GB
+            let compute_cost = duration_ms * METAL_COMPUTE_NUM / METAL_COMPUTE_DEN;
+            inv_cost + compute_cost
+        };
 
         if cost > 0 {
             deduct_credits(&txn, &wid, cost, "usage_metal", "Metal compute").await?;
         }
 
-        // Mark as billed.
         txn.execute(
             "UPDATE usage_events SET billed = true WHERE id = ANY($1)",
             &[&ids],
@@ -213,7 +223,9 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
         let cost = if tier == "hobby" {
             0 // Hobby: free invocations, hard-capped at deploy time
         } else {
-            invocations * LIQUID_PER_INVOCATION
+            // $0.50/1M invocations = 0.5 micro-credits per invocation.
+            // Integer math: divide by 2 to get micro-credits.
+            invocations / LIQUID_INV_DIVISOR
         };
 
         if cost > 0 {
@@ -235,6 +247,9 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
 
     // Check for zero-balance workspaces and publish SuspendEvents.
     check_suspensions(state).await?;
+
+    // Check for Hobby workspaces that exceeded the free invocation cap.
+    check_hobby_cap(state).await?;
 
     Ok(())
 }
@@ -260,10 +275,9 @@ async fn verify_billing_consistency(state: &AppState) {
          billed_costs AS ( \
              SELECT workspace_id, \
                     COALESCE(SUM(CASE WHEN engine = 'metal' THEN \
-                        ((quantity + 59) / 60) * vcpu * $1 + \
-                        ((quantity + 59) / 60) * memory_mb * $2 / $3 \
+                        quantity * $1 / $2 + COALESCE(duration_ms, 0) * $3 / $4 \
                     ELSE 0 END), 0) + \
-                    COALESCE(SUM(CASE WHEN engine = 'liquid' THEN quantity * $4 ELSE 0 END), 0) \
+                    COALESCE(SUM(CASE WHEN engine = 'liquid' THEN quantity / $5 ELSE 0 END), 0) \
                     AS total_cost \
              FROM usage_events \
              WHERE billed = true \
@@ -273,7 +287,7 @@ async fn verify_billing_consistency(state: &AppState) {
          FROM ledger_debits ld \
          JOIN billed_costs bc ON bc.workspace_id = ld.workspace_id \
          WHERE ld.total_debited != bc.total_cost",
-        &[&METAL_VCPU_PER_MIN, &METAL_MB_PER_MIN_NUM, &METAL_MB_PER_MIN_DEN, &LIQUID_PER_INVOCATION],
+        &[&METAL_INV_NUM, &METAL_INV_DEN, &METAL_COMPUTE_NUM, &METAL_COMPUTE_DEN, &LIQUID_INV_DIVISOR],
     ).await;
 
     match result {
@@ -370,6 +384,53 @@ async fn check_suspensions(state: &AppState) -> Result<()> {
         let payload = serde_json::to_vec(&event)?;
         state.nats_client.publish(SUBJECT_SUSPEND, payload.into()).await?;
         tracing::warn!(target: "audit", workspace_id = %wid, action = "suspend", "billing: workspace suspended — balance depleted");
+    }
+
+    Ok(())
+}
+
+/// 1M free invocations per month for Hobby tier. After this, services are suspended.
+const HOBBY_FREE_INVOCATIONS: i64 = 1_000_000;
+
+/// Suspend Hobby workspaces that have exceeded the free invocation cap.
+/// Runs after each billing aggregation cycle.
+async fn check_hobby_cap(state: &AppState) -> Result<()> {
+    let db = state.db.get().await.context("db pool")?;
+
+    // Find Hobby workspaces with running services that have used > 1M invocations
+    // in the current billing period (across both engines).
+    let rows = db.query(
+        "SELECT DISTINCT w.id \
+         FROM workspaces w \
+         JOIN services s ON s.workspace_id = w.id \
+         WHERE COALESCE(w.tier, 'hobby') = 'hobby' \
+           AND s.status IN ('running', 'ready') \
+           AND s.deleted_at IS NULL \
+           AND w.deleted_at IS NULL \
+           AND ( \
+               SELECT COALESCE(SUM(quantity), 0) \
+               FROM usage_events \
+               WHERE workspace_id = w.id \
+                 AND created_at >= COALESCE(w.billing_period_start, w.created_at) \
+           ) >= $1",
+        &[&HOBBY_FREE_INVOCATIONS],
+    ).await.context("check hobby cap")?;
+
+    for row in &rows {
+        let wid: uuid::Uuid = row.get(0);
+        let event = SuspendEvent {
+            workspace_id: wid.to_string(),
+            reason: "hobby free tier limit reached (1M invocations)".to_string(),
+        };
+        let payload = serde_json::to_vec(&event)?;
+        state.nats_client.publish(SUBJECT_SUSPEND, payload.into()).await?;
+        tracing::warn!(
+            target: "audit",
+            workspace_id = %wid,
+            action = "suspend",
+            "billing: hobby workspace suspended — exceeded {}M free invocations",
+            HOBBY_FREE_INVOCATIONS / 1_000_000
+        );
     }
 
     Ok(())
@@ -718,8 +779,7 @@ pub async fn get_balance(
     let row = db.query_one(
         "SELECT w.tier, w.balance_credits, w.topup_credits, \
                 w.billing_period_start::text, w.billing_period_end::text, \
-                p.price_cents, p.credit_cents, p.max_services, \
-                p.max_vcpu, p.max_memory_mb, p.allows_always_on, p.max_wasm_invocations \
+                p.price_cents, p.credit_cents, p.max_services \
          FROM workspaces w \
          JOIN plans p ON p.id = w.tier \
          WHERE w.id = $1",
@@ -728,9 +788,11 @@ pub async fn get_balance(
 
     let balance_credits: i64 = row.get("balance_credits");
     let topup_credits: i64   = row.get("topup_credits");
+    let tier: String = row.get("tier");
+    let limits = crate::quota::limits_for(&tier);
 
     Ok(Json(contract::BalanceResponse {
-        tier: row.get("tier"),
+        tier,
         balance_credits,
         topup_credits,
         total_credits: balance_credits + topup_credits,
@@ -740,10 +802,7 @@ pub async fn get_balance(
             price_cents: row.get("price_cents"),
             credit_cents: row.get("credit_cents"),
             max_services: row.get("max_services"),
-            max_vcpu: row.get("max_vcpu"),
-            max_memory_mb: row.get("max_memory_mb"),
-            allows_always_on: row.get("allows_always_on"),
-            max_wasm_invocations: row.get("max_wasm_invocations"),
+            free_invocations: limits.free_invocations,
         },
     }))
 }
@@ -767,19 +826,20 @@ pub async fn get_usage(
         &[&wid],
     ).await.map_err(|e| ApiError::internal(format!("billing period: {e}")))?.get("period_start");
 
-    // Metal: total compute-minutes and cost for current billing period.
+    // Metal: total invocations + compute duration for current billing period.
     let metal = db.query_one(
-        "SELECT COALESCE(SUM(((quantity + 59) / 60) * vcpu), 0)    AS vcpu_minutes, \
-                COALESCE(SUM(((quantity + 59) / 60) * memory_mb), 0) AS mb_minutes \
+        "SELECT COALESCE(SUM(quantity), 0) AS total_invocations, \
+                COALESCE(SUM(COALESCE(duration_ms, 0)), 0) AS total_duration_ms \
          FROM usage_events \
          WHERE workspace_id = $1 AND engine = 'metal' \
            AND created_at >= $2::date",
         &[&wid, &period_start],
     ).await.map_err(|e| ApiError::internal(format!("metal usage: {e}")))?;
 
-    let vcpu_mins: i64 = metal.get("vcpu_minutes");
-    let mb_mins: i64   = metal.get("mb_minutes");
-    let metal_cost_credits = metal_cost(vcpu_mins, mb_mins);
+    let metal_invocations: i64 = metal.get("total_invocations");
+    let metal_duration_ms: i64 = metal.get("total_duration_ms");
+    let metal_cost_credits = metal_invocations * METAL_INV_NUM / METAL_INV_DEN
+        + metal_duration_ms * METAL_COMPUTE_NUM / METAL_COMPUTE_DEN;
 
     // Liquid: total invocations for current billing period.
     let liquid = db.query_one(
@@ -790,18 +850,18 @@ pub async fn get_usage(
         &[&wid, &period_start],
     ).await.map_err(|e| ApiError::internal(format!("liquid usage: {e}")))?;
 
-    let invocations: i64 = liquid.get("total_invocations");
-    let liquid_cost = invocations * LIQUID_PER_INVOCATION;
+    let liquid_invocations: i64 = liquid.get("total_invocations");
+    let liquid_cost = liquid_invocations / LIQUID_INV_DIVISOR;
 
     Ok(Json(contract::UsageResponse {
         period_start,
         metal: contract::MetalUsage {
-            vcpu_minutes: vcpu_mins,
-            memory_mb_minutes: mb_mins,
+            invocations: metal_invocations,
+            duration_ms: metal_duration_ms,
             cost_microcredits: metal_cost_credits,
         },
         liquid: contract::LiquidUsage {
-            invocations,
+            invocations: liquid_invocations,
             cost_microcredits: liquid_cost,
         },
         total_cost_microcredits: metal_cost_credits + liquid_cost,

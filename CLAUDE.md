@@ -7,12 +7,14 @@
 
 ## What This Is
 
-Liquid Metal is a PaaS. Not IaaS. Not "infrastructure building blocks." A PaaS.
+Liquid Metal is a **serverless platform for compiled static binaries**. Not IaaS. Not "infrastructure building blocks." Serverless.
 
-Users run `flux deploy` and get a URL. They don't pick instance types, configure load balancers, or write Dockerfiles. We decide how their code runs. We own the opinions. Two execution engines, one platform:
+Users run `flux deploy` and get a URL. They don't pick instance types, configure load balancers, or write Dockerfiles. We decide how their code runs. We own the opinions. Two serverless engines, one platform:
 
-- **Metal** — Firecracker microVMs. Real Linux, real isolation, real networking. KVM-backed, ext4 rootfs, TAP devices, ~100-250ms cold start. For anything that targets `x86_64-unknown-linux-musl`.
-- **Liquid** — Wasmtime/WASI. In-process, memory-only, sub-millisecond cold start. For `.wasm` modules. No disk, no TAP, no VM.
+- **Metal** — Firecracker microVMs restored from snapshot. Real Linux, real isolation, real networking. KVM-backed, ~15ms cold start via snapshot restore. For anything that targets `x86_64-unknown-linux-musl`. Billed per invocation + GB-sec compute.
+- **Liquid** — Wasmtime/WASI. In-process, memory-only, sub-millisecond cold start. For `.wasm` modules. No disk, no TAP, no VM. Billed per invocation.
+
+Both engines scale to zero. Both wake on first request. The user never thinks about VMs, cores, or infrastructure. They deploy a binary and get a URL.
 
 The distinction matters. Metal gives you a kernel. Liquid gives you a sandbox. Don't blur them.
 
@@ -127,14 +129,15 @@ task up              # Postgres + NATS + MinIO (S3 mock) via docker compose
 task dev:api         # API on :7070
 task dev:web         # Dashboard on :3000
 task dev:proxy       # Pingora on :8080
-task dev:daemon      # NATS consumer (NODE_ENGINE=liquid for Wasm-only on non-Linux)
+sudo -E task dev:daemon  # NATS consumer — requires root for KVM/TAP/cgroups
+                         # Wasm-only (no sudo): DAEMON_PID_FILE=/tmp/lm.pid NODE_ENGINE=liquid task dev:daemon
 ```
 
 ### Linux-Only (Bare Metal Dev)
 
 ```bash
-sudo task metal:setup      # br0 bridge, Firecracker binary, /run/firecracker
-sudo task security:setup   # jailer user, cgroup v2, eBPF policy
+sudo task metal:setup      # KVM check, br0 bridge, NAT, Firecracker + jailer, artifact dir
+sudo task security:setup   # jailer user, cgroup v2, IFB module
 ```
 
 ### CLI

@@ -123,6 +123,11 @@ fn main() -> Result<()> {
     let pulse_cache = Arc::new(RwLock::new(HashMap::new()));
     router::start_pulse_sweeper(pulse_cache.clone());
 
+    let metal_counters: router::MetalCounters = Arc::new(RwLock::new(HashMap::new()));
+    if let Some(ref nats) = nats_client {
+        router::start_metal_usage_flusher(metal_counters.clone(), nats.clone());
+    }
+
     let mut server = Server::new(None).context("creating Pingora server")?;
     server.bootstrap();
 
@@ -138,6 +143,8 @@ fn main() -> Result<()> {
     let tls_settings = TlsSettings::with_callbacks(Box::new(sni_selector))
         .map_err(|e| anyhow::anyhow!("TLS settings: {e}"))?;
 
+    let slug_semaphores: router::SlugSemaphores = Arc::new(RwLock::new(HashMap::new()));
+
     let r = MachineRouter {
         pool,
         api_upstream,
@@ -145,6 +152,8 @@ fn main() -> Result<()> {
         domain_cache,
         nats:  nats_client,
         pulse_cache,
+        metal_counters,
+        slug_semaphores,
     };
 
     let mut tls_svc = http_proxy_service(&server.configuration, r);

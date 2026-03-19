@@ -9,7 +9,7 @@
   <div class="mb-16">
     <p class="lm-label mb-3">// plans</p>
     <h1 class="text-4xl font-black tracking-tight mb-3">Simple, transparent pricing</h1>
-    <p class="text-zwl-muted dark:text-zw-muted max-w-lg">Start free. Scale when you're ready. No surprise bills.</p>
+    <p class="text-zwl-muted dark:text-zw-muted max-w-lg">Two serverless engines. One price per million requests. No infrastructure to manage.</p>
   </div>
 
   <div class="grid md:grid-cols-3 gap-4 mb-16">
@@ -27,9 +27,9 @@
       </a>
       <ul class="space-y-3 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
         <li class="flex items-center gap-2"><span>&#10003;</span> 2 services</li>
-        <li class="flex items-center gap-2"><span>&#10003;</span> Metal + Liquid engines</li>
-        <li class="flex items-center gap-2"><span>&#10007;</span> Always-on</li>
-        <li class="flex items-center gap-2"><span>&#10003;</span> 5-min idle timeout</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Liquid engine only</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> 1M free invocations/mo</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Scale to zero</li>
         <li class="flex items-center gap-2"><span>&#10003;</span> Community support</li>
       </ul>
     </div>
@@ -50,8 +50,9 @@
       <ul class="space-y-3 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
         <li class="flex items-center gap-2"><span>&#10003;</span> 10 services</li>
         <li class="flex items-center gap-2"><span>&#10003;</span> Metal + Liquid engines</li>
-        <li class="flex items-center gap-2"><span>&#10003;</span> Always-on available</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> 1M free invocations/mo</li>
         <li class="flex items-center gap-2"><span>&#10003;</span> $10 monthly credits</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Scale to zero</li>
         <li class="flex items-center gap-2"><span>&#10003;</span> Priority support</li>
       </ul>
     </div>
@@ -70,8 +71,9 @@
       <ul class="space-y-3 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
         <li class="flex items-center gap-2"><span>&#10003;</span> 25 services</li>
         <li class="flex items-center gap-2"><span>&#10003;</span> Metal + Liquid engines</li>
-        <li class="flex items-center gap-2"><span>&#10003;</span> Always-on available</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> 1M free invocations/mo</li>
         <li class="flex items-center gap-2"><span>&#10003;</span> $20 monthly credits</li>
+        <li class="flex items-center gap-2"><span>&#10003;</span> Scale to zero</li>
         <li class="flex items-center gap-2"><span>&#10003;</span> Dedicated support</li>
       </ul>
     </div>
@@ -81,21 +83,51 @@
   {# Usage pricing #}
   <div class="glass-card p-8 mb-16">
     <p class="lm-label mb-3">// pay-as-you-go</p>
-    <h2 class="text-xl font-black tracking-tight mb-2">Usage beyond credits</h2>
-    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8">Monthly credits cover most workloads. Overages billed at these rates.</p>
+    <h2 class="text-xl font-black tracking-tight mb-2">Usage pricing</h2>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8">Every tier includes 1M free invocations/mo across both engines. Pro and Team credits cover additional usage. Same rates on every plan.</p>
     <div class="grid sm:grid-cols-2 gap-8 text-xs font-mono">
       <div>
         <p class="text-[10px] uppercase tracking-widest font-bold mb-3">Metal &mdash; Firecracker</p>
+        <p class="text-[10px] text-zwl-muted dark:text-zw-muted mb-2">Pro + Team only &mdash; real Linux isolation</p>
         <ul class="space-y-1 text-zwl-muted dark:text-zw-muted">
-          <li>$0.10 <span>/ vCPU-hour</span></li>
-          <li>$0.01 <span>/ GB-hour</span></li>
+          <li>$0.60 <span>/ 1M invocations</span></li>
+          <li>$0.10 <span>/ GB-sec compute</span></li>
+          <li>&lt;15ms <span>cold start (snapshot restore)</span></li>
         </ul>
       </div>
       <div>
         <p class="text-[10px] uppercase tracking-widest font-bold mb-3">Liquid &mdash; WebAssembly</p>
+        <p class="text-[10px] text-zwl-muted dark:text-zw-muted mb-2">All tiers &mdash; sandboxed, instant</p>
         <ul class="space-y-1 text-zwl-muted dark:text-zw-muted">
-          <li>$0.000001 <span>/ invocation</span></li>
-          <li>1M invocations <span>= $1.00</span></li>
+          <li>$0.50 <span>/ 1M invocations</span></li>
+          <li>&lt;1ms <span>cold start</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  {# Why two engines #}
+  <div class="glass-card p-8 mb-16">
+    <p class="lm-label mb-3">// choose your engine</p>
+    <h2 class="text-xl font-black tracking-tight mb-2">Liquid or Metal?</h2>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8">Both are serverless. Both scale to zero. Pick the one that fits your workload.</p>
+    <div class="grid sm:grid-cols-2 gap-8 text-xs font-mono text-zwl-muted dark:text-zw-muted">
+      <div>
+        <p class="text-[10px] uppercase tracking-widest font-bold mb-3 text-zwl-fg dark:text-zw-fg">Liquid</p>
+        <ul class="space-y-1">
+          <li>Wasm sandbox &mdash; no kernel, no filesystem</li>
+          <li>Sub-millisecond cold starts</li>
+          <li>Best for: APIs, webhooks, data transforms</li>
+          <li>Target: <code>wasm32-wasip1</code></li>
+        </ul>
+      </div>
+      <div>
+        <p class="text-[10px] uppercase tracking-widest font-bold mb-3 text-zwl-fg dark:text-zw-fg">Metal</p>
+        <ul class="space-y-1">
+          <li>Real Linux VM &mdash; full kernel, filesystem, networking</li>
+          <li>&lt;15ms cold starts via snapshot restore</li>
+          <li>Best for: database drivers, FFI, syscalls, native deps</li>
+          <li>Target: <code>x86_64-unknown-linux-musl</code></li>
         </ul>
       </div>
     </div>

@@ -92,7 +92,7 @@ pub struct RateLimitConfig {
         routes::get_env_vars,
         routes::set_env_vars,
         routes::unset_env_vars,
-        routes::scale_service,
+        // routes::scale_service removed — all services are serverless
         routes::list_domains,
         routes::add_domain,
         routes::verify_domain,
@@ -132,8 +132,6 @@ pub struct RateLimitConfig {
         common::contract::EnvVarsResponse,
         common::contract::SetEnvVarsRequest,
         common::contract::UnsetEnvVarsRequest,
-        common::contract::ScaleRequest,
-        common::contract::ScaleResponse,
         common::contract::DomainResponse,
         common::contract::AddDomainRequest,
         common::contract::VerifyDomainResponse,
@@ -244,7 +242,7 @@ pub fn build_router(state: Arc<AppState>, rl: RateLimitConfig) -> Router {
         .route("/services/{id}/delete",    post(routes::delete_service))
         .route("/services/{id}/env",       get(routes::get_env_vars).post(routes::set_env_vars))
         .route("/services/{id}/env/unset", post(routes::unset_env_vars))
-        .route("/services/{id}/scale",     post(routes::scale_service))
+        // scale route removed — all services are serverless
         .route("/services/{id}/domains",   get(routes::list_domains).post(routes::add_domain))
         .route("/services/{id}/domains/{domain}/verify", post(routes::verify_domain))
         .route("/services/{id}/domains/{domain}/remove", post(routes::remove_domain))

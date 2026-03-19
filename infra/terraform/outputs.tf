@@ -1,8 +1,12 @@
 output "gateway_vip" { value = vultr_reserved_ip.gateway.subnet }
 output "nat_vps_ip" { value = vultr_instance.nat_vps.main_ip }
 output "gateway_b_ip" { value = vultr_instance.gateway_b.main_ip }
-output "node_metal_ip" { value = vultr_bare_metal.node_metal.main_ip }
-output "node_liquid_ip" { value = vultr_bare_metal.node_liquid.main_ip }
+output "node_metal_ip" {
+  value = var.enable_metal ? vultr_bare_metal.node_metal[0].main_ip : "not deployed"
+}
+output "node_liquid_ip" {
+  value = var.enable_liquid ? vultr_bare_metal.node_liquid[0].main_ip : "not deployed"
+}
 
 output "database_url" {
   value     = "postgresql://${vultr_database.postgres.user}:${vultr_database.postgres.password}@${vultr_database.postgres.host}:${vultr_database.postgres.port}/${vultr_database.postgres.dbname}?sslmode=require"
