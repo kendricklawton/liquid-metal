@@ -1,25 +1,47 @@
-/* Liquid Metal — IBM machinist theme
+/* Liquid Metal — Poimandres White / Darker
  *
- * Zenwritten palette. No glass. No glow. Flat + monochrome.
+ * Clean whites for light, deep blue-gray for dark.
+ * Terminal panels use Poimandres Darker bg in both modes.
  * ─────────────────────────────────────────────────────────────────────────── */
 
 :root {
-  /* Zenwritten Light */
-  --lm-bg:        #eeeeee;
-  --lm-surface:   #d7d7d7;
-  --lm-border:    #aca9a9;
-  --lm-muted:     #5c5c5c;
-  --lm-fg:        #353535;
+  /* Poimandres White */
+  --lm-bg:        #fbfbfb;
+  --lm-surface:   #f0f0f0;
+  --lm-border:    #e0e0e0;
+  --lm-muted:     #888888;
+  --lm-fg:        #303030;
+  --lm-accent:    #5de4c7;
+  --lm-green:     #5de4c7;
+  --lm-red:       #d0679d;
+  --lm-yellow:    #d0a344;
+  --lm-magenta:   #d0679d;
+  --lm-cyan:      #89ddff;
 }
 
 .dark {
-  /* Zenwritten Dark */
-  --lm-bg:        #191919;
-  --lm-surface:   #404040;
-  --lm-border:    #4a4546;
-  --lm-muted:     #8e8e8e;
-  --lm-fg:        #bbbbbb;
+  /* Poimandres Darker */
+  --lm-bg:        #1b1e28;
+  --lm-surface:   #252a37;
+  --lm-border:    #303340;
+  --lm-muted:     #767c9d;
+  --lm-fg:        #a6accd;
+  --lm-accent:    #5de4c7;
+  --lm-green:     #5de4c7;
+  --lm-red:       #d0679d;
+  --lm-yellow:    #fffac2;
+  --lm-magenta:   #fcc5e9;
+  --lm-cyan:      #89ddff;
 }
+
+/* ── Dark mode smooth transition ─────────────────────────────────────────── */
+body, nav, footer, .glass-card, .glass, .glass-btn {
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+
+/* ── Global monospace line-height fix ─────────────────────────────────────── */
+/* Monospace fonts have taller default line-height which misaligns flex items */
+.font-mono { line-height: 1.4; }
 
 /* ── Alpine.js ────────────────────────────────────────────────────────────── */
 [x-cloak] { display: none !important; }
@@ -34,7 +56,7 @@
   color: var(--lm-muted);
 }
 
-/* ── Panel (replaces glass) ───────────────────────────────────────────────── */
+/* ── Panel ────────────────────────────────────────────────────────────────── */
 .glass {
   background: var(--lm-surface);
   border: 1px solid var(--lm-border);
@@ -43,34 +65,60 @@
 .glass-card {
   background: var(--lm-surface);
   border: 1px solid var(--lm-border);
+  transition: transform 150ms ease, border-color 150ms ease,
+              background-color 200ms ease, color 200ms ease;
+}
+.glass-card:hover {
+  transform: scale(1.008);
+  border-color: var(--lm-muted);
 }
 
 .glass-card--featured {
   border-width: 2px;
-  border-color: var(--lm-fg);
+  border-color: var(--lm-accent);
+}
+.glass-card--featured:hover {
+  border-color: var(--lm-accent);
 }
 
-/* ── Accent borders (language tags on splash) ─────────────────────────────── */
-.border-accent-go      { border-color: var(--lm-border); }
-.border-accent-rust    { border-color: var(--lm-border); }
-.border-accent-zig     { border-color: var(--lm-border); }
-.border-accent-green   { border-color: var(--lm-border); }
+/* ── Language brand colors ────────────────────────────────────────────────── */
+.lang-go   { color: #00ADD8; border-color: #00ADD8; }
+.lang-rust { color: #CE422B; border-color: #CE422B; }
+.lang-zig  { color: #F7A41D; border-color: #F7A41D; }
+
+/* ── Accent borders ───────────────────────────────────────────────────────── */
+.border-accent-go      { border-color: #00ADD8; }
+.border-accent-rust    { border-color: #CE422B; }
+.border-accent-zig     { border-color: #F7A41D; }
+.border-accent-green   { border-color: var(--lm-green); }
 .border-accent-subtle  { border-color: var(--lm-border); }
-.border-accent-danger  { border-color: var(--lm-border); }
+.border-accent-danger  { border-color: var(--lm-muted); }
 .border-accent-whisper { border-color: var(--lm-border); }
 
 /* ── Button ───────────────────────────────────────────────────────────────── */
 .glass-btn {
   background: var(--lm-surface);
   border: 1px solid var(--lm-border);
-  transition: background 150ms;
+  transition: background 150ms, border-color 150ms;
 }
 .glass-btn:hover {
   background: var(--lm-border);
+  border-color: var(--lm-muted);
+}
+
+/* ── Primary button (accent) ──────────────────────────────────────────────── */
+.btn-accent {
+  background: var(--lm-accent);
+  color: var(--lm-bg);
+  transition: opacity 150ms;
+}
+.btn-accent:hover {
+  opacity: 0.85;
 }
 
 /* ── Status badges ────────────────────────────────────────────────────────── */
-.status-running      { color: var(--lm-fg); }
+.status-running      { color: var(--lm-green); }
+.status-ready        { color: var(--lm-accent); }
 .status-provisioning { color: var(--lm-muted); }
 .status-stopped      { color: var(--lm-muted); }
 .status-failed       { color: var(--lm-fg); }
@@ -82,4 +130,121 @@
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
+}
+
+/* ── Deploy log colors (always on Poimandres dark bg) ─────────────────────── */
+.deploy-line { color: #767c9d; }
+.deploy-check { color: #5de4c7; }
+.deploy-done  { color: #5de4c7; font-weight: 600; }
+.deploy-arrow { color: #91b4d5; }
+
+/* ── Staggered deploy log animation ──────────────────────────────────────── */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.deploy-line {
+  opacity: 0;
+  animation: fadeSlideIn 300ms ease forwards;
+}
+.deploy-line:nth-child(1)  { animation-delay: 0ms; }
+.deploy-line:nth-child(2)  { animation-delay: 200ms; }
+.deploy-line:nth-child(3)  { animation-delay: 400ms; }
+.deploy-line:nth-child(4)  { animation-delay: 600ms; }
+.deploy-line:nth-child(5)  { animation-delay: 800ms; }
+.deploy-line:nth-child(6)  { animation-delay: 1000ms; }
+.deploy-line:nth-child(7)  { animation-delay: 1200ms; }
+.deploy-line:nth-child(8)  { animation-delay: 1400ms; }
+.deploy-line:nth-child(9)  { animation-delay: 1600ms; }
+.deploy-line:nth-child(10) { animation-delay: 1800ms; }
+
+/* ── Syntax highlighting (Tokyo Day / Night tokens) ──────────────────────── */
+.tok-kw   { color: var(--lm-accent); }         /* keywords: func, fn, const, use */
+.tok-str  { color: var(--lm-green); }          /* strings */
+.tok-fn   { color: var(--lm-cyan); }           /* function names */
+.tok-type { color: var(--lm-magenta); }        /* types */
+.tok-cmt  { color: var(--lm-muted); font-style: italic; } /* comments */
+.tok-pkg  { color: var(--lm-yellow); }         /* package/module names */
+.tok-yellow { color: var(--lm-yellow); }       /* numbers, constants */
+
+/* ── Vertical timeline ───────────────────────────────────────────────────── */
+.timeline {
+  position: relative;
+  padding-left: 2rem;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 0.6rem;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 2px;
+  background: var(--lm-border);
+}
+.timeline-step {
+  position: relative;
+  padding-bottom: 1.5rem;
+}
+.timeline-step:last-child {
+  padding-bottom: 0;
+}
+.timeline-dot {
+  position: absolute;
+  left: -1.65rem;
+  top: 0.15rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 2px solid var(--lm-accent);
+  background: var(--lm-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--lm-accent);
+}
+
+/* ── Social proof badges ─────────────────────────────────────────────────── */
+.proof-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 10px;
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--lm-muted);
+  border: 1px solid var(--lm-border);
+  background: var(--lm-surface);
+  transition: border-color 150ms;
+}
+.proof-badge:hover {
+  border-color: var(--lm-accent);
+}
+
+/* ── Terminal / code panel ────────────────────────────────────────────────── */
+/* Poimandres Darker terminal in both light and dark modes */
+.terminal-panel {
+  background: #1b1e28 !important;
+  color: #a6accd !important;
+  border-color: #303340 !important;
+}
+.terminal-panel pre {
+  color: #a6accd;
+}
+/* Poimandres syntax tokens — always on dark bg */
+.terminal-panel .tok-kw   { color: #91b4d5; }   /* blue-gray keywords */
+.terminal-panel .tok-str  { color: #5de4c7; }   /* teal strings */
+.terminal-panel .tok-fn   { color: #e4f0fb; }   /* bright white functions */
+.terminal-panel .tok-type { color: #89ddff; }   /* cyan types */
+.terminal-panel .tok-pkg  { color: #fcc5e9; }   /* pink packages */
+.terminal-panel .tok-cmt  { color: #767c9d; font-style: italic; }
+.terminal-panel .tok-yellow { color: #fffac2; } /* pale yellow numbers */
+
+/* ── Hero gradient overlay ───────────────────────────────────────────────── */
+.hero-gradient {
+  background: radial-gradient(ellipse at center, transparent 0%, var(--lm-bg) 70%);
+  pointer-events: none;
 }

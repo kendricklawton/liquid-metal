@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}Liquid Metal{% endblock %}
-{% block description %}A home for Go, Rust, and Zig. Ship a compiled binary, get an endpoint. No containers, no YAML.{% endblock %}
+{% block description %}Serverless for compiled languages. Deploy Go, Rust, and Zig as functions. No containers, no YAML.{% endblock %}
 
 {% block content %}
 <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -10,22 +10,23 @@
   <div class="relative mt-12">
     <section class="relative flex flex-col items-center justify-center text-center" style="height:calc(100vh - 3rem);">
       <canvas id="metal-grid" class="absolute inset-0 w-full h-full" style="pointer-events:none;"></canvas>
+      <div class="hero-gradient absolute inset-0 z-[1]"></div>
       <div class="relative z-10 w-full flex flex-col items-center gap-8 max-w-4xl mx-auto px-4">
 
         <div class="flex items-center gap-2 flex-wrap justify-center">
-          <span class="glass-card px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest">Go</span>
-          <span class="glass-card px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest">Rust</span>
-          <span class="glass-card px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest">Zig</span>
+          <span class="glass-card border-accent-go px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest" style="color:#00ADD8">Go</span>
+          <span class="glass-card border-accent-rust px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest" style="color:#CE422B">Rust</span>
+          <span class="glass-card border-accent-zig px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest" style="color:#F7A41D">Zig</span>
         </div>
 
         <h1 class="text-4xl sm:text-6xl font-black tracking-tighter">
-          A home for<br/>
+          Serverless for<br/>
           <span class="text-zwl-muted dark:text-zw-muted">compiled languages.</span>
         </h1>
 
         <p class="text-base sm:text-lg text-zwl-muted dark:text-zw-muted max-w-xl leading-relaxed">
-          Deploy platforms weren't built for languages that compile to native binaries.
-          We were. Ship your Go, Rust, or Zig binary and get a URL.
+          Deploy Go, Rust, or Zig as serverless functions. No Dockerfiles. No infrastructure.
+          Your binary runs on request and scales to zero between them.
         </p>
 
         <div class="flex flex-col items-center gap-3">
@@ -42,17 +43,24 @@
 
         <div class="glass-card grid grid-cols-3 divide-x divide-zwl-border dark:divide-zw-border">
           <div class="px-6 py-4 flex flex-col gap-1 items-center">
-            <span class="text-lg font-black font-mono">125ms</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal boot</span>
+            <span class="text-lg font-black font-mono">&lt;15ms</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal wake</span>
           </div>
           <div class="px-6 py-4 flex flex-col gap-1 items-center">
             <span class="text-lg font-black font-mono">&lt;1ms</span>
             <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid start</span>
           </div>
           <div class="px-6 py-4 flex flex-col gap-1 items-center">
-            <span class="text-lg font-black font-mono">10Gbps</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Bandwidth</span>
+            <span class="text-lg font-black font-mono">$0</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">When idle</span>
           </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-center gap-3 mt-2">
+          <span class="proof-badge">Built with Rust</span>
+          <span class="proof-badge">Firecracker VMs</span>
+          <span class="proof-badge">eBPF isolated</span>
+          <span class="proof-badge">Scale to zero</span>
         </div>
 
       </div>
@@ -70,142 +78,144 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
 
       {# ── Source code panel ─────────────────────────────────────────────── #}
-      <div class="glass-card overflow-hidden">
-        <div class="flex border-b border-zwl-border dark:border-zw-border">
+      <div class="terminal-panel overflow-hidden" style="background:#1b1e28;border:1px solid #303340;color:#a6accd">
+        <div class="flex border-b" style="border-color:#333">
           <button @click="lang = 0" class="cursor-pointer flex-1 py-2.5 border-b-2 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
-            :class="lang === 0 ? 'border-current' : 'border-transparent text-zwl-muted dark:text-zw-muted'">Go</button>
+            :class="lang === 0 ? 'lang-go' : 'border-transparent'" style="color:#00ADD8">Go</button>
           <button @click="lang = 1" class="cursor-pointer flex-1 py-2.5 border-b-2 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
-            :class="lang === 1 ? 'border-current' : 'border-transparent text-zwl-muted dark:text-zw-muted'">Rust</button>
+            :class="lang === 1 ? 'lang-rust' : 'border-transparent'" style="color:#CE422B">Rust</button>
           <button @click="lang = 2" class="cursor-pointer flex-1 py-2.5 border-b-2 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
-            :class="lang === 2 ? 'border-current' : 'border-transparent text-zwl-muted dark:text-zw-muted'">Zig</button>
+            :class="lang === 2 ? 'lang-zig' : 'border-transparent'" style="color:#F7A41D">Zig</button>
         </div>
-        <div class="px-5 py-2 border-b border-zwl-border dark:border-zw-border">
-          <span class="text-[10px] font-mono" x-text="['main.go', 'main.rs', 'main.zig'][lang]"></span>
+        <div class="px-5 py-2" style="border-bottom:1px solid #303340">
+          <span class="text-[10px] font-mono" style="color:#767c9d" x-text="['main.go', 'main.rs', 'main.zig'][lang]"></span>
         </div>
         <div class="px-5 py-5 overflow-hidden">
           {# Go #}
-          <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre">package main
+          <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre"><span class="tok-kw">package</span> <span class="tok-pkg">main</span>
 
-import (
-	"fmt"
-	"net/http"
+<span class="tok-kw">import</span> (
+	<span class="tok-str">"fmt"</span>
+	<span class="tok-str">"net/http"</span>
 )
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "hello from liquid metal")
+<span class="tok-kw">func</span> <span class="tok-fn">handler</span>(w <span class="tok-type">http.ResponseWriter</span>, r *<span class="tok-type">http.Request</span>) {
+	fmt.<span class="tok-fn">Fprintln</span>(w, <span class="tok-str">"hello from liquid metal"</span>)
 }
 
-func main() {
-	http.HandleFunc("/", handler)
-	http.ListenAndServe(":8080", nil)
+<span class="tok-kw">func</span> <span class="tok-fn">main</span>() {
+	http.<span class="tok-fn">HandleFunc</span>(<span class="tok-str">"/"</span>, handler)
+	http.<span class="tok-fn">ListenAndServe</span>(<span class="tok-str">":8080"</span>, <span class="tok-kw">nil</span>)
 }</pre>
           {# Rust #}
-          <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre">use std::net::TcpListener;
-use std::io::Write;
+          <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre"><span class="tok-kw">use</span> <span class="tok-pkg">std::net</span>::<span class="tok-type">TcpListener</span>;
+<span class="tok-kw">use</span> <span class="tok-pkg">std::io</span>::<span class="tok-type">Write</span>;
 
-fn main() {
-    let listener = TcpListener::bind("0.0.0.0:8080").unwrap();
+<span class="tok-kw">fn</span> <span class="tok-fn">main</span>() {
+    <span class="tok-kw">let</span> listener = <span class="tok-type">TcpListener</span>::<span class="tok-fn">bind</span>(<span class="tok-str">"0.0.0.0:8080"</span>).<span class="tok-fn">unwrap</span>();
 
-    for stream in listener.incoming() {
-        let mut stream = stream.unwrap();
-        let response = b"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal";
-        stream.write_all(response).ok();
+    <span class="tok-kw">for</span> stream <span class="tok-kw">in</span> listener.<span class="tok-fn">incoming</span>() {
+        <span class="tok-kw">let mut</span> stream = stream.<span class="tok-fn">unwrap</span>();
+        <span class="tok-kw">let</span> response = <span class="tok-str">b"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>;
+        stream.<span class="tok-fn">write_all</span>(response).<span class="tok-fn">ok</span>();
     }
 }</pre>
           {# Zig #}
-          <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre">const std = @import("std");
+          <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre"><span class="tok-kw">const</span> std = @<span class="tok-fn">import</span>(<span class="tok-str">"std"</span>);
 
-pub fn main() !void {
-    const addr = try std.net.Address.resolveIp("0.0.0.0", 8080);
-    var server = try addr.listen(.{});
-    defer server.deinit();
+<span class="tok-kw">pub fn</span> <span class="tok-fn">main</span>() !<span class="tok-type">void</span> {
+    <span class="tok-kw">const</span> addr = <span class="tok-kw">try</span> std.net.Address.<span class="tok-fn">resolveIp</span>(<span class="tok-str">"0.0.0.0"</span>, 8080);
+    <span class="tok-kw">var</span> server = <span class="tok-kw">try</span> addr.<span class="tok-fn">listen</span>(.{});
+    <span class="tok-kw">defer</span> server.<span class="tok-fn">deinit</span>();
 
-    while (true) {
-        const conn = try server.accept();
-        _ = conn.stream.write("HTTP/1.1 200 OK\r\n\r\nhello from liquid metal");
-        conn.stream.close();
+    <span class="tok-kw">while</span> (<span class="tok-kw">true</span>) {
+        <span class="tok-kw">const</span> conn = <span class="tok-kw">try</span> server.<span class="tok-fn">accept</span>();
+        _ = conn.stream.<span class="tok-fn">write</span>(<span class="tok-str">"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>);
+        conn.stream.<span class="tok-fn">close</span>();
     }
 }</pre>
         </div>
-        <div class="border-t border-zwl-border dark:border-zw-border px-5 py-2.5 flex items-center gap-2">
-          <span class="text-zwl-muted dark:text-zw-muted text-xs">$</span>
-          <span class="text-xs font-semibold">flux deploy</span>
-          <span class="ml-auto flex items-center gap-1.5">
-            <span class="w-1.5 h-1.5 bg-zwl-fg dark:bg-zw-fg"></span>
-            <span class="text-[10px] text-zwl-muted dark:text-zw-muted">READY</span>
+        <div class="px-5 py-2.5 flex items-center gap-2" style="border-top:1px solid #303340">
+          <span class="text-xs" style="color:#767c9d">$</span>
+          <span class="text-xs font-semibold" style="color:#a6accd">flux deploy</span>
+          <span class="ml-auto inline-flex items-center gap-1.5 leading-none">
+            <span class="w-2 h-2 shrink-0 rounded-full" style="background:#5de4c7"></span>
+            <span class="text-[10px] leading-none font-bold uppercase tracking-widest" style="color:#5de4c7">Ready</span>
           </span>
         </div>
       </div>
 
       {# ── Config + deploy log ───────────────────────────────────────────── #}
       <div class="flex flex-col gap-4">
-        <div class="glass-card overflow-hidden">
-          <div class="px-5 py-2 border-b border-zwl-border dark:border-zw-border flex items-center justify-between">
-            <span class="text-[10px] text-zwl-muted dark:text-zw-muted">liquid-metal.toml</span>
-            <span class="text-[9px] font-bold px-1.5 py-0.5 border border-zwl-border dark:border-zw-border uppercase tracking-widest"
+        <div class="terminal-panel overflow-hidden" style="background:#1b1e28;border:1px solid #303340;color:#a6accd">
+          <div class="px-5 py-2 flex items-center justify-between" style="border-bottom:1px solid #303340">
+            <span class="text-[10px]" style="color:#767c9d">liquid-metal.toml</span>
+            <span class="text-[9px] font-bold px-2 py-1 border uppercase tracking-widest inline-flex items-center leading-none"
+              :class="lang === 0 ? 'border-accent-go' : lang === 1 ? 'border-accent-rust' : 'border-accent-zig'"
+              :style="lang === 0 ? 'color:#00ADD8' : lang === 1 ? 'color:#CE422B' : 'color:#F7A41D'"
               x-text="lang === 2 ? 'liquid' : 'metal'"></span>
           </div>
           <div class="px-5 py-5">
-            <pre x-show="lang === 0" class="text-xs leading-relaxed text-zwl-muted dark:text-zw-muted whitespace-pre">[service]
-name = "hello-world"
-engine = "metal"
-port = 8080
+            <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre"><span class="tok-type">[service]</span>
+name = <span class="tok-str">"hello-world"</span>
+engine = <span class="tok-str">"metal"</span>
+port = <span class="tok-yellow">8080</span>
 
-[build]
-command = "go build -o app ."
-output = "app"</pre>
-            <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed text-zwl-muted dark:text-zw-muted whitespace-pre">[service]
-name = "rust-api"
-engine = "metal"
-port = 8080
+<span class="tok-type">[build]</span>
+command = <span class="tok-str">"go build -o app ."</span>
+output = <span class="tok-str">"app"</span></pre>
+            <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre"><span class="tok-type">[service]</span>
+name = <span class="tok-str">"rust-api"</span>
+engine = <span class="tok-str">"metal"</span>
+port = <span class="tok-yellow">8080</span>
 
-[build]
-command = "cargo build --target x86_64-unknown-linux-musl --release"
-output = "target/x86_64-unknown-linux-musl/release/rust-api"</pre>
-            <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed text-zwl-muted dark:text-zw-muted whitespace-pre">[service]
-name = "zig-wasm"
-engine = "liquid"
+<span class="tok-type">[build]</span>
+command = <span class="tok-str">"cargo build --target x86_64-unknown-linux-musl --release"</span>
+output = <span class="tok-str">"target/x86_64-unknown-linux-musl/release/rust-api"</span></pre>
+            <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre"><span class="tok-type">[service]</span>
+name = <span class="tok-str">"zig-wasm"</span>
+engine = <span class="tok-str">"liquid"</span>
 
-[liquid]
-wasm = "main.wasm"</pre>
+<span class="tok-type">[liquid]</span>
+wasm = <span class="tok-str">"main.wasm"</span></pre>
           </div>
         </div>
 
-        <div class="glass-card overflow-hidden">
-          <div class="px-5 py-2 border-b border-zwl-border dark:border-zw-border flex items-center justify-between">
-            <span class="text-[10px] text-zwl-muted dark:text-zw-muted">deploy log</span>
-            <span class="flex items-center gap-1.5">
-              <span class="w-1.5 h-1.5 bg-zwl-fg dark:bg-zw-fg" style="animation:pulse 2s infinite"></span>
-              <span class="text-[9px] font-bold uppercase tracking-widest">live</span>
+        <div class="terminal-panel overflow-hidden" style="background:#1b1e28;border:1px solid #303340;color:#a6accd">
+          <div class="px-5 py-2 flex items-center justify-between" style="border-bottom:1px solid #303340">
+            <span class="text-[10px]" style="color:#767c9d">deploy log</span>
+            <span class="inline-flex items-center gap-1.5 leading-none">
+              <span class="w-2 h-2 shrink-0 rounded-full" style="background:#5de4c7;animation:pulse 2s infinite"></span>
+              <span class="text-[10px] leading-none font-bold uppercase tracking-widest" style="color:#5de4c7">Live</span>
             </span>
           </div>
-          <div class="px-5 py-4 text-[11px] leading-loose text-zwl-muted dark:text-zw-muted">
+          <div class="px-5 py-4 text-[11px] leading-loose" style="color:#767c9d">
             <div>
               <span>$</span>
-              <span class="font-semibold ml-1"
+              <span class="font-semibold ml-1" style="color:#a6accd"
                 x-text="'flux deploy --name ' + ['hello-world','rust-api','zig-wasm'][lang]"></span>
             </div>
             <div class="mt-2 flex flex-col gap-0.5">
-              <div>&#8594; reading liquid-metal.toml</div>
-              <div x-show="lang === 0">&#8594; go build <span>done</span> (0.8s)</div>
-              <div x-show="lang === 1" x-cloak>&#8594; cargo build --release <span>done</span> (1.4s)</div>
-              <div x-show="lang === 2" x-cloak>&#8594; zig build-exe -target wasm32-wasi <span>done</span></div>
-              <div>&#8594; uploading artifact <span>done</span></div>
+              <div class="deploy-line"><span class="deploy-arrow">&#8594;</span> reading liquid-metal.toml</div>
+              <div class="deploy-line" x-show="lang === 0"><span class="deploy-arrow">&#8594;</span> go build <span class="deploy-done">done</span> (0.8s)</div>
+              <div class="deploy-line" x-show="lang === 1" x-cloak><span class="deploy-arrow">&#8594;</span> cargo build --release <span class="deploy-done">done</span> (1.4s)</div>
+              <div class="deploy-line" x-show="lang === 2" x-cloak><span class="deploy-arrow">&#8594;</span> zig build-exe -target wasm32-wasi <span class="deploy-done">done</span></div>
+              <div class="deploy-line"><span class="deploy-arrow">&#8594;</span> uploading artifact <span class="deploy-done">done</span></div>
               <div x-show="lang !== 2" class="mt-1">
-                <div>&#8594; provisioning metal vm</div>
-                <div class="pl-3">&#10003; rootfs injected</div>
-                <div class="pl-3">&#10003; tap0 &#8594; br0 ready</div>
-                <div class="pl-3">&#10003; vm boot <span class="font-semibold">127ms</span></div>
+                <div class="deploy-line"><span class="deploy-arrow">&#8594;</span> building rootfs</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> binary injected</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> vm booted, health check passed</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> snapshot created <span class="deploy-done">ready</span></div>
               </div>
               <div x-show="lang === 2" x-cloak class="mt-1">
-                <div>&#8594; loading wasm module</div>
-                <div class="pl-3">&#10003; wasmtime executor ready</div>
-                <div class="pl-3">&#10003; cold start <span class="font-semibold">&lt;1ms</span></div>
+                <div class="deploy-line"><span class="deploy-arrow">&#8594;</span> loading wasm module</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> wasmtime compiled</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> cold start <span class="deploy-done">&lt;1ms</span></div>
               </div>
-              <div class="mt-2 flex items-center gap-2">
-                <span class="font-bold">&#10003;</span>
-                <span class="font-semibold">service live</span>
-                <span class="ml-1" x-text="['hello-world','rust-api','zig-wasm'][lang] + '.lm.dev'"></span>
+              <div class="deploy-line mt-2 flex items-center gap-2">
+                <span class="deploy-check font-bold">&#10003;</span>
+                <span class="deploy-done">service live</span>
+                <span class="ml-1 tok-str" x-text="['hello-world','rust-api','zig-wasm'][lang] + '.lm.dev'"></span>
               </div>
             </div>
           </div>
@@ -230,7 +240,7 @@ wasm = "main.wasm"</pre>
           <i data-lucide="server" style="width:14px;height:14px;"></i>
         </div>
         <h3 class="text-xs font-bold uppercase tracking-widest">Metal &mdash; Firecracker</h3>
-        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">Your binary gets its own Firecracker microVM. Dedicated vCPU, dedicated RAM, its own kernel. Boots in 125ms. No shared tenants.</p>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">Your binary runs in a Firecracker microVM restored from snapshot in &lt;15ms. Real Linux kernel, real networking. Scales to zero when idle. Pay per request.</p>
       </div>
       <div class="glass-card p-8 flex flex-col gap-4">
         <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
@@ -249,25 +259,91 @@ wasm = "main.wasm"</pre>
     </div>
   </section>
 
-  {# ── ARCHITECTURE ──────────────────────────────────────────────────────── #}
+  {# ── COMPARISON TABLE ─────────────────────────────────────────────────── #}
   <section class="py-20 border-b border-zwl-border dark:border-zw-border">
-    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// under the hood</p>
-    <h2 class="text-2xl font-black tracking-tight mb-12">No containers. No orchestrators. Just metal.</h2>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div class="glass-card p-6 flex flex-col gap-4">
-        <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted">LAYER 01 /</span>
-        <h3 class="text-sm font-bold uppercase tracking-widest">Bare Metal</h3>
-        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed border-l-2 pl-3 border-zwl-border dark:border-zw-border">Dedicated servers. No Kubernetes. No container orchestration. Your workload runs close to the silicon on 10 Gbps unmetered bandwidth.</p>
-      </div>
-      <div class="glass-card p-6 flex flex-col gap-4">
-        <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted">LAYER 02 /</span>
-        <h3 class="text-sm font-bold uppercase tracking-widest">Your Engine</h3>
-        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed border-l-2 pl-3 border-zwl-border dark:border-zw-border">Metal: Firecracker KVM &mdash; boots in 125ms with jailer + eBPF isolation. Liquid: Wasmtime &mdash; WASI sandboxed, sub-ms cold start.</p>
-      </div>
-      <div class="glass-card p-6 flex flex-col gap-4">
-        <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted">LAYER 03 /</span>
-        <h3 class="text-sm font-bold uppercase tracking-widest">Your Code</h3>
-        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed border-l-2 pl-3 border-zwl-border dark:border-zw-border">Your static binary or .wasm runs as-is. Full networking control. No container shim between your code and the machine.</p>
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// choose your engine</p>
+    <h2 class="text-2xl font-black tracking-tight mb-12">Liquid or Metal?</h2>
+    <div class="glass-card overflow-hidden">
+      <table class="w-full text-xs font-mono">
+        <thead>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <th class="text-left px-6 py-4 text-[10px] uppercase tracking-widest text-zwl-muted dark:text-zw-muted"></th>
+            <th class="text-left px-6 py-4 text-[10px] uppercase tracking-widest">Liquid (Wasm)</th>
+            <th class="text-left px-6 py-4 text-[10px] uppercase tracking-widest">Metal (Firecracker)</th>
+          </tr>
+        </thead>
+        <tbody class="text-zwl-muted dark:text-zw-muted">
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Cold start</td>
+            <td class="px-6 py-3">&lt;1ms</td>
+            <td class="px-6 py-3">&lt;15ms (snapshot)</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Isolation</td>
+            <td class="px-6 py-3">Wasm sandbox</td>
+            <td class="px-6 py-3">KVM + eBPF</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Filesystem</td>
+            <td class="px-6 py-3">&#10007;</td>
+            <td class="px-6 py-3">&#10003; Full ext4</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Syscalls</td>
+            <td class="px-6 py-3">WASI only</td>
+            <td class="px-6 py-3">&#10003; Full Linux</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Networking</td>
+            <td class="px-6 py-3">HTTP in/out</td>
+            <td class="px-6 py-3">&#10003; TCP/UDP/ICMP</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Target</td>
+            <td class="px-6 py-3"><code>wasm32-wasip1</code></td>
+            <td class="px-6 py-3"><code>x86_64-linux-musl</code></td>
+          </tr>
+          <tr>
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Pricing</td>
+            <td class="px-6 py-3">$0.30 / 1M inv</td>
+            <td class="px-6 py-3">$0.60 / 1M inv + GB-sec</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {# ── HOW IT WORKS TIMELINE ──────────────────────────────────────────── #}
+  <section class="py-20 border-b border-zwl-border dark:border-zw-border">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// how it works</p>
+    <h2 class="text-2xl font-black tracking-tight mb-12">From code to production in seconds.</h2>
+    <div class="max-w-2xl mx-auto">
+      <div class="timeline">
+        <div class="timeline-step">
+          <div class="timeline-dot">1</div>
+          <h3 class="text-sm font-bold mb-1">Write code</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Go, Rust, Zig &mdash; any language that compiles to a static binary or Wasm module.</p>
+        </div>
+        <div class="timeline-step">
+          <div class="timeline-dot">2</div>
+          <h3 class="text-sm font-bold mb-1">flux deploy</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">One command. Builds your binary, uploads it, creates a VM snapshot (Metal) or compiles the Wasm module (Liquid).</p>
+        </div>
+        <div class="timeline-step">
+          <div class="timeline-dot">3</div>
+          <h3 class="text-sm font-bold mb-1">Get a URL</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Your service is live at <code>your-app.liquidmetal.dev</code>. Custom domains supported.</p>
+        </div>
+        <div class="timeline-step">
+          <div class="timeline-dot">4</div>
+          <h3 class="text-sm font-bold mb-1">Request arrives</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Your service wakes from snapshot (&lt;15ms) or Wasm cold-starts (&lt;1ms). The response is sent. No loading screens.</p>
+        </div>
+        <div class="timeline-step">
+          <div class="timeline-dot">5</div>
+          <h3 class="text-sm font-bold mb-1">Scale to zero</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">5 minutes of silence &rarr; service sleeps. No VM, no memory, no cost. Wakes again on the next request.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -276,10 +352,10 @@ wasm = "main.wasm"</pre>
   <section class="py-24 flex flex-col items-center text-center gap-6">
     <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted">// get started</p>
     <h2 class="text-3xl font-black tracking-tight">
-      Your binary deserves<br/>a real home.
+      Deploy a binary.<br/>Get a URL.
     </h2>
     <p class="text-sm text-zwl-muted dark:text-zw-muted max-w-md">
-      Stop wrapping compiled code in Docker containers. Write Go, Rust, or Zig. Compile. Deploy. Done.
+      Serverless functions for languages that compile. Go, Rust, Zig. No containers. Pay per request.
     </p>
     <div class="flex flex-wrap items-center justify-center gap-4">
       <a href="/auth/login" class="inline-flex items-center px-10 py-4 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
@@ -316,7 +392,7 @@ wasm = "main.wasm"</pre>
   }
 
   function addStrike() {
-    var colors = ['rgba(52,211,153,', 'rgba(0,172,215,'];
+    var colors = ['rgba(93,228,199,', 'rgba(208,103,157,'];
     var color = colors[Math.floor(Math.random() * colors.length)];
     if (Math.random() < 0.35) {
       strikes.push({ h: true,  row: Math.floor(Math.random() * ROWS), pos: 0, spd: 0.8 + Math.random() * 1.2, len: 3 + Math.floor(Math.random() * 4), color: color });
@@ -361,7 +437,7 @@ wasm = "main.wasm"</pre>
       if (p.r > p.maxR) { pulses.splice(i, 1); continue; }
       var pa = 0.15 * (1 - p.r / p.maxR);
       ctx.beginPath(); ctx.arc(p.cx, p.cy, p.r, 0, 6.2832);
-      ctx.strokeStyle = 'rgba(52,211,153,' + pa + ')'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = 'rgba(93,228,199,' + pa + ')'; ctx.lineWidth = 1; ctx.stroke();
     }
 
     // Strikes
