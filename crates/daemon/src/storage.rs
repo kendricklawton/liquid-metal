@@ -33,6 +33,49 @@ pub fn build_client() -> Result<aws_sdk_s3::Client> {
     Ok(aws_sdk_s3::Client::from_conf(cfg))
 }
 
+/// S3 upload deadline. Override via S3_UPLOAD_TIMEOUT_SECS.
+static UPLOAD_TIMEOUT: std::sync::LazyLock<std::time::Duration> = std::sync::LazyLock::new(|| {
+    let secs: u64 = env_or("S3_UPLOAD_TIMEOUT_SECS", "300").parse().unwrap_or(300);
+    std::time::Duration::from_secs(secs)
+});
+
+/// Upload a local file to Object Storage.
+///
+/// Used to persist VM snapshots to S3 so they survive daemon restarts
+/// and can be restored on any node with the same architecture.
+pub async fn upload(
+    s3: &aws_sdk_s3::Client,
+    bucket: &str,
+    key: &str,
+    local_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let bytes = tokio::fs::read(local_path)
+        .await
+        .with_context(|| format!("reading {} for upload", local_path.display()))?;
+
+    let len = bytes.len();
+
+    tokio::time::timeout(*UPLOAD_TIMEOUT, async {
+        s3.put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(bytes.into())
+            .send()
+            .await
+            .with_context(|| format!("uploading {key} to Object Storage"))
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!(
+        "S3 upload timed out after {}s for {key}",
+        UPLOAD_TIMEOUT.as_secs()
+    ))??;
+
+    tracing::info!(key, path = %local_path.display(), bytes = len, "artifact uploaded");
+    Ok(())
+}
+
 /// S3 download deadline. Override via S3_DOWNLOAD_TIMEOUT_SECS.
 static DOWNLOAD_TIMEOUT: std::sync::LazyLock<std::time::Duration> = std::sync::LazyLock::new(|| {
     let secs: u64 = env_or("S3_DOWNLOAD_TIMEOUT_SECS", "300").parse().unwrap_or(300);

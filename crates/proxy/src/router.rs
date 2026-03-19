@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -9,6 +10,46 @@ use tracing::{debug, info, warn};
 
 use crate::cache::{DomainCache, RouteCache};
 use crate::db::{lookup_domain, lookup_route};
+
+/// Per-service Metal usage counter.
+/// Stored in a shared map keyed by slug and drained every 60s by the usage flusher.
+/// Tracks both invocation count and accumulated compute duration (GB-seconds × 1000
+/// for millisecond precision without floating point).
+pub struct MetalCounter {
+    pub service_id:    String,
+    pub workspace_id:  String,
+    pub invocations:   AtomicU64,
+    /// Accumulated compute duration in milliseconds. Converted to GB-sec at flush time.
+    /// Using millis avoids floating point in atomic operations.
+    pub duration_ms:   AtomicU64,
+}
+
+/// Metal invocation counters — slug → MetalCounter.
+pub type MetalCounters = Arc<RwLock<HashMap<String, Arc<MetalCounter>>>>;
+
+/// Per-slug concurrency limiter. Limits how many simultaneous requests
+/// a single service can handle. Prevents one service from saturating
+/// the node's connection/memory budget. Returns 503 when at capacity.
+pub type SlugSemaphores = Arc<RwLock<HashMap<String, Arc<tokio::sync::Semaphore>>>>;
+
+/// Max concurrent requests per service. Override via MAX_CONCURRENT_PER_SERVICE.
+static MAX_CONCURRENT_PER_SERVICE: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+    common::config::env_or("MAX_CONCURRENT_PER_SERVICE", "200")
+        .parse()
+        .unwrap_or(200)
+});
+
+/// Maximum upstream response time before the proxy kills the request.
+/// Protects against runaway compute. Override via UPSTREAM_TIMEOUT_SECS.
+static UPSTREAM_TIMEOUT_SECS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+    common::config::env_or("UPSTREAM_TIMEOUT_SECS", "30").parse().unwrap_or(30)
+});
+
+/// Maximum time to wait for a cold Metal service to wake from snapshot.
+/// If the VM doesn't come up within this window, the proxy returns 503.
+static WAKE_TIMEOUT_MS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+    common::config::env_or("WAKE_TIMEOUT_MS", "10000").parse().unwrap_or(10_000)
+});
 
 /// Minimum seconds between traffic pulse publishes for the same slug.
 /// Keeps NATS volume low — one pulse per interval per active service is enough
@@ -32,10 +73,15 @@ static DOMAIN_CACHE_MAX: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|
         .unwrap_or(50_000)
 });
 
-/// Per-request context — carries the resolved slug so downstream hooks
-/// (e.g. `fail_to_connect`) can act on it without re-parsing headers.
+/// Per-request context — carries state across Pingora hooks.
 pub struct RequestCtx {
     slug: Option<String>,
+    /// Set when routing to a Metal service. Used by `logging()` to measure
+    /// request duration for GB-sec billing.
+    metal_start: Option<Instant>,
+    /// Held for the request's lifetime — released when `logging()` runs.
+    /// Limits per-service concurrency.
+    _concurrency_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 pub struct MachineRouter {
@@ -49,13 +95,17 @@ pub struct MachineRouter {
     pub nats:         Option<Arc<async_nats::Client>>,
     /// Per-slug debounce map: last time a pulse was published for this slug.
     pub pulse_cache:  Arc<RwLock<HashMap<String, Instant>>>,
+    /// Per-service Metal invocation counters. Drained every 60s by the usage flusher.
+    pub metal_counters: MetalCounters,
+    /// Per-slug concurrency semaphores. Limits simultaneous requests per service.
+    pub slug_semaphores: SlugSemaphores,
 }
 
 #[async_trait]
 impl ProxyHttp for MachineRouter {
     type CTX = RequestCtx;
     fn new_ctx(&self) -> RequestCtx {
-        RequestCtx { slug: None }
+        RequestCtx { slug: None, metal_start: None, _concurrency_permit: None }
     }
 
     async fn upstream_peer(
@@ -148,10 +198,21 @@ impl ProxyHttp for MachineRouter {
         // last_request_at and enforce the Metal idle timeout.
         self.maybe_publish_pulse(&slug);
 
+        // Acquire a per-slug concurrency permit. Returns 503 if the service
+        // is at capacity (MAX_CONCURRENT_PER_SERVICE simultaneous requests).
+        ctx._concurrency_permit = self.try_acquire_concurrency(&slug);
+        if ctx._concurrency_permit.is_none() {
+            warn!(%slug, max = *MAX_CONCURRENT_PER_SERVICE, "service at concurrency limit — returning 503");
+            return Err(Error::new(pingora::ErrorType::HTTPStatus(503)));
+        }
+
         // Fast path: in-memory cache hit — no DB round-trip.
         if let Some(addr) = self.cache.read().unwrap_or_else(|e| e.into_inner()).get(&slug).cloned() {
             debug!(%slug, addr, "routing (cache)");
-            return Ok(Box::new(HttpPeer::new(addr, false, String::new())));
+            if self.try_count_metal(&slug) {
+                ctx.metal_start = Some(Instant::now());
+            }
+            return Ok(Self::make_peer(addr));
         }
 
         // Slow path: DB lookup, then populate cache for subsequent requests.
@@ -160,10 +221,34 @@ impl ProxyHttp for MachineRouter {
                 Some(addr) => {
                     info!(%slug, addr, engine = record.engine, "routing (db)");
                     self.cache.write().unwrap_or_else(|e| e.into_inner()).insert(slug.clone(), addr.clone());
+                    if record.engine == "metal" {
+                        self.count_metal_invocation(&slug, &record.service_id, &record.workspace_id);
+                        ctx.metal_start = Some(Instant::now());
+                    }
                     addr
                 }
+                None if record.status == "ready" && record.snapshot_key.is_some() => {
+                    // Cold Metal service — has a snapshot but no running VM.
+                    // Publish a wake event, then poll the route cache until the
+                    // daemon restores the VM and publishes RouteUpdatedEvent.
+                    info!(%slug, "cold service — requesting wake from snapshot");
+                    self.publish_wake(&slug, &record.service_id, record.snapshot_key.as_deref().unwrap());
+
+                    match self.wait_for_warm(&slug).await {
+                        Some(addr) => {
+                            info!(%slug, %addr, "service woke from snapshot");
+                            self.count_metal_invocation(&slug, &record.service_id, &record.workspace_id);
+                            ctx.metal_start = Some(Instant::now());
+                            addr
+                        }
+                        None => {
+                            warn!(%slug, "wake timeout — service did not start within {}ms", *WAKE_TIMEOUT_MS);
+                            return Err(Error::new(pingora::ErrorType::HTTPStatus(503)));
+                        }
+                    }
+                }
                 None => {
-                    warn!(%slug, "no upstream_addr — service still provisioning, falling back to API");
+                    warn!(%slug, status = record.status, "no upstream_addr, falling back to API");
                     self.api_upstream.clone()
                 }
             },
@@ -177,7 +262,19 @@ impl ProxyHttp for MachineRouter {
             }
         };
 
-        Ok(Box::new(HttpPeer::new(addr, false, String::new())))
+        Ok(Self::make_peer(addr))
+    }
+
+    /// Called after the full request/response cycle completes.
+    /// Records Metal request duration for GB-sec billing.
+    async fn logging(&self, _session: &mut Session, _e: Option<&Error>, ctx: &mut RequestCtx) {
+        if let (Some(start), Some(slug)) = (ctx.metal_start.take(), ctx.slug.as_ref()) {
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            let counters = self.metal_counters.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(counter) = counters.get(slug) {
+                counter.duration_ms.fetch_add(elapsed_ms, Ordering::Relaxed);
+            }
+        }
     }
 
     /// Called when the proxy fails to connect to the upstream.
@@ -207,6 +304,58 @@ const PULSE_SWEEP_INTERVAL_SECS: u64 = 300; // 5 minutes
 /// Spawn a background thread that periodically sweeps stale entries
 /// from the pulse debounce cache. Runs on its own thread since
 /// Pingora's main loop is synchronous.
+/// Spawn a background thread that drains Metal invocation counters every 60s
+/// and publishes MetalUsageEvent to NATS for billing.
+pub fn start_metal_usage_flusher(counters: MetalCounters, nats: Arc<async_nats::Client>) {
+    let flush_secs: u64 = common::config::env_or("METAL_USAGE_FLUSH_SECS", "60")
+        .parse().unwrap_or(60);
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("metal usage flusher runtime");
+        rt.block_on(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(flush_secs));
+            loop {
+                ticker.tick().await;
+                let snapshot: Vec<(String, String, String, u64, u64)> = {
+                    let map = counters.read().unwrap_or_else(|e| e.into_inner());
+                    map.iter()
+                        .filter_map(|(slug, c)| {
+                            let inv = c.invocations.swap(0, Ordering::Relaxed);
+                            let dur = c.duration_ms.swap(0, Ordering::Relaxed);
+                            if inv > 0 || dur > 0 {
+                                Some((slug.clone(), c.service_id.clone(), c.workspace_id.clone(), inv, dur))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                };
+
+                for (_slug, service_id, workspace_id, invocations, duration_ms) in &snapshot {
+                    let ev = common::events::MetalUsageEvent {
+                        service_id:   service_id.clone(),
+                        workspace_id: workspace_id.clone(),
+                        invocations:  *invocations,
+                        duration_ms:  *duration_ms,
+                    };
+                    if let Ok(payload) = serde_json::to_vec(&ev) {
+                        if let Err(e) = nats.publish(common::events::SUBJECT_USAGE_METAL, payload.into()).await {
+                            tracing::warn!(error = %e, service_id, "failed to publish MetalUsageEvent");
+                            // TODO: backlog retry (for now, lost invocations on NATS failure)
+                        }
+                    }
+                }
+
+                if !snapshot.is_empty() {
+                    tracing::debug!(services = snapshot.len(), "flushed metal invocation counters");
+                }
+            }
+        });
+    });
+}
+
 pub fn start_pulse_sweeper(pulse_cache: Arc<RwLock<HashMap<String, Instant>>>) {
     std::thread::spawn(move || {
         loop {
@@ -223,6 +372,103 @@ pub fn start_pulse_sweeper(pulse_cache: Arc<RwLock<HashMap<String, Instant>>>) {
 }
 
 impl MachineRouter {
+    /// Build an HttpPeer with the configured upstream timeout.
+    fn make_peer(addr: String) -> Box<HttpPeer> {
+        let mut peer = HttpPeer::new(addr, false, String::new());
+        peer.options.read_timeout = Some(std::time::Duration::from_secs(*UPSTREAM_TIMEOUT_SECS));
+        peer.options.write_timeout = Some(std::time::Duration::from_secs(*UPSTREAM_TIMEOUT_SECS));
+        Box::new(peer)
+    }
+
+    /// Try to acquire a concurrency permit for a slug.
+    /// Returns None (and the caller returns 503) if at capacity.
+    fn try_acquire_concurrency(&self, slug: &str) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let sem = {
+            let sems = self.slug_semaphores.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(sem) = sems.get(slug) {
+                sem.clone()
+            } else {
+                drop(sems);
+                let sem = Arc::new(tokio::sync::Semaphore::new(*MAX_CONCURRENT_PER_SERVICE));
+                self.slug_semaphores.write().unwrap_or_else(|e| e.into_inner())
+                    .insert(slug.to_string(), sem.clone());
+                sem
+            }
+        };
+        sem.try_acquire_owned().ok()
+    }
+
+    /// Increment the Metal invocation counter for a service.
+    /// Called on every successfully routed request. On cache hits, looks up
+    /// by slug — if no counter exists, the service is Liquid (daemon counts those).
+    fn count_metal_invocation(&self, slug: &str, service_id: &str, workspace_id: &str) {
+        let counters = self.metal_counters.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(counter) = counters.get(slug) {
+            counter.invocations.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        drop(counters);
+        // First time seeing this Metal service — create a counter.
+        let counter = Arc::new(MetalCounter {
+            service_id:   service_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            invocations:  AtomicU64::new(1),
+            duration_ms:  AtomicU64::new(0),
+        });
+        self.metal_counters.write().unwrap_or_else(|e| e.into_inner())
+            .insert(slug.to_string(), counter);
+    }
+
+    /// Try to increment a Metal counter by slug (fast path — no DB needed).
+    /// Returns true if the slug had a counter, false if not (Liquid or unknown).
+    fn try_count_metal(&self, slug: &str) -> bool {
+        let counters = self.metal_counters.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(counter) = counters.get(slug) {
+            counter.invocations.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Publish a `platform.wake` event to trigger snapshot restore for a cold service.
+    /// Fire-and-forget — the daemon deduplicates if multiple requests arrive simultaneously.
+    fn publish_wake(&self, slug: &str, service_id: &str, snapshot_key: &str) {
+        let Some(nats) = &self.nats else { return };
+        let nats = nats.clone();
+        let event = common::events::WakeEvent {
+            service_id:   service_id.to_string(),
+            slug:         slug.to_string(),
+            snapshot_key: snapshot_key.to_string(),
+        };
+        tokio::spawn(async move {
+            if let Ok(payload) = serde_json::to_vec(&event) {
+                if let Err(e) = nats.publish(common::events::SUBJECT_WAKE, payload.into()).await {
+                    tracing::warn!(error = %e, "failed to publish WakeEvent");
+                }
+            }
+        });
+    }
+
+    /// Poll the route cache until the daemon populates it via RouteUpdatedEvent,
+    /// or until the wake timeout expires. Returns the upstream_addr if the
+    /// service woke in time, None on timeout.
+    async fn wait_for_warm(&self, slug: &str) -> Option<String> {
+        let deadline = tokio::time::Instant::now()
+            + tokio::time::Duration::from_millis(*WAKE_TIMEOUT_MS);
+        let poll_interval = tokio::time::Duration::from_millis(50);
+
+        loop {
+            if let Some(addr) = self.cache.read().unwrap_or_else(|e| e.into_inner()).get(slug).cloned() {
+                return Some(addr);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
     /// Publish a `platform.traffic_pulse` event for `slug`, but at most once
     /// every `PULSE_DEBOUNCE_SECS` seconds per slug. Spawns a fire-and-forget
     /// task so it never blocks the routing hot path.

@@ -7,11 +7,11 @@ use futures::StreamExt;
 use tokio::task::JoinSet;
 
 use common::events::{
-    DeprovisionEvent, Engine, LiquidUsageEvent, MetalUsageEvent, ProvisionEvent,
-    RouteRemovedEvent, SuspendEvent, TrafficPulseEvent,
+    DeprovisionEvent, Engine, LiquidUsageEvent, ProvisionEvent,
+    RouteRemovedEvent, RouteUpdatedEvent, SuspendEvent, TrafficPulseEvent, WakeEvent,
     STREAM_NAME, SUBJECT_DEPROVISION, SUBJECT_PROVISION, SUBJECT_ROUTE_REMOVED,
-    SUBJECT_SUSPEND, SUBJECT_TRAFFIC_PULSE,
-    SUBJECT_USAGE_LIQUID, SUBJECT_USAGE_METAL,
+    SUBJECT_ROUTE_UPDATED, SUBJECT_SUSPEND, SUBJECT_TRAFFIC_PULSE, SUBJECT_WAKE,
+    SUBJECT_USAGE_LIQUID,
 };
 #[cfg(target_os = "linux")]
 use common::events::{ServiceCrashedEvent, SUBJECT_SERVICE_CRASHED};
@@ -22,6 +22,7 @@ use daemon::storage;
 
 const CONSUMER_PROVISION:   &str = "daemon-provision-1";
 const CONSUMER_DEPROVISION: &str = "daemon-deprovision-1";
+const CONSUMER_WAKE:        &str = "daemon-wake-1";
 
 /// Default maximum concurrent provisions per node.
 /// Each Metal VM is CPU/RAM-intensive; cap prevents OOM on burst deploys.
@@ -72,7 +73,6 @@ async fn main() -> Result<()> {
         bridge:      env_or("BRIDGE",         "br0"),
         // cgroup v2
         rootfs_dev:     env_or("ROOTFS_DEVICE",  "8:0"),
-        physical_cores: env_or("PHYSICAL_CORES", "4").parse().unwrap_or(4),
         // Jailer
         use_jailer:  env_or("USE_JAILER",          "false") == "true",
         jailer_bin:  env_or("JAILER_BIN",           "/usr/local/bin/jailer"),
@@ -82,6 +82,9 @@ async fn main() -> Result<()> {
         // Node identity + artifacts
         node_id:      env_or("NODE_ID",      "node-a"),
         artifact_dir: env_or("ARTIFACT_DIR", "/var/lib/liquid-metal/artifacts"),
+        // Base Alpine template for Metal rootfs assembly
+        base_image_key:    env_or("BASE_IMAGE_KEY", "templates/base-alpine-v1.ext4"),
+        base_image_sha256: std::env::var("BASE_IMAGE_SHA256").ok(),
     });
 
     let bucket = Arc::new(env_or("OBJECT_STORAGE_BUCKET", "liquid-metal-artifacts"));
@@ -161,7 +164,7 @@ async fn main() -> Result<()> {
     // during provision or rollback.
     #[cfg(target_os = "linux")]
     provision::cleanup_stale_provisioning(
-        &pool, &cfg.node_id, cfg.physical_cores, &cfg.artifact_dir,
+        &pool, &cfg.node_id, &cfg.artifact_dir,
     ).await;
 
     // Warn if artifact partition is running low on disk space.
@@ -343,7 +346,7 @@ async fn main() -> Result<()> {
         if let Ok(db) = pool.get().await {
             let rows = db
                 .query(
-                    "SELECT id::text, tap_name, fc_pid, cpu_core, vm_id \
+                    "SELECT id::text, tap_name, fc_pid, vm_id \
                      FROM services \
                      WHERE node_id = $1 AND status = 'running' \
                        AND engine = 'metal' AND deleted_at IS NULL \
@@ -358,13 +361,11 @@ async fn main() -> Result<()> {
                 let svc_id: String   = row.get(0);
                 let tap_name: String = row.get(1);
                 let fc_pid: i32      = row.get(2);
-                let cpu_core: i32    = row.get(3);
-                let vm_id: String    = row.get(4);
+                let vm_id: String    = row.get(3);
 
                 reg.insert(svc_id, deprovision::VmHandle {
                     tap_name,
                     fc_pid:      fc_pid as u32,
-                    cpu_core:    cpu_core as u32,
                     vm_id,
                     use_jailer:  cfg.use_jailer,
                     chroot_base: cfg.chroot_base.clone(),
@@ -505,7 +506,6 @@ async fn main() -> Result<()> {
                     "UPDATE services SET status = 'stopped', upstream_addr = NULL \
                      WHERE engine = 'metal' AND status = 'running' \
                        AND node_id = $1 AND deleted_at IS NULL \
-                       AND run_mode = 'serverless' \
                        AND COALESCE(last_request_at, created_at) \
                            < NOW() - interval '1 second' * $2 \
                      RETURNING id::text, slug",
@@ -733,7 +733,7 @@ async fn main() -> Result<()> {
                 for (service_id, handle, _) in crashed {
                     provision::release_tap_index(&handle.tap_name).await;
                     deprovision::metal(
-                        &service_id, handle, cfg_crash.physical_cores, &cfg_crash.artifact_dir,
+                        &service_id, handle, &cfg_crash.artifact_dir,
                     ).await;
                 }
             }
@@ -741,92 +741,9 @@ async fn main() -> Result<()> {
     }
 
     // ── Metal usage reporter ─────────────────────────────────────────────────
-    // Publishes MetalUsageEvent for each running Metal service on this node.
-    // Consumed by the API billing aggregator.
-    //
-    // Failed publishes (NATS outage) are buffered in-memory and retried on the
-    // next tick. Without this, a 5-minute NATS outage loses 5 billing ticks —
-    // services run for free during the gap.
-    {
-        let pool    = pool.clone();
-        let node_id = cfg.node_id.clone();
-        let nats    = ctx.nats.clone();
-        let usage_interval_secs: u64 = env_or("USAGE_REPORT_INTERVAL_SECS", "60").parse().unwrap_or(60);
-        tokio::spawn(async move {
-            use tokio::time::{Duration, interval};
-            let mut ticker = interval(Duration::from_secs(usage_interval_secs));
-            let mut backlog: Vec<MetalUsageEvent> = Vec::new();
-            loop {
-                ticker.tick().await;
-                let db = match pool.get().await {
-                    Ok(d)  => d,
-                    Err(_) => continue,
-                };
-                let rows = match db.query(
-                    "SELECT id::text, workspace_id::text, vcpu, memory_mb \
-                     FROM services \
-                     WHERE node_id = $1 AND engine = 'metal' AND status = 'running' \
-                       AND deleted_at IS NULL",
-                    &[&node_id],
-                ).await {
-                    Ok(r)  => r,
-                    Err(e) => { tracing::warn!(error = %e, "usage reporter query failed"); continue; }
-                };
-                // Deduplicate: skip services already in the backlog from a
-                // previous failed publish. Without this, a NATS outage causes
-                // duplicate events that overbill on recovery.
-                let backlog_sids: std::collections::HashSet<String> = backlog
-                    .iter()
-                    .map(|e| e.service_id.clone())
-                    .collect();
-                for row in &rows {
-                    let sid: String = row.get::<_, String>("id");
-                    if backlog_sids.contains(&sid) {
-                        continue;
-                    }
-                    backlog.push(MetalUsageEvent {
-                        service_id:    sid,
-                        workspace_id:  row.get::<_, String>("workspace_id"),
-                        duration_secs: usage_interval_secs,
-                        vcpu:          row.get::<_, i32>("vcpu") as u32,
-                        memory_mb:     row.get::<_, i32>("memory_mb") as u32,
-                    });
-                }
-
-                // Flush backlog — retry everything accumulated since the last
-                // successful publish. On success the event is removed; on
-                // failure it stays in the backlog for the next tick.
-                let mut i = 0;
-                while i < backlog.len() {
-                    if let Ok(payload) = serde_json::to_vec(&backlog[i]) {
-                        match nats.publish(SUBJECT_USAGE_METAL, payload.into()).await {
-                            Ok(_)  => { backlog.swap_remove(i); }
-                            Err(_) => { i += 1; } // keep in backlog
-                        }
-                    } else {
-                        backlog.swap_remove(i); // unparseable — drop
-                    }
-                }
-
-                // Safety valve: if the backlog grows past 10k events (NATS down
-                // for hours), drop the oldest half to prevent OOM. We lose
-                // billing accuracy but keep the daemon alive.
-                const METAL_BACKLOG_MAX: usize = 10_000;
-                if backlog.len() > METAL_BACKLOG_MAX {
-                    tracing::error!(
-                        backlog = backlog.len(),
-                        "usage: metal backlog exceeded {} — dropping oldest half",
-                        METAL_BACKLOG_MAX,
-                    );
-                    backlog.drain(..backlog.len() / 2);
-                }
-
-                if !backlog.is_empty() {
-                    tracing::warn!(backlog = backlog.len(), "usage: metal events buffered (NATS unreachable)");
-                }
-            }
-        });
-    }
+    // Metal usage reporting has moved to the proxy (per-invocation billing).
+    // The daemon no longer reports time-based Metal usage. The proxy counts
+    // requests per slug and publishes MetalUsageEvent with invocation counts.
 
     // ── Liquid usage reporter ─────────────────────────────────────────────
     // Drains invocation counters from the liquid registry and publishes
@@ -1001,7 +918,7 @@ async fn main() -> Result<()> {
                     if eng == "metal" {
                         let handle = registry.lock().await.remove(&sid);
                         if let Some(h) = handle {
-                            deprovision::metal(&sid, h, cfg.physical_cores, &cfg.artifact_dir).await;
+                            deprovision::metal(&sid, h, &cfg.artifact_dir).await;
                         }
                     } else if eng == "liquid" {
                         liquid_registry.lock().await.remove(&sid);
@@ -1058,6 +975,19 @@ async fn main() -> Result<()> {
         })
         .await
         .context("create deprovision consumer")?;
+
+    // ── Wake consumer (snapshot restore on request) ────────────────────────
+    let wake_consumer = js
+        .get_stream(STREAM_NAME).await.context("get stream")?
+        .create_consumer(async_nats::jetstream::consumer::pull::Config {
+            durable_name:   Some(CONSUMER_WAKE.to_string()),
+            filter_subject: SUBJECT_WAKE.to_string(),
+            ack_wait: std::time::Duration::from_secs(30),
+            max_deliver: 3,
+            ..Default::default()
+        })
+        .await
+        .context("create wake consumer")?;
 
     // ── Consumer lag monitor ─────────────────────────────────────────────────
     // Periodically check JetStream consumer lag and warn when it exceeds 50
@@ -1151,6 +1081,7 @@ async fn main() -> Result<()> {
 
     let mut provision_msgs   = provision_consumer.messages().await.context("subscribe provision")?;
     let mut deprovision_msgs = deprovision_consumer.messages().await.context("subscribe deprovision")?;
+    let mut wake_msgs        = wake_consumer.messages().await.context("subscribe wake")?;
 
     tracing::info!("daemon ready");
 
@@ -1305,6 +1236,61 @@ async fn main() -> Result<()> {
                 });
             }
 
+            // ── Wake message (snapshot restore) ──────────────────────────
+            Some(msg_result) = wake_msgs.next() => {
+                let msg = match msg_result {
+                    Err(e) => { tracing::error!(error = %e, "NATS wake error"); continue; }
+                    Ok(m)  => m,
+                };
+
+                let event: WakeEvent = match serde_json::from_slice(&msg.payload) {
+                    Err(e) => {
+                        tracing::error!(error = %e, "wake parse error — ACKing");
+                        msg.ack().await.ok();
+                        continue;
+                    }
+                    Ok(e) => e,
+                };
+
+                // Dedup: if the service is already running (another wake beat us),
+                // or is already being restored, ACK and skip.
+                if registry.lock().await.contains_key(&event.service_id) {
+                    tracing::debug!(service_id = event.service_id, "wake: already running — skipping");
+                    msg.ack().await.ok();
+                    continue;
+                }
+
+                tracing::info!(service_id = event.service_id, slug = event.slug, "wake event — restoring from snapshot");
+
+                let ctx     = ctx.clone();
+                let cfg     = cfg.clone();
+                let registry = registry.clone();
+                let sem     = sem.clone();
+
+                tasks.spawn(async move {
+                    let _permit = match sem.acquire().await {
+                        Ok(p) => p,
+                        Err(_) => { msg.ack().await.ok(); return; }
+                    };
+
+                    let result = wake_from_snapshot(&ctx, &cfg, &event, &registry).await;
+
+                    match result {
+                        Ok(()) => {
+                            tracing::info!(service_id = event.service_id, "wake complete");
+                            msg.ack().await.ok();
+                        }
+                        Err(e) => {
+                            tracing::error!(service_id = event.service_id, error = %e, "wake failed");
+                            // NAK with backoff for retry
+                            let attempt = msg.info().map(|i| i.delivered as u64).unwrap_or(1);
+                            let backoff = std::time::Duration::from_secs(5 * attempt);
+                            msg.ack_with(AckKind::Nak(Some(backoff))).await.ok();
+                        }
+                    }
+                });
+            }
+
             // ── Deprovision message ───────────────────────────────────────
             Some(msg_result) = deprovision_msgs.next() => {
                 let msg = match msg_result {
@@ -1338,7 +1324,6 @@ async fn main() -> Result<()> {
                                     deprovision::metal(
                                         &event.service_id,
                                         h,
-                                        cfg.physical_cores,
                                         &cfg.artifact_dir,
                                     )
                                     .await;
@@ -1450,12 +1435,148 @@ async fn main() -> Result<()> {
             }
             for (service_id, handle) in vms {
                 provision::release_tap_index(&handle.tap_name).await;
-                deprovision::metal(&service_id, handle, cfg.physical_cores, &cfg.artifact_dir).await;
+                deprovision::metal(&service_id, handle, &cfg.artifact_dir).await;
             }
             tracing::info!("all VMs stopped");
         }
     }
 
     tracing::info!("daemon exited cleanly");
+    Ok(())
+}
+
+/// Restore a Metal service from a Firecracker snapshot.
+///
+/// Called when the daemon receives a WakeEvent (proxy detected a cold
+/// service with a snapshot). Downloads snapshot from S3, creates TAP,
+/// spawns Firecracker, loads snapshot, runs a quick health check, then
+/// publishes RouteUpdatedEvent so the proxy can forward the held request.
+#[cfg(target_os = "linux")]
+async fn wake_from_snapshot(
+    ctx: &Arc<ProvisionCtx>,
+    cfg: &Arc<ProvisionConfig>,
+    event: &WakeEvent,
+    registry: &deprovision::VmRegistry,
+) -> anyhow::Result<()> {
+    use common::networking;
+    use daemon::{ebpf, netlink, snapshot, tc, cgroup};
+    use uuid::Uuid;
+
+    // Download snapshot from S3 (or use local cache)
+    let snap = snapshot::ensure_snapshot(
+        &ctx.s3, &ctx.bucket, &event.snapshot_key, &cfg.artifact_dir, &event.service_id,
+    ).await.context("downloading snapshot")?;
+
+    // Allocate TAP + network identity
+    let tap_idx = provision::allocate_tap_index().await?;
+    let tap     = networking::tap_name(tap_idx);
+    let ip      = networking::guest_ip(tap_idx).context("TAP index pool exhausted")?;
+    let vm_id   = Uuid::now_v7();
+
+    // Read the port from the DB so we can build upstream_addr.
+    let port: i32 = {
+        let db = ctx.pool.get().await.context("db pool")?;
+        let svc_id: Uuid = event.service_id.parse().context("invalid service_id")?;
+        let row = db.query_one(
+            "SELECT port FROM services WHERE id = $1",
+            &[&svc_id],
+        ).await.context("reading service port")?;
+        row.get("port")
+    };
+    let upstream_addr = format!("{}:{}", ip, port);
+
+    let serial_log = format!("{}/{}/serial.log", cfg.artifact_dir, event.service_id);
+
+    // Create TAP, attach to bridge, apply isolation
+    netlink::create_tap(&tap).context("create TAP for wake")?;
+
+    let cleanup_on_err = || async {
+        provision::release_tap_index(&tap).await;
+        let _ = netlink::delete_tap(&tap).await;
+    };
+
+    if let Err(e) = async {
+        netlink::attach_to_bridge(&tap, &cfg.bridge).await.context("attach TAP")?;
+        tc::apply(&tap, &common::events::ResourceQuota::default()).await.context("tc")?;
+        ebpf::attach(&tap, &event.service_id).context("eBPF")?;
+
+        // Spawn Firecracker and load snapshot (VM resumes immediately)
+        let (fc_pid, _sock) = snapshot::restore_vm(
+            &cfg.fc_bin, &cfg.sock_dir, &vm_id.to_string(), &snap, &serial_log,
+        ).await.context("restoring VM from snapshot")?;
+
+        // Apply cgroup limits (memory + IO)
+        cgroup::apply(&event.service_id, fc_pid, &cfg.rootfs_dev, &common::events::ResourceQuota::default(), 128)
+            .await
+            .context("cgroup limits")?;
+
+        // Quick health check — app was already running at snapshot time,
+        // should respond almost immediately after restore.
+        // Use a TCP connect probe (not HTTP) to avoid pulling in reqwest.
+        let probe_timeout = std::time::Duration::from_secs(5);
+        if tokio::time::timeout(probe_timeout, async {
+            loop {
+                if tokio::net::TcpStream::connect(&upstream_addr).await.is_ok() {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }).await.is_err() {
+            anyhow::bail!("wake health check timed out after {}s — app not listening on {upstream_addr}", probe_timeout.as_secs());
+        }
+
+        // Register in-memory for future deprovision
+        registry.lock().await.insert(
+            event.service_id.clone(),
+            deprovision::VmHandle {
+                tap_name:    tap.clone(),
+                fc_pid,
+                vm_id:       vm_id.to_string(),
+                use_jailer:  cfg.use_jailer,
+                chroot_base: cfg.chroot_base.clone(),
+            },
+        );
+
+        // Update DB
+        let db = ctx.pool.get().await.context("db pool")?;
+        let svc_id: Uuid = event.service_id.parse()?;
+        db.execute(
+            "UPDATE services SET status = 'running', upstream_addr = $1, node_id = $2 WHERE id = $3",
+            &[&Some(&upstream_addr), &cfg.node_id, &svc_id],
+        ).await.context("updating service status to running")?;
+
+        // Publish RouteUpdatedEvent — proxy unblocks the held request
+        let payload = serde_json::to_vec(&RouteUpdatedEvent {
+            slug:          event.slug.clone(),
+            upstream_addr: upstream_addr.clone(),
+        })?;
+        ctx.nats.publish(SUBJECT_ROUTE_UPDATED, payload.into()).await.ok();
+
+        tracing::info!(
+            service_id = event.service_id,
+            slug = event.slug,
+            %upstream_addr,
+            fc_pid,
+            "service woke from snapshot"
+        );
+
+        Ok::<_, anyhow::Error>(())
+    }.await {
+        cleanup_on_err().await;
+        return Err(e);
+    }
+
+    Ok(())
+}
+
+/// Non-Linux stub — wake is a no-op outside Linux.
+#[cfg(not(target_os = "linux"))]
+async fn wake_from_snapshot(
+    _ctx: &Arc<ProvisionCtx>,
+    _cfg: &Arc<ProvisionConfig>,
+    _event: &WakeEvent,
+    _registry: &deprovision::VmRegistry,
+) -> anyhow::Result<()> {
+    tracing::warn!("wake_from_snapshot called on non-Linux — no-op");
     Ok(())
 }

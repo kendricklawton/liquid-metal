@@ -1,6 +1,6 @@
-# Liquid Metal Daemon — Metal tier (Firecracker)
+# Liquid Metal Daemon — Metal tier (Firecracker serverless)
 # Beta topology: single instance on node-a-01 (node_class = "metal").
-# Consumes NATS ProvisionEvent → boots Firecracker VMs via KVM.
+# Consumes NATS events: ProvisionEvent (build rootfs + snapshot), WakeEvent (restore from snapshot).
 #
 # NOTE: raw_exec driver requires privileged access on these nodes
 # because the daemon creates TAP devices, attaches eBPF programs,
@@ -62,17 +62,21 @@ EOF
       }
 
       env {
-        NODE_ENGINE    = "metal"
-        NODE_ID        = "${node.unique.name}" # node-a-01
-        ARTIFACT_DIR   = "/var/lib/liquid-metal/artifacts"
-        FC_BIN         = "/usr/local/bin/firecracker"
-        FC_KERNEL_PATH = "/opt/firecracker/vmlinux"
-        FC_SOCK_DIR    = "/run/firecracker"
-        BRIDGE         = "br0"
-        USE_JAILER     = "true"
-        JAILER_BIN     = "/usr/local/bin/jailer"
-        HEALTH_PORT    = "${NOMAD_PORT_health}"
-        RUST_LOG       = "info"
+        NODE_ENGINE        = "metal"
+        NODE_ID            = "${node.unique.name}" # node-a-01
+        ARTIFACT_DIR       = "/var/lib/liquid-metal/artifacts"
+        FC_BIN             = "/usr/local/bin/firecracker"
+        FC_KERNEL_PATH     = "/opt/firecracker/vmlinux"
+        FC_SOCK_DIR        = "/run/firecracker"
+        BRIDGE             = "br0"
+        BASE_IMAGE_KEY     = "templates/base-alpine-v1.ext4"
+        USE_JAILER         = "true"
+        JAILER_BIN         = "/usr/local/bin/jailer"
+        JAILER_CHROOT_BASE = "/srv/jailer"
+        JAILER_UID         = "10000"
+        JAILER_GID         = "10000"
+        HEALTH_PORT        = "${NOMAD_PORT_health}"
+        RUST_LOG           = "info"
         OTEL_EXPORTER_OTLP_ENDPOINT = "${OTEL_ENDPOINT}"
       }
 

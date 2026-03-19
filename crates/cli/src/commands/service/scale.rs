@@ -1,26 +1,11 @@
-use anyhow::Result;
+// Scale command removed — all services are serverless.
+// The run_mode concept (serverless vs always-on) no longer exists.
 
-use common::contract::{ScaleRequest, ScaleResponse};
+use anyhow::{Result, bail};
 
+use crate::output::OutputMode;
 use crate::config::Config;
-use crate::context::CommandContext;
-use crate::output::{OutputMode, confirm, print_ok};
 
-pub async fn run(config: &Config, service_ref: &str, mode: &str, skip_confirm: bool, output: OutputMode) -> Result<()> {
-    let ctx = CommandContext::new(config, output)?;
-    let service_id = ctx.client.resolve_service(service_ref).await?;
-
-    if !skip_confirm {
-        confirm(output, &format!("Change \"{}\" to {} mode?", service_ref, mode))?;
-    }
-
-    let resp: ScaleResponse = ctx.client
-        .post(
-            &format!("/services/{}/scale", service_id),
-            &ScaleRequest { mode: mode.to_string() },
-        )
-        .await?;
-
-    print_ok(output, &format!("Service \"{}\" set to {} mode.", resp.slug, resp.run_mode));
-    Ok(())
+pub async fn run(_config: &Config, _service_ref: &str, _mode: &str, _skip_confirm: bool, _output: OutputMode) -> Result<()> {
+    bail!("The scale command has been removed. All services are serverless and scale to zero automatically.")
 }

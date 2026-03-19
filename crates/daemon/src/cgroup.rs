@@ -74,6 +74,19 @@ pub async fn apply(
         tracing::debug!(service_id, pids_max = *PIDS_MAX, "pids.max applied");
     }
 
+    // ── cpu.weight ────────────────────────────────────────────────────────
+    // CFS fair-share weight. All VMs get 100 (default) — equal CPU share when
+    // cores are contended. The kernel timeslices across all active VMs fairly.
+    // No VM can starve another. Override via CGROUP_CPU_WEIGHT if needed.
+    let cpu_weight: u32 = common::config::env_or("CGROUP_CPU_WEIGHT", "100")
+        .parse()
+        .unwrap_or(100);
+    if let Err(e) = fs::write(format!("{}/cpu.weight", cg), cpu_weight.to_string()).await {
+        tracing::warn!(service_id, error = %e, "failed to set cpu.weight");
+    } else {
+        tracing::debug!(service_id, cpu_weight, "cpu.weight applied");
+    }
+
     // ── io.max ─────────────────────────────────────────────────────────────
     if let Some(io_max) = build_io_max(rootfs_dev, quota) {
         fs::write(format!("{}/io.max", cg), &io_max)

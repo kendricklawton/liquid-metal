@@ -6,6 +6,14 @@
 /// Maximum supported TAP index: 63 subnets × 63 hosts = 3969 concurrent VMs.
 pub const MAX_TAP_INDEX: u32 = 63 * 63 - 1; // 3968
 
+/// br0 bridge IP — the default gateway for all guest VMs.
+/// Must match the address assigned to br0 in `metal:setup` / cloud-init.
+pub const GATEWAY: &str = "172.16.0.1";
+
+/// Netmask for guest IP configuration (kernel boot_args `ip=` parameter).
+/// /16 covers the 172.16.0.0–172.16.255.255 range used by `guest_ip()`.
+pub const NETMASK: &str = "255.255.0.0";
+
 /// Derive the guest IP address for a TAP interface index.
 ///
 /// Scheme: `172.16.{tap_idx/63}.{(tap_idx%63)*4+2}`

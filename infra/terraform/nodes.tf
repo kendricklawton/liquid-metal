@@ -16,6 +16,7 @@ resource "tailscale_tailnet_key" "gateway_b" {
 }
 
 resource "tailscale_tailnet_key" "node_metal" {
+  count         = var.enable_metal ? 1 : 0
   reusable      = false
   ephemeral     = false
   preauthorized = true
@@ -24,6 +25,7 @@ resource "tailscale_tailnet_key" "node_metal" {
 }
 
 resource "tailscale_tailnet_key" "node_liquid" {
+  count         = var.enable_liquid ? 1 : 0
   reusable      = false
   ephemeral     = false
   preauthorized = true
@@ -127,13 +129,14 @@ resource "vultr_instance" "gateway_b" {
 resource "vultr_bare_metal" "node_metal" {
   label       = "${local.prefix}-node-a-01"
   region      = var.region
-  plan        = var.bare_metal_plan
+  count       = var.enable_metal ? 1 : 0
+  plan        = var.bare_metal_plan_metal
   os_id       = var.os_id
   hostname    = "${local.prefix}-node-a-01"
   ssh_key_ids = [var.ssh_key_id]
 
   user_data = templatefile("${path.module}/templates/cloud-init-metal.yaml", {
-    tailscale_auth_key = tailscale_tailnet_key.node_metal.key
+    tailscale_auth_key = tailscale_tailnet_key.node_metal[0].key
     hostname           = "${local.prefix}-node-a-01"
     node_id            = "node-a-01"
     nomad_node_class   = "metal"
@@ -149,15 +152,16 @@ resource "vultr_bare_metal" "node_metal" {
 # ── Liquid tier ───────────────────────────────────────────────────────────────
 
 resource "vultr_bare_metal" "node_liquid" {
+  count       = var.enable_liquid ? 1 : 0
   label       = "${local.prefix}-node-b-01"
   region      = var.region
-  plan        = var.bare_metal_plan
+  plan        = var.bare_metal_plan_liquid
   os_id       = var.os_id
   hostname    = "${local.prefix}-node-b-01"
   ssh_key_ids = [var.ssh_key_id]
 
   user_data = templatefile("${path.module}/templates/cloud-init-liquid.yaml", {
-    tailscale_auth_key = tailscale_tailnet_key.node_liquid.key
+    tailscale_auth_key = tailscale_tailnet_key.node_liquid[0].key
     hostname           = "${local.prefix}-node-b-01"
     node_id            = "node-b-01"
     nomad_node_class   = "liquid"

@@ -5,9 +5,12 @@ region = "ord"        # Vultr region slug (Chicago)
 # ── Vultr ──────────────────────────────────────────────────────────────────────
 vultr_api_key   = "your-vultr-api-key"
 ssh_key_id      = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-bare_metal_plan = "vbm-4c-32gb"        # Bare metal plan for compute nodes
-vps_plan        = "vc2-2c-4gb"         # VPS plan for NAT gateway
-os_id           = 2136                 # Ubuntu 24.04 LTS
+bare_metal_plan_metal  = "vbm-6c-32gb"  # E-2286G for Metal (Firecracker) node
+bare_metal_plan_liquid = "vbm-4c-32gb"  # E3-1270 for Liquid (Wasmtime) node
+enable_metal           = true           # Set false to skip Metal node (test Liquid only)
+enable_liquid          = true           # Set false to skip Liquid node (test Metal only)
+vps_plan               = "vc2-2c-4gb"   # VPS plan for NAT gateway
+os_id                  = 2136           # Ubuntu 24.04 LTS
 
 # ── Cloudflare ─────────────────────────────────────────────────────────────────
 cloudflare_api_token = "your-cloudflare-api-token"

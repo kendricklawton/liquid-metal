@@ -17,4 +17,8 @@ pub mod jailer;
 #[cfg(target_os = "linux")]
 pub mod netlink;
 #[cfg(target_os = "linux")]
+pub mod rootfs;
+#[cfg(target_os = "linux")]
+pub mod snapshot;
+#[cfg(target_os = "linux")]
 pub mod tc;
