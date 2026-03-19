@@ -23,6 +23,10 @@
       darkMode: 'class',
       theme: {
         extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['JetBrains Mono', 'ui-monospace', 'Menlo', 'monospace'],
+          },
           borderRadius: {
             DEFAULT: '0', sm: '0', md: '0', lg: '0',
             xl: '0', '2xl': '0', '3xl': '0', full: '0'
@@ -54,10 +58,13 @@
   <script defer src="/static/js/alpine.min.js"></script>
   <script src="/static/js/htmx.min.js"></script>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/app.css">
   {% block head %}{% endblock %}
 </head>
-<body class="bg-zwl-bg dark:bg-zw-bg text-zwl-fg dark:text-zw-fg min-h-screen flex flex-col antialiased font-mono">
+<body class="bg-zwl-bg dark:bg-zw-bg text-zwl-fg dark:text-zw-fg min-h-screen flex flex-col antialiased font-sans">
 
   {% block nav %}
   <nav class="border-b border-zwl-border dark:border-zw-border bg-zwl-bg dark:bg-zw-bg sticky top-0 z-50">
@@ -68,16 +75,16 @@
             Liquid Metal
           </a>
           <div class="hidden md:flex items-center gap-6">
-            <a href="/pricing" class="text-[11px] font-mono font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Plans</a>
-            <a href="/docs" class="text-[11px] font-mono font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Docs</a>
-            <a href="/about" class="text-[11px] font-mono font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">About</a>
+            <a href="/pricing" class="text-xs font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Plans</a>
+            <a href="/docs" class="text-xs font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Docs</a>
+            <a href="/about" class="text-xs font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">About</a>
           </div>
         </div>
         <div class="flex items-center gap-3">
-          <a href="/auth/login" class="text-[11px] font-mono font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">
+          <a href="/auth/login" class="text-xs font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">
             Sign In
           </a>
-          <a href="/auth/login" class="text-[11px] font-mono font-bold uppercase tracking-widest bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg px-4 py-2 hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+          <a href="/auth/login" class="text-xs font-bold uppercase tracking-widest bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg px-4 py-2 hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
             Deploy Now
           </a>
         </div>
@@ -98,12 +105,12 @@
           Liquid Metal
         </a>
         <div class="flex flex-wrap items-center gap-6">
-          <a href="/pricing" class="text-[11px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Plans</a>
-          <a href="/docs" class="text-[11px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Docs</a>
-          <a href="/about" class="text-[11px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">About</a>
-          <a href="/help" class="text-[11px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Help</a>
+          <a href="/pricing" class="text-xs uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Plans</a>
+          <a href="/docs" class="text-xs uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Docs</a>
+          <a href="/about" class="text-xs uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">About</a>
+          <a href="/help" class="text-xs uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors">Help</a>
         </div>
-        <p class="text-[11px] font-mono text-zwl-muted dark:text-zw-muted">&copy; 2026 Liquid Metal</p>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted">&copy; 2026 Liquid Metal</p>
       </div>
     </div>
   </footer>
