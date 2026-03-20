@@ -33,9 +33,9 @@
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
         <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
-          Both are serverless &mdash; scale to zero, wake on request, pay per invocation.<br><br>
-          <strong>Metal</strong> runs your code in a Firecracker microVM restored from snapshot in &lt;15ms. Real Linux kernel, filesystem, networking. Best for workloads needing syscalls, FFI, or native dependencies.<br><br>
-          <strong>Liquid</strong> runs your code as a WebAssembly module in Wasmtime with &lt;1ms cold starts. Sandboxed, no kernel. Best for APIs, webhooks, and data transforms.
+          Two different engines for different workloads.<br><br>
+          <strong>Metal</strong> gives you a dedicated VM on bare metal hardware. Always on, fixed monthly price, real Linux kernel, filesystem, and networking. Best for production APIs, databases, background jobs &mdash; anything that needs a real server.<br><br>
+          <strong>Liquid</strong> is serverless WebAssembly. Scale to zero, wake on request, pay per invocation. Sub-millisecond cold starts. Best for lightweight APIs, webhooks, and data transforms.
         </div>
       </div>
 
@@ -45,7 +45,8 @@
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
         <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
-          Every tier includes 1M free Liquid invocations/month. Metal is billed from the first request (Pro and Team only). Hobby is free with a 5-service limit (Liquid only). Pro ($10/month) and Team ($20/month) include monthly credits and Metal access. Usage: Metal at $0.60/1M invocations + $0.0001/GB-sec compute, Liquid at $0.30/1M invocations. Same rates on every plan.
+          <strong>Metal</strong> VMs are billed at a fixed monthly rate based on dedicated vCPU tier: $17/mo (0.5 vCPU, 2GB RAM), $33/mo (1 vCPU, 4GB RAM), or $66/mo (2 vCPU, 8GB RAM). All tiers include NVMe storage and dedicated CPU &mdash; no shared resources.<br><br>
+          <strong>Liquid</strong> is billed per invocation at $0.30 per 1M requests. Every account gets 1M free Liquid invocations per month. No credit card required to start.
         </div>
       </div>
 
@@ -55,7 +56,7 @@
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
         <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
-          Yes. The Hobby tier is free forever with up to 5 Liquid services and 1M invocations/month. Services scale to zero after 5 minutes of inactivity. No credit card required.
+          Yes. Every account gets 1M free Liquid (Wasm) invocations per month. Liquid services scale to zero when idle. No credit card required. Metal VMs start at $17/mo.
         </div>
       </div>
 
@@ -95,7 +96,7 @@
     <div>
       <p class="lm-label mb-2">// contact</p>
       <h2 class="text-xl font-black tracking-tight mb-1">Still need help?</h2>
-      <p class="text-xs text-zwl-muted dark:text-zw-muted">Reach out and we'll get back to you.</p>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted">It's one person on the other end. I read every email.</p>
     </div>
     <a href="mailto:support@liquidmetal.dev" class="shrink-0 inline-flex items-center px-8 py-3 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-[11px] font-mono font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
       Email Support

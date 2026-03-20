@@ -438,8 +438,8 @@ Each environment gets its own backup bucket. Backup scripts use path prefixes to
 
 ```
 gs://liquid-metal-backups-{env}/
-  postgres/          # pg_dump snapshots
-  s3-artifacts/      # rclone sync of Vultr Object Storage
+  postgres/          # pg_dump snapshots (from node-db)
+  wasabi-artifacts/  # rclone sync of Wasabi object storage
   victoriametrics/   # VM snapshots
   victorialogs/      # VL tar archives
   nomad/             # Nomad state exports (per node)
@@ -537,7 +537,7 @@ All GCP usage is scoped to one shared project. Each SA has minimal permissions:
 | `lm-tfstate-dev` | Terraform state (dev) | `storage.objectAdmin` on `liquid-metal-tfstate-dev` bucket | `keys/tfstate-dev.json` → `GOOGLE_APPLICATION_CREDENTIALS` |
 | `lm-tfstate-prod` | Terraform state (prod) | `storage.objectAdmin` on `liquid-metal-tfstate-prod` bucket | `keys/tfstate-prod.json` or CI secret |
 | `lm-backups-dev` | DR backups (dev) | `storage.objectUser` on `liquid-metal-backups-dev` bucket | `keys/backups-dev.json` |
-| `lm-backups-prod` | DR backups (prod) | `storage.objectUser` on `liquid-metal-backups-prod` bucket | NAT VPS `/etc/liquid-metal/gcs-backups.json` |
+| `lm-backups-prod` | DR backups (prod) | `storage.objectUser` on `liquid-metal-backups-prod` bucket | gateway node `/etc/liquid-metal/gcs-backups.json` |
 
 > **Why two env vars?** `GOOGLE_APPLICATION_CREDENTIALS` is the standard GCP env var — Terraform, `gsutil`, and `gcloud` all read it automatically. The API uses `GCP_KMS_CREDENTIALS` instead so both can coexist in the same `.env` without conflicting. In production (Nomad), there's no conflict — each task has its own isolated env.
 
@@ -570,7 +570,43 @@ terraform plan
 terraform apply
 ```
 
-This creates: Gateway-A / NAT VPS (HAProxy, Pingora, Nomad server, NATS, PgBouncer, API, VictoriaMetrics, VictoriaLogs, Grafana), Gateway-B / standby (HAProxy, Pingora, PgBouncer, failover script), 2 bare metal nodes (Nomad clients, Promtail, node_exporter), Managed Postgres, Object Storage, Block Storage, GCS backup buckets, Cloudflare DNS records, Vultr floating IP, and Tailscale pre-auth keys.
+This creates: 4× Hivelocity dedicated servers (gateway, node-metal, node-liquid, node-db), Hivelocity private VLAN attached to all 4 nodes, Cloudflare DNS records (wildcard + apex → gateway public IP), Tailscale pre-auth keys for operator access, and GCS backup buckets.
+
+**Post-provisioning (manual one-time steps):**
+1. Enable Wasabi object storage from the Hivelocity portal — $5.99/TB/mo, S3-compatible
+2. Verify private VLAN connectivity: `ssh gateway ping <node-db-vlan-ip>`
+3. Initialize Postgres on node-db (see [Postgres Setup](#postgres-setup) below)
+4. Run initial migrations: `nomad job run infra/nomad/migrate.nomad.hcl`
+
+### Postgres Setup
+
+Postgres runs self-hosted on node-db. First-time setup:
+
+```bash
+ssh node-db
+
+# Install Postgres 16
+apt install -y postgresql-16 pgbouncer
+
+# Create database and app role
+sudo -u postgres psql <<'EOF'
+CREATE DATABASE liquidmetal;
+CREATE ROLE lm_app LOGIN PASSWORD 'changeme';
+GRANT ALL PRIVILEGES ON DATABASE liquidmetal TO lm_app;
+EOF
+
+# Configure PgBouncer (transaction mode, VLAN-only listen)
+# /etc/pgbouncer/pgbouncer.ini
+#   listen_addr = <vlan-ip>
+#   listen_port = 6432
+#   pool_mode = transaction
+
+# Restrict Postgres to VLAN interface only
+# /etc/postgresql/16/main/postgresql.conf
+#   listen_addresses = '<vlan-ip>'
+```
+
+Backup cron runs daily at 03:00 UTC — `pg_dump | gzip | gsutil cp` to GCS backup bucket.
 
 ### Observability Access (Tailscale only)
 
@@ -582,13 +618,14 @@ This creates: Gateway-A / NAT VPS (HAProxy, Pingora, Nomad server, NATS, PgBounc
 
 ### Backup Schedule (daily, UTC)
 
-| Time  | Backup                                                 |
-|-------|--------------------------------------------------------|
-| 02:00 | certbot renewal check                                  |
-| 03:00 | Postgres pg_dump → GCS, Nomad state → GCS (per node)  |
-| 03:30 | VictoriaMetrics snapshot → GCS                         |
-| 04:00 | VictoriaLogs tar → GCS                                 |
-| 04:30 | S3 artifacts rclone sync → GCS                         |
+| Time  | Backup                                                      |
+|-------|-------------------------------------------------------------|
+| 02:00 | certbot renewal check                                       |
+| 03:00 | Postgres pg_dump → GCS (runs on node-db)                   |
+| 03:00 | Nomad state → GCS (per node)                               |
+| 03:30 | VictoriaMetrics snapshot → GCS                              |
+| 04:00 | VictoriaLogs tar → GCS                                      |
+| 04:30 | Wasabi artifacts rclone sync → GCS                          |
 
 ---
 

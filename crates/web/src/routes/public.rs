@@ -12,11 +12,11 @@ pub async fn splash() -> Result<impl IntoResponse, WebError> {
 }
 
 #[derive(Template)]
-#[template(path = "public/pricing.html")]
-pub struct PricingTemplate;
+#[template(path = "public/plans.html")]
+pub struct PlansTemplate;
 
-pub async fn pricing() -> Result<impl IntoResponse, WebError> {
-    Ok(Html(PricingTemplate.render()?))
+pub async fn plans() -> Result<impl IntoResponse, WebError> {
+    Ok(Html(PlansTemplate.render()?))
 }
 
 #[derive(Template)]
@@ -41,4 +41,12 @@ pub struct HelpTemplate;
 
 pub async fn help() -> Result<impl IntoResponse, WebError> {
     Ok(Html(HelpTemplate.render()?))
+}
+
+#[derive(Template)]
+#[template(path = "public/templates.html")]
+pub struct TemplatesTemplate;
+
+pub async fn templates() -> Result<impl IntoResponse, WebError> {
+    Ok(Html(TemplatesTemplate.render()?))
 }

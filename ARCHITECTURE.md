@@ -1,94 +1,106 @@
 # Liquid Metal — Architecture
 
-> **Status**: Infrastructure provisioned and operational.
+> **Status**: Infrastructure planned — migrating to Hivelocity Dallas (DAL1).
 
 ---
 
 ## Infrastructure Stack
 
-All infrastructure runs in **Vultr Chicago (ORD)**. One vendor, one region, sub-millisecond between every layer. Backups replicate to GCP (GCS) for cross-cloud disaster recovery.
+All infrastructure runs in **Hivelocity Dallas (DAL1)**. Four dedicated bare metal nodes on a private VLAN — no shared resources, no managed services. Backups replicate to GCP (GCS) for cross-cloud disaster recovery.
+
+### Node Inventory
+
+| Node | Hardware | Cost | Role |
+|------|----------|------|------|
+| **gateway** | E-2136 3.3GHz, 6c/12t, 16GB RAM, 480GB SSD, 20TB/1Gbps | $68/mo | Public ingress, API, NATS, observability |
+| **node-liquid** | E-2136 3.3GHz, 6c/12t, 16GB RAM, 480GB SSD, 20TB/1Gbps | $68/mo | Wasmtime/WASI execution |
+| **node-db** | E-2136 3.3GHz, 6c/12t, 16GB RAM, 480GB SSD, 20TB/1Gbps | $68/mo | Postgres + PgBouncer |
+| **node-metal** | EPYC 7452 2.35GHz, 32c/64t, 384GB RAM, 1TB NVMe, 20TB/10Gbps | $215/mo | Firecracker microVMs — tenant Metal workloads |
+
+**Total: $419/mo** — fully self-hosted, one provider, one bill, one portal.
+
+### Service Layer
+
 | Layer                 | Technology                                          | Notes                                                                                                |
 |-----------------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| **NAT VPS**           | Vultr VPS — Chicago                                 | Holds public IP permanently, HAProxy + Nomad server + NATS + observability stack                     |
-| **Compute (Metal)**   | Vultr Bare Metal — Chicago                          | node-a-01 — Firecracker microVMs, KVM isolation                                                      |
-| **Compute (Liquid)**  | Vultr Bare Metal — Chicago                          | node-b-01 — Wasmtime/WASI execution                                                                  |
-| **Proxy**             | Pingora (Rust) on NAT VPS                           | Slug → upstream routing, :8443 (HAProxy forwards to localhost:8443)                                  |
-| **Load balancer**     | HAProxy on NAT VPS                                  | TLS termination (Let's Encrypt), rate limiting, health-checks, :80/:443                              |
-| **Private mesh**      | Tailscale                                           | Official Tailscale — VPS + both bare metal nodes                                                     |
-| **API**               | Axum (Rust), :7070                                  | Single instance on NAT VPS                                                                           |
+| **Gateway node**      | Hivelocity E-2136 — Dallas DAL1                     | Public IP, HAProxy + Pingora + API + NATS + observability                                            |
+| **Compute (Metal)**   | Hivelocity EPYC 7452 — Dallas DAL1                  | node-metal — Firecracker microVMs, KVM isolation, 30 sellable physical cores                         |
+| **Compute (Liquid)**  | Hivelocity E-2136 — Dallas DAL1                     | node-liquid — Wasmtime/WASI execution                                                                |
+| **Database**          | Hivelocity E-2136 — Dallas DAL1                     | node-db — self-hosted Postgres 16 + PgBouncer (:6432)                                               |
+| **Proxy**             | Pingora (Rust) on gateway node                      | Slug → upstream routing, :8443 (HAProxy forwards to localhost:8443)                                  |
+| **Load balancer**     | HAProxy on gateway node                             | TLS termination (Let's Encrypt), rate limiting, health-checks, :80/:443                              |
+| **Internal network**  | Hivelocity private VLAN                             | Unmetered internal traffic — DB, NATS, daemon ↔ API all on VLAN                                     |
+| **Ops access**        | Tailscale                                           | SSH access to all nodes from operator laptops — no public port 22                                    |
+| **API**               | Axum (Rust), :7070                                  | Single instance on gateway node                                                                      |
 | **Web**               | Axum + Askama + HTMX (Rust), :3000                  | Dashboard — server-rendered HTML, OIDC browser auth                                                  |
 | **Daemon**            | NATS consumer (Rust)                                | Each node owns its engine — Metal runs Firecracker, Liquid runs Wasmtime                             |
 | **CLI**               | `flux` binary (Rust)                                | auth, service (deploy/stop/restart/delete/logs/env/domains/scale/rollback), init, billing, workspace, project, invite |
-| **Event bus**         | NATS JetStream                                      | Single server on NAT VPS, JetStream persistence to disk                                              |
-| **Database**          | Vultr Managed Postgres — Chicago                    | Managed HA + PgBouncer connection pooler on NAT VPS (:6432)                                          |
-| **Artifact store**    | Vultr Object Storage — Chicago                      | S3-compatible, rootfs images + .wasm binaries                                                        |
-| **DNS**               | Cloudflare                                          | Wildcard + apex → NAT VPS public IP                                                                  |
+| **Event bus**         | NATS JetStream                                      | Single server on gateway node, JetStream persistence to disk                                         |
+| **Artifact store**    | Wasabi Object Storage (via Hivelocity portal)       | S3-compatible, $5.99/TB/mo — rootfs images + .wasm binaries                                         |
+| **DNS**               | Cloudflare                                          | Wildcard + apex → gateway node public IP                                                             |
 | **TLS**               | Let's Encrypt (certbot + Cloudflare DNS-01)         | Wildcard cert on HAProxy, auto-renewed via cron                                                      |
 | **eBPF isolation**    | Aya TC classifier per tap{n}                        | Tenant isolation at kernel level, no Cilium daemon                                                   |
 | **Observability**     | VictoriaMetrics + VictoriaLogs + Grafana            | Metrics scraping (:8428), log aggregation (:9428), dashboards (:3001)                                |
 | **Log shipping**      | Promtail on each compute node                       | Tails Nomad allocation logs + systemd journal → VictoriaLogs                                         |
 | **Node metrics**      | node_exporter on each compute node                  | Hardware metrics (:9100) scraped by VictoriaMetrics                                                  |
-| **Connection pooling**| PgBouncer on NAT VPS                                | Transaction-mode pooler (:6432), all services connect here                                           |
-| **Backups**           | GCS (5 buckets) + rclone                            | Postgres, VictoriaMetrics, VictoriaLogs, Nomad, S3 artifacts → GCP daily                             |
-| **Infra provisioning**| Terraform (Vultr + Cloudflare + Tailscale + Google) | Everything declared as code in `infra/terraform/`                                                    |
-| **Process scheduling**| Nomad (HashiCorp)                                   | Schedules api/proxy on NAT VPS (gateway), daemons on bare metal — no K8s                             |
+| **Connection pooling**| PgBouncer on node-db                                | Transaction-mode pooler (:6432), all services connect here                                           |
+| **Backups**           | GCS (buckets) + pg_dump + rclone                    | Postgres, VictoriaMetrics, VictoriaLogs, Nomad, Wasabi artifacts → GCP daily                        |
+| **Infra provisioning**| Terraform (Hivelocity + Cloudflare + Tailscale + Google) | Everything declared as code in `infra/terraform/`                                               |
+| **Process scheduling**| Nomad (HashiCorp)                                   | Schedules api/proxy on gateway, daemons on compute nodes — no K8s                                   |
 | **CI/CD**             | GitHub Actions                                      | ci.yml (check/test), release.yml (cargo-dist), deploy.yml (Nomad job update)                         |
 ---
 
-## High Availability
+## Topology
 
-### Topology
+### Node Layout
 
 ```
 Internet
     │
-    ▼ DNS: *.domain + domain → Vultr floating IP (reserved IP)
-┌───────────────────────────────────────────────┐
-│  Gateway A (NAT VPS) — primary                │
-│  HAProxy :80/:443 (TCP pass-through for 443)  │
-│  Nomad server + client (node_class=gateway)   │
-│  NATS server (JetStream, single node)         │
-│  PgBouncer :6432 (transaction-mode pooler)    │
-│  API :7070 (single instance)                  │
-│  Pingora :8443 (TLS termination, SNI routing) │
-│  VictoriaMetrics :8428 (metrics)              │
-│  VictoriaLogs :9428 (log aggregation)         │
-│  Grafana :3001 (dashboards + alerting)        │
-│  Block Storage at /mnt/observability (40GB)   │
-└────────────┬──────────────────────────────────┘
-             │ Tailscale mesh (100.x.x.x)
-    ┌────────┼────────┐
-    │        │        │
-  Metal    Liquid   Gateway B
-  tier     tier     (standby)
-    │        │        │
-    ▼        ▼        ▼
-  node-a-01  node-b-01  gateway-b
-  Daemon     Daemon      HAProxy + Pingora
-  Nomad      Nomad       Nomad client
-  Promtail   Promtail    PgBouncer
-  node_exp   node_exp    Failover script
-  KVM+FC     Wasmtime
+    ▼ DNS: *.domain + domain → gateway node public IP
+┌────────────────────────────────────────────────┐
+│  gateway — E-2136 $68/mo — Hivelocity DAL1     │
+│  HAProxy :80/:443 (TCP pass-through for 443)   │
+│  Pingora :8443 (TLS termination, SNI routing)  │
+│  API :7070                                     │
+│  NATS :4222 (JetStream)                        │
+│  Nomad server + client (node_class=gateway)    │
+│  VictoriaMetrics :8428                         │
+│  VictoriaLogs :9428                            │
+│  Grafana :3001                                 │
+└──────────────┬─────────────────────────────────┘
+               │ Hivelocity private VLAN (unmetered)
+    ┌──────────┼──────────────┬──────────────┐
+    │          │              │              │
+  node-metal  node-liquid   node-db
+  EPYC 7452   E-2136        E-2136
+  $215/mo     $68/mo        $68/mo
+    │          │              │
+  Daemon      Daemon        Postgres 16
+  Nomad       Nomad         PgBouncer :6432
+  Promtail    Promtail      Promtail
+  node_exp    node_exp      node_exp
+  KVM+br0     Wasmtime
+  Firecracker
 ```
 
-DNS points at a Vultr floating IP (reserved IP) attached to gateway-a by default. HAProxy on port 443 does TCP pass-through to Pingora on `:8443`, which terminates TLS with SNI-based cert selection — wildcard cert for platform subdomains, per-domain certs for custom domains. Gateway-b is a standby that runs a health check script every 30s; after 3 consecutive failures it calls the Vultr API to move the floating IP to itself. Tailscale carries all internal traffic.
+DNS points at the gateway node's static public IP. HAProxy on `:443` does TCP pass-through to Pingora on `:8443`, which terminates TLS with SNI-based cert selection. All internal traffic (API→NATS, daemon→API, services→Postgres) travels over the Hivelocity private VLAN — unmetered, never touching the public internet. Tailscale is used for operator SSH access only.
 
-### Per-Layer HA Strategy
+### Availability
 
-| Layer                 | Strategy                                                                      | Failover time   |
-|-----------------------|-------------------------------------------------------------------------------|-----------------|
-| **Public IP**         | Vultr floating IP — moves to gateway-b on gateway-a failure                   | ~90s            |
-| **HAProxy**           | Runs on both gateways (TCP pass-through for :443, HTTP proxy for :80)         | ~90s (failover) |
-| **Pingora**           | System job on all gateway nodes (TLS termination, SNI routing)                | ~90s (failover) |
-| **API**               | Single instance on gateway-a (primary)                                        | Manual          |
-| **NATS JetStream**    | Single server on gateway-a with file-backed JetStream persistence             | Manual          |
-| **Managed Postgres**  | Vultr-managed standby + automatic failover                                    | <60s            |
-| **PgBouncer**         | Runs on both gateways, transaction-mode pooling                               | ~90s (failover) |
-| **Object Storage**    | Vultr-managed, redundant by default                                           | N/A             |
-| **Observability**     | VictoriaMetrics + VictoriaLogs + Grafana on gateway-a, block storage persists | Manual          |
-| **Backups**           | Daily crons to GCS (Postgres, metrics, logs, Nomad state, S3 artifacts)       | N/A             |
+This is a single-region, no-redundancy setup appropriate for beta. Each layer has one instance.
 
-> **Note**: Gateway-b provides automatic failover for the ingress path (HAProxy + Pingora + PgBouncer). If gateway-a fails, existing traffic routes through gateway-b within ~90s. However, control-plane services (API, NATS, Nomad server, observability) only run on gateway-a — new deploys and observability are unavailable until gateway-a recovers. Running VMs/Wasm modules continue operating throughout.
+| Layer | Strategy | Recovery |
+|-------|----------|----------|
+| **Public IP** | Static IP on gateway node | Manual DNS update if node replaced |
+| **HAProxy + Pingora** | Single instance on gateway | Restart via Nomad systemd |
+| **API + NATS** | Single instance on gateway | Restart via Nomad |
+| **Postgres** | Single instance on node-db, daily GCS backup | Restore from backup (~RTO 30min) |
+| **Object Storage** | Wasabi — managed redundancy | N/A |
+| **Metal/Liquid daemons** | Single instance per node | Restart via Nomad — running VMs survive daemon restart |
+| **Backups** | Daily crons to GCS | N/A |
+
+> Running Firecracker VMs and Wasm modules survive a daemon restart — the daemon re-registers them from the database on startup. A gateway node failure interrupts new deploys and control-plane operations but does not kill running tenant workloads.
 
 ### NATS JetStream
 
@@ -112,47 +124,44 @@ Both compute nodes connect to this single NATS server via Tailscale. JetStream p
 ```
 Internet
     │
-    ▼ (*.domain + domain → Vultr floating IP)
-Gateway A (NAT VPS) — Vultr Chicago
+    ▼ (*.domain + domain → gateway node public IP)
+gateway — Hivelocity DAL1
     HAProxy :80/:443 (TCP pass-through for 443)
     Pingora :8443 (TLS termination, SNI cert selection)
     API :7070, Nomad server + client (gateway)
-    NATS :4222, PgBouncer :6432
+    NATS :4222
     VictoriaMetrics :8428, VictoriaLogs :9428, Grafana :3001
     │
-    │ Tailscale mesh (100.x.x.x CGNAT range)
+    │ Hivelocity private VLAN (unmetered — no public internet)
     ├──────────────────────┬──────────────────┐
     │                      │                  │
-  Metal tier           Liquid tier        Gateway B
-    │                      │              (standby)
-    ▼                      ▼                  ▼
-  node-a-01            node-b-01          gateway-b
-  Daemon               Daemon             HAProxy + Pingora
-  Nomad client         Nomad client       Nomad client
-  Promtail → VLogs     Promtail → VLogs   PgBouncer
-  node_exporter :9100  node_exporter :9100 Failover script
+  node-metal           node-liquid         node-db
+  Daemon               Daemon              Postgres 16
+  Nomad client         Nomad client        PgBouncer :6432
+  Promtail → VLogs     Promtail → VLogs    Promtail → VLogs
+  node_exporter :9100  node_exporter :9100 node_exporter :9100
   KVM+br0+TAP          Wasmtime
     │                      │
-    └──────────┬───────────┘
-               ▼
-    Vultr Managed Postgres (Chicago)
-    ├── via PgBouncer :6432 on gateway-a + gateway-b
-    Vultr Object Storage (Chicago)
+    └──────────────────────┘
+               │
+    Wasabi Object Storage (S3-compatible, via Hivelocity portal)
+    ├── rootfs images + .wasm binaries
     ├── backed up to GCS via rclone
 ```
 
-**Internal mesh (Tailscale):**
-- Official Tailscale — each node joins the same Tailscale network
-- All inter-service traffic (API→NATS, daemon→NATS, services→PgBouncer) uses Tailscale IPs
-- No manual key management — Tailscale handles it
+**Internal network (Hivelocity private VLAN):**
+- All four nodes share a private VLAN — traffic is unmetered and never leaves the datacenter
+- All inter-service traffic (API→NATS, daemon→NATS, services→PgBouncer→Postgres) uses VLAN IPs
+- Configured via the Hivelocity portal — no manual VLAN tagging needed
 
-**Exposed ports (gateways only — bare metal nodes have no public ports):**
+**Ops access (Tailscale):**
+- Tailscale installed on all nodes for operator SSH access from laptops
+- `tailscale ssh node-metal` — no public port 22 on any node
+- Does NOT carry production traffic — VLAN handles all inter-node communication
+
+**Exposed ports (gateway only — all other nodes: public firewall closed):**
 - `:80` — HAProxy (HTTP → Pingora for ACME challenges + HTTPS redirect)
 - `:443` — HAProxy (TCP pass-through → Pingora TLS termination)
-- `:3478` — STUN (UDP, Tailscale NAT traversal)
-
-**Bare metal nodes — public firewall: all closed.**
-SSH is via `tailscale ssh` — no public port 22.
 
 **SSH hardening (all nodes):**
 - fail2ban (5 retries, 1hr ban)
@@ -297,7 +306,7 @@ If NATS is temporarily unreachable the publish returns an error — the row is n
 
 ### Deploy
 
-Both engines are **serverless**. The user deploys a binary; the platform handles everything else. No vCPU/RAM configuration, no Dockerfiles, no infrastructure decisions.
+Two models, one deploy command. Metal is **dedicated** — the VM runs 24/7. Liquid is **serverless** — the Wasm shim scales to zero on idle and wakes in <10ms on the next request. No vCPU/RAM configuration, no Dockerfiles, no infrastructure decisions.
 
 ```
 flux deploy
@@ -317,26 +326,33 @@ NATS → daemon (provision)
   ├─ metal:  download base-alpine.ext4 template (cached locally)
   │           download user binary from Object Storage
   │           inject binary + env vars into rootfs (loop mount)
-  │           create TAP, attach to bridge, apply eBPF TC filter
-  │           spawn Firecracker → boot VM → startup probe (HTTP GET /)
-  │           CREATE SNAPSHOT → save VM memory + vmstate to disk
-  │           upload snapshot to Object Storage (keyed by deploy_id)
-  │           halt VM (snapshot is the deliverable, not a running VM)
-  │           UPDATE services SET status='ready', snapshot_key, node_id
+  │           create TAP, attach to bridge, apply eBPF TC filter + tc bandwidth
+  │           spawn Firecracker (direct or via jailer) → apply cgroup limits
+  │           configure + boot VM via Firecracker REST API
+  │           startup probe (HTTP GET / until any response)
+  │           register VmHandle in-memory (for crash watcher + deprovision)
+  │           UPDATE services SET status='running', upstream_addr, tap_name, fc_pid, vm_id
   │           publish RouteUpdatedEvent → NATS
+  │           VM stays running permanently until user deletes the service
   └─ liquid: download main.wasm from Object Storage
-             compile + cache Wasmtime module
-             UPDATE services SET status='ready', upstream_addr
+             verify SHA-256 integrity
+             compile Wasmtime module (cached to disk — <10ms deserialize on wake)
+             save metadata.json (app_name, env_vars) for scale-to-zero recovery
+             bind HTTP shim on random port (WAGI per-request dispatch)
+             startup probe (HTTP GET / to verify shim responds)
+             register in LiquidRegistry (for billing usage reporting)
+             UPDATE services SET status='running', upstream_addr=127.0.0.1:{port}
              publish RouteUpdatedEvent → NATS
+             Wasm shim runs until idle timeout (LIQUID_IDLE_TIMEOUT_SECS, default 300s)
 
 On failure:
   → classify error as Transient or Permanent (FailureKind)
   → UPDATE services SET status='failed', failure_reason=<error>, provision_attempts += 1
-  → Permanent (SHA mismatch, startup probe timeout): ACK — no retry
+  → Permanent (SHA mismatch, startup probe timeout, invalid ELF): ACK — no retry
   → Transient (S3 timeout, DB blip): NAK with backoff (15s, 30s) — max 3 attempts
 ```
 
-After a Metal deploy, the service is `ready` but no VM is running. The snapshot contains the fully booted application at the point where the startup probe passed. The VM is restored from snapshot on the first request.
+After deploy, the service is `running` with a live `upstream_addr`. Metal VMs stay alive permanently. Liquid shims scale to zero after 5 minutes of inactivity and wake on the next request.
 
 ### Live Request
 
@@ -344,45 +360,59 @@ After a Metal deploy, the service is `ready` but no VM is running. The snapshot 
 Browser → Pingora
   └─ slug lookup
       ├─ cache hit (warm)  → upstream_addr known → proxy to backend
-      └─ cache miss / cold → DB lookup
-          ├─ service is warm (upstream_addr set) → proxy directly
-          └─ service is cold (upstream_addr NULL, snapshot exists)
-              → publish WakeEvent { service_id, slug } → NATS
-              → hold the request (queue with timeout)
-              → daemon restores VM from snapshot (~10-15ms)
-              → daemon publishes RouteUpdatedEvent with upstream_addr
-              → proxy receives event, forwards held request
-              → response returned to user
+      └─ cache miss        → DB lookup
+          ├─ metal (always warm) → upstream_addr set → proxy to backend
+          └─ liquid
+              ├─ warm (upstream_addr set) → proxy to backend
+              └─ cold (status='stopped', no upstream_addr)
+                  → publish WakeEvent { service_id, slug, engine=Liquid }
+                  → hold the request (queue with timeout)
+                  → daemon deserializes cached Wasm module (<10ms)
+                  → daemon starts HTTP shim, publishes RouteUpdatedEvent
+                  → proxy receives event, forwards held request
 
-  ├─ metal:  proxy → TAP → Firecracker VM (restored from snapshot)
-  └─ liquid: dispatch → in-process Wasmtime executor → response
+  ├─ metal:  proxy → TAP → Firecracker VM (always running)
+  └─ liquid: proxy → 127.0.0.1:{port} → Wasm HTTP shim → fresh Wasmtime instance per request
 ```
 
 The route cache (`crates/proxy/src/cache.rs`) is an `Arc<RwLock<HashMap<String, String>>>` kept warm by a background NATS subscriber:
 
 | Subject                  | Event                                   | Cache action         |
 |--------------------------|----------------------------------------|----------------------|
-| `platform.route_updated` | Service woke / provisioned              | `insert(slug, addr)` |
-| `platform.route_removed` | Service stopped, deleted, or went idle  | `remove(slug)`       |
+| `platform.route_updated` | Service provisioned, restarted, or woke | `insert(slug, addr)` |
+| `platform.route_removed` | Service stopped, deleted, or suspended  | `remove(slug)`       |
 
 No Redis — in-process, kilobytes of data, DB is authoritative on restart.
 
-### Scale to Zero
+### Liquid Scale to Zero
+
+Liquid services are serverless — they scale to zero after `LIQUID_IDLE_TIMEOUT_SECS` (default 300s = 5 minutes) of no traffic, and wake on the next request.
 
 ```
 Idle checker (daemon, every 60s):
-  → query services WHERE last_request_at < NOW() - idle_timeout
-  → for each idle service:
-      metal:  halt VM (SIGTERM → SIGKILL), cleanup TAP + eBPF + cgroup
-              UPDATE services SET status='ready', upstream_addr=NULL
-              publish RouteRemovedEvent → proxy evicts from cache
-              (snapshot stays in S3 — next request restores it)
-      liquid: unload Wasm module from memory
-              UPDATE services SET status='ready', upstream_addr=NULL
-              publish RouteRemovedEvent
+  → query liquid services WHERE last_request_at < NOW() - liquid_idle_timeout
+  → for each idle Liquid service:
+      remove from LiquidRegistry (drops Wasm shim + listener, frees memory)
+      UPDATE services SET status='stopped', upstream_addr=NULL
+      publish RouteRemovedEvent → proxy evicts from cache
+      artifacts stay on disk: main.wasm, .compiled cache, metadata.json
+
+First request to a cold Liquid service:
+  → proxy detects status='stopped', engine='liquid'
+  → publish WakeEvent → NATS
+  → hold the request with timeout
+  → daemon reads metadata.json (app_name, env_vars)
+  → daemon deserializes cached .compiled module (<10ms vs 60-180s full compile)
+  → daemon calls wasm_http::serve() → bind port → register in LiquidRegistry
+  → UPDATE services SET status='running', upstream_addr=127.0.0.1:{port}
+  → publish RouteUpdatedEvent → proxy unblocks held request
 ```
 
-The service stays in `ready` state — deployable but not consuming resources. The next request triggers a wake via snapshot restore (Metal) or module reload (Liquid).
+The user never sees this. From their perspective, the URL always works. Cold starts add <50ms of latency (module deserialize + port bind + route event).
+
+### Metal Scale to Zero (future)
+
+> Not active in the current dedicated model. Metal VMs run 24/7. The infrastructure (snapshot/wake in `wake.rs`, `snapshot.rs`) exists for a future serverless Metal tier if needed. Set `IDLE_TIMEOUT_SECS > 0` to enable.
 
 ### Stop / Delete
 
@@ -393,14 +423,20 @@ flux stop <id>  (or flux delete <id>)
   → API publishes DeprovisionEvent → NATS JetStream
 
 NATS → daemon
-  → halt VM or unload Wasm module (if currently warm)
-  → cleanup TAP + eBPF + cgroup (Metal only)
-  → delete snapshot from Object Storage (Metal only)
-  → delete artifact cache
-  → publish RouteRemovedEvent → proxy evicts from cache
+  ├─ metal:  remove VmHandle from registry
+  │           SIGTERM → wait 500ms → SIGKILL the Firecracker process
+  │           detach eBPF TC filter, remove tc qdiscs
+  │           delete TAP device, cleanup cgroup
+  │           remove jailer chroot (if jailed)
+  │           delete local artifact cache
+  └─ liquid: remove from LiquidRegistry
+  │           delete local artifact cache (wasm module + compiled cache)
+  │           (HTTP shim stops when the daemon restarts — harmless until then)
+  │
+  └─ both:   publish RouteRemovedEvent → proxy evicts from cache
 ```
 
-After stop, the service has no snapshot and no running instance. `flux deploy` is required to create a new one.
+After stop, the service has no running instance. `flux deploy` is required to create a new one.
 
 ---
 
@@ -448,32 +484,32 @@ Two distinct layers — infra provisioning and workload scheduling are separate 
 
 ### Terraform — Infrastructure Provisioning
 
-`infra/terraform/` at repo root declares all Vultr resources as code. One `terraform apply` rebuilds the entire platform from scratch.
+`infra/terraform/` at repo root declares all Hivelocity resources as code. One `terraform apply` rebuilds the entire platform from scratch.
 
 **State backend**: Google Cloud Storage (`backend "gcs" {}`). State is stored in a per-environment GCS bucket (`liquid-metal-tfstate-dev`, `liquid-metal-tfstate-prod`). A GCP service account key lives in `keys/` (gitignored) and is referenced via `GOOGLE_APPLICATION_CREDENTIALS`.
 
 ```
 infra/
 ├── terraform/
-│   ├── main.tf                    # GCS backend + providers (Vultr, Cloudflare, Tailscale, Google) + variables
-│   ├── nodes.tf                   # Tailscale keys + 2× bare metal + NAT VPS + cloud-init templatefile calls
-│   ├── services.tf                # Vultr Managed Postgres + Object Storage
-│   ├── backups.tf                 # GCS backup buckets (5×) + SA + block storage
-│   ├── dns.tf                     # Cloudflare wildcard + apex A records
-│   ├── outputs.tf                 # IPs, DB URL, PgBouncer URL, observability URLs, storage keys
+│   ├── main.tf                    # GCS backend + providers (Hivelocity, Cloudflare, Tailscale, Google) + variables
+│   ├── nodes.tf                   # 4× Hivelocity dedicated servers + Tailscale keys + cloud-init calls
+│   ├── vlan.tf                    # Hivelocity private VLAN — attaches all 4 nodes
+│   ├── dns.tf                     # Cloudflare wildcard + apex A records → gateway public IP
+│   ├── backups.tf                 # GCS backup buckets + SA
+│   ├── outputs.tf                 # IPs, VLAN IDs, observability URLs, Wasabi credentials
 │   ├── terraform.tfvars.example   # Example variable values for new environments
 │   └── templates/
-│       ├── cloud-init-nat.yaml      # NAT VPS: SSH hardening, Nomad server, NATS, TLS/certbot, HAProxy,
-│       │                            #   block storage, VictoriaMetrics, VictoriaLogs, Grafana (with alerts),
-│       │                            #   PgBouncer, backup crons (Postgres, metrics, logs, artifacts)
-│       ├── cloud-init-gateway.yaml  # Gateway B standby: HAProxy, Pingora, PgBouncer, failover script
-│       └── cloud-init-node.yaml     # Bare metal: SSH hardening, Nomad client, Promtail, node_exporter,
-│                                    #   Nomad state backup cron, Firecracker setup (Metal only)
+│       ├── cloud-init-gateway.yaml  # gateway: SSH hardening, Nomad server, NATS, HAProxy,
+│       │                            #   VictoriaMetrics, VictoriaLogs, Grafana, backup crons
+│       ├── cloud-init-db.yaml       # node-db: Postgres 16, PgBouncer, backup cron
+│       ├── cloud-init-liquid.yaml   # node-liquid: SSH hardening, Nomad client, Promtail, node_exporter
+│       └── cloud-init-metal.yaml    # node-metal: SSH hardening, Nomad client, Promtail, node_exporter,
+│                                    #   Firecracker + jailer, KVM check, br0 bridge, NAT rules
 └── nomad/
-    ├── api.nomad.hcl              # API — single instance on NAT VPS (node_class=gateway)
+    ├── api.nomad.hcl              # API — single instance on gateway (node_class=gateway)
     ├── daemon-metal.nomad.hcl     # Daemon — Metal tier only (node_class=metal)
     ├── daemon-liquid.nomad.hcl    # Daemon — Liquid tier only (node_class=liquid)
-    ├── proxy.nomad.hcl            # Proxy — single instance on NAT VPS (node_class=gateway)
+    ├── proxy.nomad.hcl            # Proxy — single instance on gateway (node_class=gateway)
     └── migrate.nomad.hcl          # Batch job — applies pending SQL migrations via psql
 ```
 
@@ -481,9 +517,9 @@ Providers used:
 
 | Provider                | Purpose                                                          |
 |-------------------------|------------------------------------------------------------------|
-| `vultr/vultr`           | Bare metal, VPS, Block Storage, Managed Postgres, Object Storage |
-| `cloudflare/cloudflare` | DNS — wildcard + apex → NAT VPS public IP                        |
-| `tailscale/tailscale`   | Pre-auth keys for node join                                      |
+| `hivelocity/hivelocity` | 4× dedicated bare metal servers + private VLAN                   |
+| `cloudflare/cloudflare` | DNS — wildcard + apex → gateway public IP                        |
+| `tailscale/tailscale`   | Pre-auth keys for operator SSH access                            |
 | `hashicorp/google`      | GCS backup buckets + service account for backup uploads          |
 
 Taskfile operations:
@@ -512,17 +548,17 @@ infra/nomad/
 Nomad node classes map to role:
 
 ```hcl
-# NAT VPS — set at agent config
+# gateway node
 client {
   node_class = "gateway"
 }
 
-# node-a-01
+# node-metal
 client {
   node_class = "metal"
 }
 
-# node-b-01
+# node-liquid
 client {
   node_class = "liquid"
 }
