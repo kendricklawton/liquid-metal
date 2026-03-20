@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+
+{% block title %}Templates{% endblock %}
+{% block description %}Starter templates for deploying Go, Rust, and Zig on Liquid Metal.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  <div class="mb-16">
+    <p class="lm-label mb-3">// templates</p>
+    <h1 class="text-4xl font-black tracking-tight mb-3">Starter Templates</h1>
+    <p class="text-zwl-muted dark:text-zw-muted max-w-lg">
+      Copy-paste examples for every supported language and engine. Each one deploys in under a minute.
+    </p>
+  </div>
+
+  {# ── METAL TEMPLATES ─────────────────────────────────────────────────── #}
+  <div class="mb-16">
+    <p class="lm-label mb-6">// metal &mdash; dedicated vms</p>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8 max-w-2xl leading-relaxed">
+      Metal runs your static binary in a Firecracker microVM. Compile to <code class="font-mono">x86_64-unknown-linux-musl</code>,
+      listen on a port, and deploy. The VM stays running &mdash; no cold starts.
+    </p>
+
+    <div class="space-y-6">
+
+      {# Go HTTP server #}
+      <div class="glass-card overflow-hidden" x-data="{ open: true }">
+        <button @click="open = !open" class="w-full px-6 py-4 flex items-center justify-between cursor-pointer text-left">
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-bold uppercase tracking-widest lang-go">Go</span>
+            <span class="text-sm font-bold">HTTP Server</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal</span>
+          </div>
+          <span class="text-zwl-muted dark:text-zw-muted text-xs" x-text="open ? '&minus;' : '+'"></span>
+        </button>
+        <div x-show="open" x-cloak>
+          <div class="border-t border-zwl-border dark:border-zw-border">
+            <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zwl-border dark:divide-zw-border">
+              <div class="px-6 py-4">
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">main.go</p>
+                <pre class="text-xs leading-relaxed font-mono"><span class="tok-kw">package</span> <span class="tok-pkg">main</span>
+
+<span class="tok-kw">import</span> (
+    <span class="tok-str">"fmt"</span>
+    <span class="tok-str">"net/http"</span>
+    <span class="tok-str">"os"</span>
+)
+
+<span class="tok-kw">func</span> <span class="tok-fn">main</span>() {
+    port := os.<span class="tok-fn">Getenv</span>(<span class="tok-str">"PORT"</span>)
+    <span class="tok-kw">if</span> port == <span class="tok-str">""</span> {
+        port = <span class="tok-str">"8080"</span>
+    }
+    http.<span class="tok-fn">HandleFunc</span>(<span class="tok-str">"/"</span>, <span class="tok-kw">func</span>(w <span class="tok-type">http.ResponseWriter</span>, r *<span class="tok-type">http.Request</span>) {
+        fmt.<span class="tok-fn">Fprintln</span>(w, <span class="tok-str">"hello from liquid metal"</span>)
+    })
+    http.<span class="tok-fn">ListenAndServe</span>(<span class="tok-str">":"</span>+port, <span class="tok-kw">nil</span>)
+}</pre>
+              </div>
+              <div class="px-6 py-4">
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
+                <pre class="text-xs leading-relaxed font-mono"><span class="tok-type">[service]</span>
+name = <span class="tok-str">"go-hello"</span>
+engine = <span class="tok-str">"metal"</span>
+port = <span class="tok-yellow">8080</span>
+
+<span class="tok-type">[build]</span>
+command = <span class="tok-str">"CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o app ."</span>
+output = <span class="tok-str">"app"</span></pre>
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
+                <pre class="text-xs leading-relaxed font-mono">flux init --engine metal --name go-hello
+flux deploy</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# Rust HTTP server #}
+      <div class="glass-card overflow-hidden" x-data="{ open: false }">
+        <button @click="open = !open" class="w-full px-6 py-4 flex items-center justify-between cursor-pointer text-left">
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-bold uppercase tracking-widest lang-rust">Rust</span>
+            <span class="text-sm font-bold">TCP Server (no dependencies)</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal</span>
+          </div>
+          <span class="text-zwl-muted dark:text-zw-muted text-xs" x-text="open ? '&minus;' : '+'"></span>
+        </button>
+        <div x-show="open" x-cloak>
+          <div class="border-t border-zwl-border dark:border-zw-border">
+            <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zwl-border dark:divide-zw-border">
+              <div class="px-6 py-4">
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">src/main.rs</p>
+                <pre class="text-xs leading-relaxed font-mono"><span class="tok-kw">use</span> <span class="tok-pkg">std::net</span>::<span class="tok-type">TcpListener</span>;
+<span class="tok-kw">use</span> <span class="tok-pkg">std::io</span>::<span class="tok-type">Write</span>;
+
+<span class="tok-kw">fn</span> <span class="tok-fn">main</span>() {
+    <span class="tok-kw">let</span> port = std::env::<span class="tok-fn">var</span>(<span class="tok-str">"PORT"</span>)
+        .<span class="tok-fn">unwrap_or_else</span>(|_| <span class="tok-str">"8080"</span>.<span class="tok-fn">into</span>());
+    <span class="tok-kw">let</span> addr = <span class="tok-kw">format!</span>(<span class="tok-str">"0.0.0.0:{}"</span>, port);
+    <span class="tok-kw">let</span> listener = <span class="tok-type">TcpListener</span>::<span class="tok-fn">bind</span>(&amp;addr).<span class="tok-fn">unwrap</span>();
+
+    <span class="tok-kw">for</span> stream <span class="tok-kw">in</span> listener.<span class="tok-fn">incoming</span>() {
+        <span class="tok-kw">let mut</span> s = stream.<span class="tok-fn">unwrap</span>();
+        s.<span class="tok-fn">write_all</span>(
+            <span class="tok-str">b"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>
+        ).<span class="tok-fn">ok</span>();
+    }
+}</pre>
+              </div>
+              <div class="px-6 py-4">
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
+                <pre class="text-xs leading-relaxed font-mono"><span class="tok-type">[service]</span>
+name = <span class="tok-str">"rust-hello"</span>
+engine = <span class="tok-str">"metal"</span>
+port = <span class="tok-yellow">8080</span>
+
+<span class="tok-type">[build]</span>
+command = <span class="tok-str">"cargo build --target x86_64-unknown-linux-musl --release"</span>
+output = <span class="tok-str">"target/x86_64-unknown-linux-musl/release/rust-hello"</span></pre>
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
+                <pre class="text-xs leading-relaxed font-mono">flux init --engine metal --name rust-hello
+flux deploy</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  {# ── LIQUID TEMPLATES ────────────────────────────────────────────────── #}
+  <div class="mb-16">
+    <p class="lm-label mb-6">// liquid &mdash; serverless wasm</p>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8 max-w-2xl leading-relaxed">
+      Liquid runs your <code class="font-mono">.wasm</code> module in Wasmtime. Each request spawns a fresh instance.
+      Read the request from stdin and env vars (WAGI/CGI style), write the response to stdout.
+      Scale to zero when idle, wake in under 10ms.
+    </p>
+
+    <div class="space-y-6">
+
+      {# Go WAGI handler #}
+      <div class="glass-card overflow-hidden" x-data="{ open: true }">
+        <button @click="open = !open" class="w-full px-6 py-4 flex items-center justify-between cursor-pointer text-left">
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-bold uppercase tracking-widest lang-go">Go</span>
+            <span class="text-sm font-bold">WAGI Handler</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid</span>
+          </div>
+          <span class="text-zwl-muted dark:text-zw-muted text-xs" x-text="open ? '&minus;' : '+'"></span>
+        </button>
+        <div x-show="open" x-cloak>
+          <div class="border-t border-zwl-border dark:border-zw-border">
+            <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zwl-border dark:divide-zw-border">
+              <div class="px-6 py-4">
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">main.go</p>
+                <pre class="text-xs leading-relaxed font-mono"><span class="tok-kw">package</span> <span class="tok-pkg">main</span>
+
+<span class="tok-kw">import</span> (
+    <span class="tok-str">"fmt"</span>
+    <span class="tok-str">"os"</span>
+)
+
+<span class="tok-kw">func</span> <span class="tok-fn">main</span>() {
+    <span class="tok-cmt">// WAGI: read request from env vars,</span>
+    <span class="tok-cmt">// write CGI response to stdout.</span>
+    method := os.<span class="tok-fn">Getenv</span>(<span class="tok-str">"REQUEST_METHOD"</span>)
+    path := os.<span class="tok-fn">Getenv</span>(<span class="tok-str">"PATH_INFO"</span>)
+
+    fmt.<span class="tok-fn">Println</span>(<span class="tok-str">"Content-Type: application/json"</span>)
+    fmt.<span class="tok-fn">Println</span>()
+    fmt.<span class="tok-fn">Printf</span>(<span class="tok-str">"{\"method\":\"%s\",\"path\":\"%s\"}\n"</span>, method, path)
+}</pre>
+              </div>
+              <div class="px-6 py-4">
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
+                <pre class="text-xs leading-relaxed font-mono"><span class="tok-type">[service]</span>
+name = <span class="tok-str">"go-wagi"</span>
+engine = <span class="tok-str">"liquid"</span>
+
+<span class="tok-type">[build]</span>
+command = <span class="tok-str">"GOOS=wasip1 GOARCH=wasm go build -o main.wasm ."</span>
+output = <span class="tok-str">"main.wasm"</span></pre>
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
+                <pre class="text-xs leading-relaxed font-mono">flux init --engine liquid --name go-wagi
+flux deploy</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# Rust WAGI handler #}
+      <div class="glass-card overflow-hidden" x-data="{ open: false }">
+        <button @click="open = !open" class="w-full px-6 py-4 flex items-center justify-between cursor-pointer text-left">
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-bold uppercase tracking-widest lang-rust">Rust</span>
+            <span class="text-sm font-bold">WAGI Handler</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid</span>
+          </div>
+          <span class="text-zwl-muted dark:text-zw-muted text-xs" x-text="open ? '&minus;' : '+'"></span>
+        </button>
+        <div x-show="open" x-cloak>
+          <div class="border-t border-zwl-border dark:border-zw-border">
+            <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zwl-border dark:divide-zw-border">
+              <div class="px-6 py-4">
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">src/main.rs</p>
+                <pre class="text-xs leading-relaxed font-mono"><span class="tok-kw">use</span> <span class="tok-pkg">std::env</span>;
+
+<span class="tok-kw">fn</span> <span class="tok-fn">main</span>() {
+    <span class="tok-kw">let</span> method = env::<span class="tok-fn">var</span>(<span class="tok-str">"REQUEST_METHOD"</span>)
+        .<span class="tok-fn">unwrap_or_default</span>();
+    <span class="tok-kw">let</span> path = env::<span class="tok-fn">var</span>(<span class="tok-str">"PATH_INFO"</span>)
+        .<span class="tok-fn">unwrap_or_default</span>();
+
+    <span class="tok-cmt">// CGI response: headers, blank line, body</span>
+    <span class="tok-fn">println!</span>(<span class="tok-str">"Content-Type: application/json"</span>);
+    <span class="tok-fn">println!</span>();
+    <span class="tok-fn">println!</span>(
+        <span class="tok-str">r#"&#123;"method":"&#123;&#125;","path":"&#123;&#125;"&#125;"#</span>,
+        method, path
+    );
+}</pre>
+              </div>
+              <div class="px-6 py-4">
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
+                <pre class="text-xs leading-relaxed font-mono"><span class="tok-type">[service]</span>
+name = <span class="tok-str">"rust-wagi"</span>
+engine = <span class="tok-str">"liquid"</span>
+
+<span class="tok-type">[build]</span>
+command = <span class="tok-str">"cargo build --target wasm32-wasip1 --release"</span>
+output = <span class="tok-str">"target/wasm32-wasip1/release/rust-wagi.wasm"</span></pre>
+                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
+                <pre class="text-xs leading-relaxed font-mono">flux init --engine liquid --name rust-wagi
+flux deploy</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  {# ── WAGI PROTOCOL ──────────────────────────────────────────────────── #}
+  <div class="mb-16">
+    <p class="lm-label mb-3">// how liquid (wagi) works</p>
+    <h2 class="text-2xl font-black tracking-tight mb-4">The WAGI Protocol</h2>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8 max-w-2xl leading-relaxed">
+      Liquid uses WAGI (WebAssembly Gateway Interface) &mdash; the same idea as CGI, but for Wasm.
+      Each HTTP request spawns a fresh Wasm instance. The request is passed via environment variables
+      and stdin. The response is read from stdout. No HTTP library needed.
+    </p>
+
+    <div class="glass-card overflow-hidden">
+      <div class="divide-y divide-zwl-border dark:divide-zw-border text-xs font-mono">
+        <div class="px-5 py-3 border-b border-zwl-border dark:border-zw-border">
+          <p class="text-[10px] font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">Request &rarr; Env Vars</p>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-5 py-3">
+          <code>REQUEST_METHOD</code>
+          <span class="text-zwl-muted dark:text-zw-muted col-span-2">GET, POST, PUT, DELETE, etc.</span>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-5 py-3">
+          <code>PATH_INFO</code>
+          <span class="text-zwl-muted dark:text-zw-muted col-span-2">Request path (e.g. /users/123)</span>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-5 py-3">
+          <code>QUERY_STRING</code>
+          <span class="text-zwl-muted dark:text-zw-muted col-span-2">Query parameters (e.g. page=2&amp;limit=10)</span>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-5 py-3">
+          <code>CONTENT_TYPE</code>
+          <span class="text-zwl-muted dark:text-zw-muted col-span-2">Request content type header</span>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-5 py-3">
+          <code>CONTENT_LENGTH</code>
+          <span class="text-zwl-muted dark:text-zw-muted col-span-2">Request body size in bytes</span>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-5 py-3">
+          <code>HTTP_*</code>
+          <span class="text-zwl-muted dark:text-zw-muted col-span-2">All HTTP headers (e.g. HTTP_AUTHORIZATION)</span>
+        </div>
+        <div class="grid grid-cols-3 gap-4 px-5 py-3">
+          <code>stdin</code>
+          <span class="text-zwl-muted dark:text-zw-muted col-span-2">Request body (for POST/PUT)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="glass-card overflow-hidden mt-4">
+      <div class="divide-y divide-zwl-border dark:divide-zw-border text-xs font-mono">
+        <div class="px-5 py-3 border-b border-zwl-border dark:border-zw-border">
+          <p class="text-[10px] font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">Response &rarr; stdout</p>
+        </div>
+        <div class="px-5 py-4">
+          <pre class="text-xs leading-relaxed"><span class="text-zwl-muted dark:text-zw-muted"># Write headers, blank line, then body to stdout:</span>
+Content-Type: application/json
+Status: 200 OK
+
+{"message": "hello"}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

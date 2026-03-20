@@ -50,7 +50,7 @@ impl IntoResponse for WebError {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{status} — {title}</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config = {{ darkMode: 'class', theme: {{ extend: {{ borderRadius: {{ DEFAULT: '0', sm: '0', md: '0', lg: '0', xl: '0', '2xl': '0', '3xl': '0', full: '0' }}, colors: {{ zw: {{ bg: '#191919', surface: '#262626', border: '#4a4546', muted: '#8e8e8e', fg: '#bbbbbb' }}, zwl: {{ bg: '#eeeeee', surface: '#d7d7d7', border: '#aca9a9', muted: '#5c5c5c', fg: '#353535' }} }} }} }} }}</script>
+  <script>tailwind.config = {{ darkMode: 'class', theme: {{ extend: {{ borderRadius: {{ DEFAULT: '0', sm: '0', md: '0', lg: '0', xl: '0', '2xl': '0', '3xl': '0', full: '0' }}, colors: {{ zw: {{ bg: '#0b0e14', surface: '#131721', border: '#1c2433', muted: '#636a72', fg: '#bfbdb6' }}, zwl: {{ bg: '#fafafa', surface: '#f0f0f0', border: '#e7e8e9', muted: '#8a9199', fg: '#5c6166' }} }} }} }} }}</script>
   <script>(function(){{ var t = localStorage.getItem('lm-theme'); if (t === 'dark') document.documentElement.classList.add('dark'); else if (t === 'light') document.documentElement.classList.remove('dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark'); }})()</script>
 </head>
 <body class="bg-zwl-bg dark:bg-zw-bg text-zwl-fg dark:text-zw-fg min-h-screen flex items-center justify-center font-mono antialiased">

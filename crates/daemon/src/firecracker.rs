@@ -61,41 +61,6 @@ pub async fn start_vm(cfg: &VmConfig<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Pause a running VM. Required before creating a snapshot —
-/// Firecracker rejects CreateSnapshot on a running instance.
-pub async fn pause_vm(sock_path: &str) -> Result<()> {
-    put(sock_path, "/actions",
-        &serde_json::json!({"action_type": "Pause"}).to_string())
-        .await
-        .context("PUT /actions Pause")
-}
-
-/// Create a full snapshot of a paused VM.
-///
-/// Writes two files:
-/// - `snapshot_path` — VM state (CPU registers, device state, ~small)
-/// - `mem_path`      — Guest memory dump (size = memory_mb)
-///
-/// The VM must be paused first via `pause_vm`.
-pub async fn create_snapshot(sock_path: &str, snapshot_path: &str, mem_path: &str) -> Result<()> {
-    put(sock_path, "/snapshot/create", &serde_json::json!({
-        "snapshot_type": "Full",
-        "snapshot_path": snapshot_path,
-        "mem_file_path": mem_path
-    }).to_string())
-    .await
-    .context("PUT /snapshot/create")
-}
-
-/// Resume a paused VM. Used after snapshot creation if the VM should
-/// continue running, or after snapshot restore in Phase 2.
-pub async fn resume_vm(sock_path: &str) -> Result<()> {
-    put(sock_path, "/actions",
-        &serde_json::json!({"action_type": "Resume"}).to_string())
-        .await
-        .context("PUT /actions Resume")
-}
-
 /// Load a snapshot into a freshly spawned Firecracker process.
 ///
 /// The Firecracker process must be running (API socket open) but have no

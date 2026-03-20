@@ -227,12 +227,15 @@ impl ProxyHttp for MachineRouter {
                     }
                     addr
                 }
-                None if record.status == "ready" && record.snapshot_key.is_some() => {
-                    // Cold Metal service — has a snapshot but no running VM.
+                None if record.status == "ready" && record.snapshot_key.is_some()
+                    || record.status == "stopped" && record.engine == "liquid" =>
+                {
+                    // Cold service — Metal: has a snapshot but no running VM.
+                    // Liquid: stopped but artifacts cached on disk (serverless scale-to-zero).
                     // Publish a wake event, then poll the route cache until the
-                    // daemon restores the VM and publishes RouteUpdatedEvent.
-                    info!(%slug, "cold service — requesting wake from snapshot");
-                    self.publish_wake(&slug, &record.service_id, record.snapshot_key.as_deref().unwrap());
+                    // daemon restores the service and publishes RouteUpdatedEvent.
+                    info!(%slug, engine = record.engine, "cold service — requesting wake");
+                    self.publish_wake(&slug, &record.service_id, &record.engine, record.snapshot_key.as_deref());
 
                     match self.wait_for_warm(&slug).await {
                         Some(addr) => {
@@ -431,15 +434,22 @@ impl MachineRouter {
         }
     }
 
-    /// Publish a `platform.wake` event to trigger snapshot restore for a cold service.
+    /// Publish a `platform.wake` event to trigger cold-start restore.
+    /// Metal: snapshot restore. Liquid: re-compile cached Wasm module.
     /// Fire-and-forget — the daemon deduplicates if multiple requests arrive simultaneously.
-    fn publish_wake(&self, slug: &str, service_id: &str, snapshot_key: &str) {
+    fn publish_wake(&self, slug: &str, service_id: &str, engine: &str, snapshot_key: Option<&str>) {
         let Some(nats) = &self.nats else { return };
         let nats = nats.clone();
+        let engine_enum = if engine == "metal" {
+            common::events::Engine::Metal
+        } else {
+            common::events::Engine::Liquid
+        };
         let event = common::events::WakeEvent {
             service_id:   service_id.to_string(),
             slug:         slug.to_string(),
-            snapshot_key: snapshot_key.to_string(),
+            engine:       engine_enum,
+            snapshot_key: snapshot_key.unwrap_or("").to_string(),
         };
         tokio::spawn(async move {
             if let Ok(payload) = serde_json::to_vec(&event) {

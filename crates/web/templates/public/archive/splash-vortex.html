@@ -1,18 +1,26 @@
 {% extends "base.html" %}
 
 {% block title %}Liquid Metal{% endblock %}
-{% block description %}Dedicated VMs and serverless Wasm for compiled binaries. Deploy Go, Rust, or Zig — no Dockerfiles, no infrastructure.{% endblock %}
+{% block description %}Serverless for compiled languages. Deploy Go, Rust, and Zig as functions. No containers, no YAML.{% endblock %}
 
 {% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
 
-{# ── HERO (full-width, breaks out of container for edge-to-edge canvas) ── #}
-<div class="relative mt-12">
-  <section class="relative flex flex-col items-center justify-center text-center" style="height:calc(100vh - 3rem);overflow:hidden;">
-    <canvas id="hero-canvas" style="position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;z-index:0;"></canvas>
-    {# Side + bottom fade — canvas dissolves into page bg at edges #}
-    <div style="position:absolute;inset:0;background:linear-gradient(to right,var(--lm-bg) 0%,transparent 12%,transparent 88%,var(--lm-bg) 100%);pointer-events:none;z-index:1;"></div>
-    <div style="position:absolute;bottom:0;left:0;right:0;height:180px;background:linear-gradient(to bottom,transparent,var(--lm-bg));pointer-events:none;z-index:1;"></div>
-    <div class="relative z-10 w-full flex flex-col items-center gap-8 max-w-4xl mx-auto px-4">
+  {# ── HERO ──────────────────────────────────────────────────────────────── #}
+  <div class="relative mt-12">
+    <section class="relative flex flex-col items-center justify-center text-center" style="height:calc(100vh - 3rem);overflow:hidden;">
+      <canvas id="vortex" style="position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;z-index:0;"></canvas>
+      {# CSS void — tiny ellipse at true center only; content is z=10 so it reads above particles anywhere #}
+      <div style="
+        position:absolute;inset:0;pointer-events:none;z-index:1;
+        background:
+          radial-gradient(ellipse 9% 2.2% at 50% 50%,
+            var(--lm-bg) 0%,
+            var(--lm-bg) 40%,
+            transparent 100%
+          );
+      "></div>
+      <div class="relative z-10 w-full flex flex-col items-center gap-8 max-w-4xl mx-auto px-4">
 
         <div class="flex items-center gap-2 flex-wrap justify-center">
           <span class="glass-card border-accent-go px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest" style="color:#00ADD8">Go</span>
@@ -21,19 +29,19 @@
         </div>
 
         <h1 class="text-4xl sm:text-6xl font-black tracking-tighter">
-          Dedicated VM.<br/>
-          <span class="text-zwl-muted dark:text-zw-muted">Or serverless Wasm.</span>
+          Serverless for<br/>
+          <span class="text-zwl-muted dark:text-zw-muted">compiled languages.</span>
         </h1>
 
         <p class="text-base sm:text-lg text-zwl-muted dark:text-zw-muted max-w-xl leading-relaxed">
-          Metal runs your compiled binary in a dedicated Firecracker VM &mdash; always on, no cold starts.
-          Liquid runs your Wasm module serverless, sub-millisecond. One CLI, two engines.
+          Deploy Go, Rust, or Zig as serverless functions. No Dockerfiles. No infrastructure.
+          Your binary runs on request and scales to zero between them.
         </p>
 
         <div class="flex flex-col items-center gap-3">
           <div class="flex flex-wrap items-center justify-center gap-4">
             <a href="/auth/login" class="inline-flex items-center px-8 py-3.5 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
-              Try It
+              Start Deploying
             </a>
             <a href="/docs" class="glass-btn inline-flex items-center px-8 py-3.5 text-xs font-bold uppercase tracking-widest transition-colors">
               Read the Docs
@@ -44,16 +52,16 @@
 
         <div class="glass-card grid grid-cols-3 divide-x divide-zwl-border dark:divide-zw-border">
           <div class="px-6 py-4 flex flex-col gap-1 items-center">
-            <span class="text-lg font-black font-mono">0ms</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal cold start</span>
+            <span class="text-lg font-black font-mono">&lt;15ms</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal wake</span>
           </div>
           <div class="px-6 py-4 flex flex-col gap-1 items-center">
             <span class="text-lg font-black font-mono">&lt;1ms</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid cold start</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid start</span>
           </div>
           <div class="px-6 py-4 flex flex-col gap-1 items-center">
-            <span class="text-lg font-black font-mono">$17</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal starts at</span>
+            <span class="text-lg font-black font-mono">$0</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">When idle</span>
           </div>
         </div>
 
@@ -61,14 +69,12 @@
           <span class="proof-badge">Built with Rust</span>
           <span class="proof-badge">Firecracker VMs</span>
           <span class="proof-badge">eBPF isolated</span>
-          <span class="proof-badge">Wasmtime</span>
+          <span class="proof-badge">Scale to zero</span>
         </div>
 
       </div>
     </section>
-</div>
-
-<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+  </div>
 
   {# ── TERMINAL ──────────────────────────────────────────────────────────── #}
   <section
@@ -81,8 +87,8 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
 
       {# ── Source code panel ─────────────────────────────────────────────── #}
-      <div class="terminal-panel overflow-hidden" >
-        <div class="flex" style="border-bottom:1px solid var(--lm-border)">
+      <div class="terminal-panel overflow-hidden" style="background:#0b0e14;border:1px solid #1c2433;color:#bfbdb6">
+        <div class="flex" style="border-bottom:1px solid #1c2433">
           <button @click="lang = 0" class="cursor-pointer flex-1 py-2.5 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
             :style="lang === 0 ? 'color:#00ADD8;border-bottom:3px solid #00ADD8' : 'color:#00ADD8;border-bottom:3px solid transparent'">Go</button>
           <button @click="lang = 1" class="cursor-pointer flex-1 py-2.5 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
@@ -90,112 +96,112 @@
           <button @click="lang = 2" class="cursor-pointer flex-1 py-2.5 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
             :style="lang === 2 ? 'color:#F7A41D;border-bottom:3px solid #F7A41D' : 'color:#F7A41D;border-bottom:3px solid transparent'">Zig</button>
         </div>
-        <div class="px-5 py-2" style="border-bottom:1px solid var(--lm-border)">
-          <span class="text-[10px] font-mono" style="color:var(--lm-muted)" x-text="['main.go', 'main.rs', 'main.zig'][lang]"></span>
+        <div class="px-5 py-2" style="border-bottom:1px solid #1c2433">
+          <span class="text-[10px] font-mono" style="color:#636a72" x-text="['main.go', 'main.rs', 'main.zig'][lang]"></span>
         </div>
         <div class="px-5 py-5 overflow-hidden font-mono">
           {# Go #}
-          <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre"><span class="tok-kw">package</span> <span class="tok-pkg">main</span>
+          <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre"><span style="color:#ff8f40">package</span> <span style="color:#d2a6ff">main</span>
 
-<span class="tok-kw">import</span> (
-	<span class="tok-str">"fmt"</span>
-	<span class="tok-str">"net/http"</span>
+<span style="color:#ff8f40">import</span> (
+	<span style="color:#aad94c">"fmt"</span>
+	<span style="color:#aad94c">"net/http"</span>
 )
 
-<span class="tok-kw">func</span> <span class="tok-fn">handler</span>(w <span class="tok-type">http.ResponseWriter</span>, r *<span class="tok-type">http.Request</span>) {
-	fmt.<span class="tok-fn">Fprintln</span>(w, <span class="tok-str">"hello from liquid metal"</span>)
+<span style="color:#ff8f40">func</span> <span style="color:#ffb454">handler</span>(w <span style="color:#73b8ff">http.ResponseWriter</span>, r *<span style="color:#73b8ff">http.Request</span>) {
+	fmt.<span style="color:#ffb454">Fprintln</span>(w, <span style="color:#aad94c">"hello from liquid metal"</span>)
 }
 
-<span class="tok-kw">func</span> <span class="tok-fn">main</span>() {
-	http.<span class="tok-fn">HandleFunc</span>(<span class="tok-str">"/"</span>, handler)
-	http.<span class="tok-fn">ListenAndServe</span>(<span class="tok-str">":8080"</span>, <span class="tok-kw">nil</span>)
+<span style="color:#ff8f40">func</span> <span style="color:#ffb454">main</span>() {
+	http.<span style="color:#ffb454">HandleFunc</span>(<span style="color:#aad94c">"/"</span>, handler)
+	http.<span style="color:#ffb454">ListenAndServe</span>(<span style="color:#aad94c">":8080"</span>, <span style="color:#ff8f40">nil</span>)
 }</pre>
           {# Rust #}
-          <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre"><span class="tok-kw">use</span> <span class="tok-pkg">std::net</span>::<span class="tok-type">TcpListener</span>;
-<span class="tok-kw">use</span> <span class="tok-pkg">std::io</span>::<span class="tok-type">Write</span>;
+          <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre"><span style="color:#ff8f40">use</span> <span style="color:#d2a6ff">std::net</span>::<span style="color:#73b8ff">TcpListener</span>;
+<span style="color:#ff8f40">use</span> <span style="color:#d2a6ff">std::io</span>::<span style="color:#73b8ff">Write</span>;
 
-<span class="tok-kw">fn</span> <span class="tok-fn">main</span>() {
-    <span class="tok-kw">let</span> listener = <span class="tok-type">TcpListener</span>::<span class="tok-fn">bind</span>(<span class="tok-str">"0.0.0.0:8080"</span>).<span class="tok-fn">unwrap</span>();
+<span style="color:#ff8f40">fn</span> <span style="color:#ffb454">main</span>() {
+    <span style="color:#ff8f40">let</span> listener = <span style="color:#73b8ff">TcpListener</span>::<span style="color:#ffb454">bind</span>(<span style="color:#aad94c">"0.0.0.0:8080"</span>).<span style="color:#ffb454">unwrap</span>();
 
-    <span class="tok-kw">for</span> stream <span class="tok-kw">in</span> listener.<span class="tok-fn">incoming</span>() {
-        <span class="tok-kw">let mut</span> stream = stream.<span class="tok-fn">unwrap</span>();
-        <span class="tok-kw">let</span> response = <span class="tok-str">b"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>;
-        stream.<span class="tok-fn">write_all</span>(response).<span class="tok-fn">ok</span>();
+    <span style="color:#ff8f40">for</span> stream <span style="color:#ff8f40">in</span> listener.<span style="color:#ffb454">incoming</span>() {
+        <span style="color:#ff8f40">let mut</span> stream = stream.<span style="color:#ffb454">unwrap</span>();
+        <span style="color:#ff8f40">let</span> response = <span style="color:#aad94c">b"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>;
+        stream.<span style="color:#ffb454">write_all</span>(response).<span style="color:#ffb454">ok</span>();
     }
 }</pre>
           {# Zig #}
-          <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre"><span class="tok-kw">const</span> std = @<span class="tok-fn">import</span>(<span class="tok-str">"std"</span>);
+          <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre"><span style="color:#ff8f40">const</span> std = @<span style="color:#ffb454">import</span>(<span style="color:#aad94c">"std"</span>);
 
-<span class="tok-kw">pub fn</span> <span class="tok-fn">main</span>() !<span class="tok-type">void</span> {
-    <span class="tok-kw">const</span> addr = <span class="tok-kw">try</span> std.net.Address.<span class="tok-fn">resolveIp</span>(<span class="tok-str">"0.0.0.0"</span>, 8080);
-    <span class="tok-kw">var</span> server = <span class="tok-kw">try</span> addr.<span class="tok-fn">listen</span>(.{});
-    <span class="tok-kw">defer</span> server.<span class="tok-fn">deinit</span>();
+<span style="color:#ff8f40">pub fn</span> <span style="color:#ffb454">main</span>() !<span style="color:#73b8ff">void</span> {
+    <span style="color:#ff8f40">const</span> addr = <span style="color:#ff8f40">try</span> std.net.Address.<span style="color:#ffb454">resolveIp</span>(<span style="color:#aad94c">"0.0.0.0"</span>, 8080);
+    <span style="color:#ff8f40">var</span> server = <span style="color:#ff8f40">try</span> addr.<span style="color:#ffb454">listen</span>(.{});
+    <span style="color:#ff8f40">defer</span> server.<span style="color:#ffb454">deinit</span>();
 
-    <span class="tok-kw">while</span> (<span class="tok-kw">true</span>) {
-        <span class="tok-kw">const</span> conn = <span class="tok-kw">try</span> server.<span class="tok-fn">accept</span>();
-        _ = conn.stream.<span class="tok-fn">write</span>(<span class="tok-str">"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>);
-        conn.stream.<span class="tok-fn">close</span>();
+    <span style="color:#ff8f40">while</span> (<span style="color:#ff8f40">true</span>) {
+        <span style="color:#ff8f40">const</span> conn = <span style="color:#ff8f40">try</span> server.<span style="color:#ffb454">accept</span>();
+        _ = conn.stream.<span style="color:#ffb454">write</span>(<span style="color:#aad94c">"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>);
+        conn.stream.<span style="color:#ffb454">close</span>();
     }
 }</pre>
         </div>
-        <div class="px-5 py-2.5 flex items-center gap-2" style="border-top:1px solid var(--lm-border)">
-          <span class="text-xs" style="color:var(--lm-muted)">$</span>
-          <span class="text-xs font-semibold" style="color:var(--lm-fg)">flux deploy</span>
+        <div class="px-5 py-2.5 flex items-center gap-2" style="border-top:1px solid #1c2433">
+          <span class="text-xs" style="color:#636a72">$</span>
+          <span class="text-xs font-semibold" style="color:#bfbdb6">flux deploy</span>
           <span class="ml-auto inline-flex items-center gap-1.5 leading-none">
-            <span class="w-2.5 h-2.5 shrink-0 rounded-full" style="background:var(--lm-green)"></span>
-            <span class="text-[10px] leading-none font-bold uppercase tracking-widest" style="color:var(--lm-green)">Ready</span>
+            <span class="w-2.5 h-2.5 shrink-0 rounded-full" style="background:#aad94c"></span>
+            <span class="text-[10px] leading-none font-bold uppercase tracking-widest" style="color:#aad94c">Ready</span>
           </span>
         </div>
       </div>
 
       {# ── Config + deploy log ───────────────────────────────────────────── #}
       <div class="flex flex-col gap-4">
-        <div class="terminal-panel overflow-hidden" >
-          <div class="px-5 py-2 flex items-center justify-between" style="border-bottom:1px solid var(--lm-border)">
-            <span class="text-[10px]" style="color:var(--lm-muted)">liquid-metal.toml</span>
+        <div class="terminal-panel overflow-hidden" style="background:#0b0e14;border:1px solid #1c2433;color:#bfbdb6">
+          <div class="px-5 py-2 flex items-center justify-between" style="border-bottom:1px solid #1c2433">
+            <span class="text-[10px]" style="color:#636a72">liquid-metal.toml</span>
             <span class="text-[9px] font-bold px-2 py-1 border uppercase tracking-widest inline-flex items-center leading-none"
               :class="lang === 0 ? 'border-accent-go' : lang === 1 ? 'border-accent-rust' : 'border-accent-zig'"
               :style="lang === 0 ? 'color:#00ADD8' : lang === 1 ? 'color:#CE422B' : 'color:#F7A41D'"
               x-text="lang === 2 ? 'liquid' : 'metal'"></span>
           </div>
           <div class="px-5 py-5 font-mono">
-            <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre"><span class="tok-type">[service]</span>
-name = <span class="tok-str">"hello-world"</span>
-engine = <span class="tok-str">"metal"</span>
-port = <span class="tok-yellow">8080</span>
+            <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre"><span style="color:#73b8ff">[service]</span>
+name = <span style="color:#aad94c">"hello-world"</span>
+engine = <span style="color:#aad94c">"metal"</span>
+port = <span style="color:#e6b450">8080</span>
 
-<span class="tok-type">[build]</span>
-command = <span class="tok-str">"go build -o app ."</span>
-output = <span class="tok-str">"app"</span></pre>
-            <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre"><span class="tok-type">[service]</span>
-name = <span class="tok-str">"rust-api"</span>
-engine = <span class="tok-str">"metal"</span>
-port = <span class="tok-yellow">8080</span>
+<span style="color:#73b8ff">[build]</span>
+command = <span style="color:#aad94c">"go build -o app ."</span>
+output = <span style="color:#aad94c">"app"</span></pre>
+            <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre"><span style="color:#73b8ff">[service]</span>
+name = <span style="color:#aad94c">"rust-api"</span>
+engine = <span style="color:#aad94c">"metal"</span>
+port = <span style="color:#e6b450">8080</span>
 
-<span class="tok-type">[build]</span>
-command = <span class="tok-str">"cargo build --target x86_64-unknown-linux-musl --release"</span>
-output = <span class="tok-str">"target/x86_64-unknown-linux-musl/release/rust-api"</span></pre>
-            <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre"><span class="tok-type">[service]</span>
-name = <span class="tok-str">"zig-wasm"</span>
-engine = <span class="tok-str">"liquid"</span>
+<span style="color:#73b8ff">[build]</span>
+command = <span style="color:#aad94c">"cargo build --target x86_64-unknown-linux-musl --release"</span>
+output = <span style="color:#aad94c">"target/x86_64-unknown-linux-musl/release/rust-api"</span></pre>
+            <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre"><span style="color:#73b8ff">[service]</span>
+name = <span style="color:#aad94c">"zig-wasm"</span>
+engine = <span style="color:#aad94c">"liquid"</span>
 
-<span class="tok-type">[liquid]</span>
-wasm = <span class="tok-str">"main.wasm"</span></pre>
+<span style="color:#73b8ff">[liquid]</span>
+wasm = <span style="color:#aad94c">"main.wasm"</span></pre>
           </div>
         </div>
 
-        <div class="terminal-panel overflow-hidden" >
-          <div class="px-5 py-2 flex items-center justify-between" style="border-bottom:1px solid var(--lm-border)">
-            <span class="text-[10px]" style="color:var(--lm-muted)">deploy log</span>
+        <div class="terminal-panel overflow-hidden" style="background:#0b0e14;border:1px solid #1c2433;color:#bfbdb6">
+          <div class="px-5 py-2 flex items-center justify-between" style="border-bottom:1px solid #1c2433">
+            <span class="text-[10px]" style="color:#636a72">deploy log</span>
             <span class="inline-flex items-center gap-1.5 leading-none">
-              <span class="w-2.5 h-2.5 shrink-0 rounded-full" style="background:var(--lm-green);animation:pulse 2s infinite"></span>
-              <span class="text-[10px] leading-none font-bold uppercase tracking-widest" style="color:var(--lm-green)">Live</span>
+              <span class="w-2.5 h-2.5 shrink-0 rounded-full" style="background:#aad94c;animation:pulse 2s infinite"></span>
+              <span class="text-[10px] leading-none font-bold uppercase tracking-widest" style="color:#aad94c">Live</span>
             </span>
           </div>
-          <div class="px-5 py-4 text-[11px] leading-loose font-mono" style="color:var(--lm-muted)">
+          <div class="px-5 py-4 text-[11px] leading-loose font-mono" style="color:#636a72">
             <div>
               <span>$</span>
-              <span class="font-semibold ml-1" style="color:var(--lm-fg)"
+              <span class="font-semibold ml-1" style="color:#bfbdb6"
                 x-text="'flux deploy --name ' + ['hello-world','rust-api','zig-wasm'][lang]"></span>
             </div>
             <div class="mt-2 flex flex-col gap-0.5">
@@ -218,7 +224,7 @@ wasm = <span class="tok-str">"main.wasm"</span></pre>
               <div class="deploy-line mt-2 flex items-center gap-2">
                 <span class="deploy-check font-bold">&#10003;</span>
                 <span class="deploy-done">service live</span>
-                <span class="ml-1" style="color:var(--lm-green)" x-text="['hello-world','rust-api','zig-wasm'][lang] + '.lm.dev'"></span>
+                <span class="ml-1" style="color:#aad94c" x-text="['hello-world','rust-api','zig-wasm'][lang] + '.lm.dev'"></span>
               </div>
             </div>
           </div>
@@ -239,25 +245,25 @@ wasm = <span class="tok-str">"main.wasm"</span></pre>
     </p>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <div class="glass-card p-8 flex flex-col gap-4">
-        <div class="w-8 h-8 flex items-center justify-center shrink-0 text-zwl-muted dark:text-zw-muted">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
           <i data-lucide="server" style="width:14px;height:14px;"></i>
         </div>
         <h3 class="text-xs font-bold uppercase tracking-widest">Metal &mdash; Dedicated VM</h3>
         <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">Your binary runs in a KVM-isolated VM on bare metal hardware. Always on, no cold starts, fixed monthly price. Real Linux kernel, real networking.</p>
       </div>
       <div class="glass-card p-8 flex flex-col gap-4">
-        <div class="w-8 h-8 flex items-center justify-center shrink-0 text-zwl-muted dark:text-zw-muted">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
           <i data-lucide="zap" style="width:14px;height:14px;"></i>
         </div>
         <h3 class="text-xs font-bold uppercase tracking-widest">Liquid &mdash; Serverless Wasm</h3>
         <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">Compile to .wasm and run it in Wasmtime. Sub-millisecond cold starts, scale to zero, per-invocation billing. For lightweight stateless workloads.</p>
       </div>
       <div class="glass-card p-8 flex flex-col gap-4">
-        <div class="w-8 h-8 flex items-center justify-center shrink-0 text-zwl-muted dark:text-zw-muted">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
           <i data-lucide="binary" style="width:14px;height:14px;"></i>
         </div>
         <h3 class="text-xs font-bold uppercase tracking-widest">Your binary, as-is</h3>
-        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">No SDK. No wrapper. No runtime dependency. If <code>go build</code>, <code>cargo build</code>, or <code>zig build</code> produces it, Liquid Metal runs it.</p>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">No SDK. No wrapper. No runtime dependency. If <code>go build</code>, <code>cargo build</code>, or <code>zig build</code> produces it, we run it.</p>
       </div>
     </div>
   </section>
@@ -309,7 +315,7 @@ wasm = <span class="tok-str">"main.wasm"</span></pre>
           <tr>
             <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Pricing</td>
             <td class="px-6 py-3">$0.30 / 1M inv</td>
-            <td class="px-6 py-3">From $17/mo</td>
+            <td class="px-6 py-3">From $6/mo</td>
           </tr>
         </tbody>
       </table>
@@ -348,7 +354,7 @@ wasm = <span class="tok-str">"main.wasm"</span></pre>
 
   {# ── CTA ───────────────────────────────────────────────────────────────── #}
   <section class="py-24 flex flex-col items-center text-center gap-6">
-    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted">// try it</p>
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted">// get started</p>
     <h2 class="text-3xl font-black tracking-tight">
       Deploy a binary.<br/>Get a URL.
     </h2>
@@ -357,7 +363,7 @@ wasm = <span class="tok-str">"main.wasm"</span></pre>
     </p>
     <div class="flex flex-wrap items-center justify-center gap-4">
       <a href="/auth/login" class="inline-flex items-center px-10 py-4 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
-        Deploy Something
+        Start for Free
       </a>
       <a href="/plans" class="glass-btn inline-flex items-center px-10 py-4 text-xs font-bold uppercase tracking-widest transition-colors">
         See Plans
@@ -372,198 +378,204 @@ wasm = <span class="tok-str">"main.wasm"</span></pre>
 {% block scripts %}
 <script>
 (function() {
-  var c = document.getElementById('hero-canvas');
+  var c = document.getElementById('vortex');
   if (!c) return;
   var ctx = c.getContext('2d');
-  var W, H, raf;
-  var mx = -9999, my = -9999;
-  var pts = [];
+  var W, H, CX, CY, MAX_R, raf, frame = 0;
+  var particles = [], implosions = [];
+  var mouseX = -9999, mouseY = -9999;
 
-  // Two flavors: Metal (anchor nodes, gold) and Liquid (drifting, silver)
-  var N_METAL  = 7;
-  var N_LIQUID = 55;
-  var LINK_DIST = 130;   // max distance to draw a passive link between particles
-  var MOUSE_R   = 170;   // mouse influence radius
-  var SPEED_MX  = 0.28;  // max drift speed for Liquid nodes
+  // Font colors only — --lm-fg, --lm-muted (both modes) + single accent glint
+  // Produces a silver/ash vortex with rare gold sparks; no language/code rainbow
+  var PALETTE = [
+    [220, 218, 214],   // near-white highlight
+    [191, 189, 182],   // --lm-fg dark   #bfbdb6
+    [191, 189, 182],   // weighted double for dominant tone
+    [138, 145, 153],   // --lm-muted light #8a9199
+    [ 99, 106, 114],   // --lm-muted dark  #636a72
+    [230, 180,  80],   // --lm-accent #e6b450 — rare warm glint only
+  ];
 
-  function mkPt(isMetal) {
-    var vx = isMetal ? 0 : (Math.random() - 0.5) * SPEED_MX;
-    var vy = isMetal ? 0 : (Math.random() - 0.5) * SPEED_MX;
-    return {
-      x:  Math.random() * W,
-      y:  Math.random() * H,
-      vx: vx,
-      vy: vy,
-      // Metal nodes pulse slightly; Liquid nodes drift freely
-      metal: isMetal,
-      // Slow oscillation phase for Metal nodes (breathing glow)
-      phase: Math.random() * Math.PI * 2,
-    };
+  // Perspective factor — flatten y axis for horizontal disk (viewed ~20° above plane)
+  var PERSP = 0.22;
+
+  // Inner void radius — particles fill to 10% of MAX_R; CSS overlay covers the geometric center
+  var VOID_FRAC = 0.10;
+
+  function rgba(col, a) {
+    return 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + a + ')';
   }
 
-  function init() {
+  window.addEventListener('mousemove', function(e) {
+    var b = c.getBoundingClientRect();
+    mouseX = e.clientX - b.left;
+    mouseY = e.clientY - b.top;
+  });
+
+  function resize() {
     var b = c.getBoundingClientRect();
     W = b.width; H = b.height;
     c.width  = Math.round(W * devicePixelRatio);
     c.height = Math.round(H * devicePixelRatio);
     ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-
-    pts = [];
-    for (var i = 0; i < N_METAL;  i++) pts.push(mkPt(true));
-    for (var i = 0; i < N_LIQUID; i++) pts.push(mkPt(false));
+    CX = W / 2; CY = H / 2;
+    MAX_R = Math.min(W * 0.52, H * 0.50);
+    particles = []; implosions = [];
+    for (var i = 0; i < 8000; i++) particles.push(mkParticle(true));
   }
 
-  window.addEventListener('mousemove', function(e) {
-    var b = c.getBoundingClientRect();
-    mx = e.clientX - b.left;
-    my = e.clientY - b.top;
-  });
-  window.addEventListener('mouseleave', function() { mx = -9999; my = -9999; });
+  function mkParticle(scatter) {
+    var voidR = MAX_R * VOID_FRAC;
+    var band  = MAX_R - voidR;
+    // Area-uniform distribution: sqrt biases toward outer radii (area ∝ r²)
+    var r = scatter
+      ? voidR + band * Math.sqrt(Math.random())
+      : MAX_R * (0.72 + Math.random() * 0.26);
+    var col = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+    return {
+      r:     r,
+      a:     Math.random() * 6.2832,
+      spd:   0.10 + Math.random() * 0.18,
+      pull:  0.022 + Math.random() * 0.05,
+      sz:    0.5   + Math.random() * 1.1,
+      col:   col,
+      lum:   0.35  + Math.random() * 0.65,
+      dvx:   0, dvy: 0,
+      trail: [],
+    };
+  }
 
-  var frame = 0;
+  function mkImplosion() {
+    // Spawn implosions only outside the void
+    var voidR = MAX_R * VOID_FRAC;
+    var r     = voidR + (MAX_R - voidR) * (0.1 + Math.random() * 0.8);
+    var ang   = Math.random() * 6.2832;
+    var cx    = CX + Math.cos(ang) * r;
+    var cy    = CY + Math.sin(ang) * r * PERSP;
+    var n     = 6 + Math.floor(Math.random() * 5);
+    var col   = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+    var spread = 10 + Math.random() * 18;
+    var pts = [];
+    for (var i = 0; i < n; i++) {
+      var a = (i / n) * 6.2832 + Math.random() * 0.25;
+      pts.push({ sx: cx + Math.cos(a) * spread, sy: cy + Math.sin(a) * spread * PERSP, ex: cx, ey: cy });
+    }
+    implosions.push({ pts: pts, cx: cx, cy: cy, life: 1.0, col: col });
+  }
+
+  var MOUSE_R = 130, MOUSE_F = 0.36, DAMP = 0.88, TRAIL_N = 2;
+
   function tick() {
-    if (!document.getElementById('hero-canvas')) { cancelAnimationFrame(raf); return; }
+    if (!document.getElementById('vortex')) {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', resize);
+      return;
+    }
+
     ctx.clearRect(0, 0, W, H);
+
     frame++;
+    if (frame % 50 === 0) mkImplosion();
 
-    var dk = document.documentElement.classList.contains('dark');
+    var voidR = MAX_R * VOID_FRAC;
 
-    // Theme palette
-    // Metal nodes: gold accent  — dark #e6b450 / light #a06000
-    // Liquid nodes: muted fg    — dark #636a72 / light #8a9199
-    // Links: very faint
-    var metalR  = dk ? 230 : 140;
-    var metalG  = dk ? 180 :  90;
-    var metalB  = dk ?  80 :   0;
-    var liqR    = dk ?  99 : 110;
-    var liqG    = dk ? 106 : 120;
-    var liqB    = dk ? 114 : 130;
+    // ── Vortex particles ───────────────────────────────────────────
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
 
-    // Update positions
-    for (var i = 0; i < pts.length; i++) {
-      var p = pts[i];
-      if (p.metal) {
-        p.phase += 0.018;
-        // Metal nodes drift very slowly, anchored near their spawn area
-        p.x += Math.sin(p.phase * 0.7) * 0.12;
-        p.y += Math.cos(p.phase * 0.5) * 0.10;
-      } else {
-        // Liquid nodes drift freely, wrap around edges
-        p.x += p.vx;
-        p.y += p.vy;
-        if (p.x < -10) p.x = W + 10;
-        if (p.x > W + 10) p.x = -10;
-        if (p.y < -10) p.y = H + 10;
-        if (p.y > H + 10) p.y = -10;
-        // Slight random perturbation (Brownian)
-        p.vx += (Math.random() - 0.5) * 0.012;
-        p.vy += (Math.random() - 0.5) * 0.012;
-        // Clamp speed
-        var spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
-        if (spd > SPEED_MX) { p.vx *= SPEED_MX / spd; p.vy *= SPEED_MX / spd; }
+      // Kepler: angular speed ∝ 1/r
+      var omega = p.spd * (MAX_R / Math.max(p.r, voidR));
+      p.a += omega * 0.006;
+
+      // Inward drift
+      p.r -= p.pull * (1.0 + (MAX_R / Math.max(p.r, voidR)) * 0.022);
+
+      // Respawn when particle reaches the void boundary
+      if (p.r < voidR + 2) { particles[i] = mkParticle(false); continue; }
+
+      // Horizontal disk: full width, compressed height
+      var x = CX + Math.cos(p.a) * p.r;
+      var y = CY + Math.sin(p.a) * p.r * PERSP;
+
+      // Mouse repulsion
+      var dx = x - mouseX, dy = y - mouseY;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < MOUSE_R && dist > 0.5) {
+        var force = MOUSE_F * (1 - dist / MOUSE_R);
+        p.dvx += (dx / dist) * force;
+        p.dvy += (dy / dist) * force;
       }
-    }
+      p.dvx *= DAMP; p.dvy *= DAMP;
+      x += p.dvx; y += p.dvy;
 
-    // Draw links between particles
-    for (var i = 0; i < pts.length; i++) {
-      var a = pts[i];
-      for (var j = i + 1; j < pts.length; j++) {
-        var b2 = pts[j];
-        var dx = a.x - b2.x, dy = a.y - b2.y;
-        var d  = Math.sqrt(dx * dx + dy * dy);
-        if (d > LINK_DIST) continue;
-        var t = 1 - d / LINK_DIST;  // 1=close, 0=at edge
+      var frac    = (p.r - voidR) / (MAX_R - voidR);
+      // Soft fade at inner edge (first 6% of MAX_R) and outer rim
+      var innerFd = Math.min(1.0, (p.r - voidR) / (MAX_R * 0.06));
+      var edgeFd  = Math.min(1.0, (MAX_R - p.r) / (MAX_R * 0.14));
+      var alpha   = p.lum * innerFd * edgeFd;
+      var sz      = p.sz * (0.15 + frac * 0.85);
 
-        // Link color: blend between the two endpoints
-        var r, g, bl, alpha;
-        if (a.metal && b2.metal) {
-          // Metal–Metal: gold link, moderate opacity
-          r = metalR; g = metalG; bl = metalB;
-          alpha = t * t * (dk ? 0.30 : 0.22);
-        } else if (!a.metal && !b2.metal) {
-          // Liquid–Liquid: muted link, very faint
-          r = liqR; g = liqG; bl = liqB;
-          alpha = t * t * (dk ? 0.14 : 0.10);
-        } else {
-          // Metal–Liquid: blended, slightly more visible
-          r = Math.round((metalR + liqR) / 2);
-          g = Math.round((metalG + liqG) / 2);
-          bl = Math.round((metalB + liqB) / 2);
-          alpha = t * t * (dk ? 0.18 : 0.13);
-        }
-
+      // Trail
+      p.trail.push({ x: x, y: y });
+      if (p.trail.length > TRAIL_N) p.trail.shift();
+      for (var t = 0; t < p.trail.length - 1; t++) {
+        var ta = alpha * (t / TRAIL_N) * 0.38;
+        var ts = sz    * (t / TRAIL_N) * 0.55;
+        if (ts < 0.22) continue;
         ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b2.x, b2.y);
-        ctx.strokeStyle = 'rgba(' + r + ',' + g + ',' + bl + ',' + alpha + ')';
-        ctx.lineWidth = a.metal || b2.metal ? 0.8 : 0.5;
-        ctx.stroke();
-      }
-    }
-
-    // Mouse: draw lines from cursor to nearby particles
-    var hasMouse = mx > 0 && my > 0 && mx < W && my < H;
-    if (hasMouse) {
-      for (var i = 0; i < pts.length; i++) {
-        var p = pts[i];
-        var dx = p.x - mx, dy = p.y - my;
-        var d  = Math.sqrt(dx * dx + dy * dy);
-        if (d > MOUSE_R) continue;
-        var t = 1 - d / MOUSE_R;
-        var r2 = p.metal ? metalR : liqR;
-        var g2 = p.metal ? metalG : liqG;
-        var b3 = p.metal ? metalB : liqB;
-        var al = t * (dk ? 0.55 : 0.45);
-
-        ctx.beginPath();
-        ctx.moveTo(mx, my);
-        ctx.lineTo(p.x, p.y);
-        ctx.strokeStyle = 'rgba(' + r2 + ',' + g2 + ',' + b3 + ',' + al + ')';
-        ctx.lineWidth = p.metal ? 1.0 : 0.6;
-        ctx.stroke();
-      }
-    }
-
-    // Draw nodes on top of links
-    for (var i = 0; i < pts.length; i++) {
-      var p = pts[i];
-      var dm, gm, bm, rad, alpha;
-
-      // Mouse proximity brightens any node
-      var dx = p.x - mx, dy = p.y - my;
-      var distM = Math.sqrt(dx * dx + dy * dy);
-      var mBoost = hasMouse && distM < MOUSE_R ? (1 - distM / MOUSE_R) * 0.5 : 0;
-
-      if (p.metal) {
-        // Breathe: pulse alpha slowly
-        var pulse = 0.55 + 0.25 * Math.sin(p.phase);
-        rad   = 3.2;
-        alpha = Math.min(1, pulse + mBoost);
-        dm = metalR; gm = metalG; bm = metalB;
-
-        // Outer glow ring
-        var glowA = (pulse * 0.25 + mBoost * 0.3) * (dk ? 1 : 0.7);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, rad * 3.5, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(' + dm + ',' + gm + ',' + bm + ',' + glowA + ')';
+        ctx.arc(p.trail[t].x, p.trail[t].y, ts, 0, 6.2832);
+        ctx.fillStyle = rgba(p.col, ta);
         ctx.fill();
-      } else {
-        rad   = 1.6;
-        alpha = (dk ? 0.38 : 0.28) + mBoost * 0.5;
-        dm = liqR; gm = liqG; bm = liqB;
       }
 
       ctx.beginPath();
-      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(' + dm + ',' + gm + ',' + bm + ',' + alpha + ')';
+      ctx.arc(x, y, sz, 0, 6.2832);
+      ctx.fillStyle = rgba(p.col, alpha);
       ctx.fill();
+    }
+
+    // ── Implosions ─────────────────────────────────────────────────
+    for (var i = implosions.length - 1; i >= 0; i--) {
+      var imp = implosions[i];
+      imp.life -= 0.013;
+      if (imp.life <= 0) { implosions.splice(i, 1); continue; }
+
+      var t = 1 - imp.life;
+      var CONV = 0.70;
+
+      if (t < CONV) {
+        var prog  = t / CONV;
+        var ease  = prog * prog * (3 - 2 * prog);
+        var alpha = imp.life * 0.82;
+        for (var j = 0; j < imp.pts.length; j++) {
+          var pt = imp.pts[j];
+          var px = pt.sx + (pt.ex - pt.sx) * ease;
+          var py = pt.sy + (pt.ey - pt.sy) * ease;
+          ctx.beginPath();
+          ctx.arc(px, py, 1.8 * (1 - ease * 0.4), 0, 6.2832);
+          ctx.fillStyle = rgba(imp.col, alpha);
+          ctx.fill();
+        }
+      } else {
+        var ft = (t - CONV) / (1 - CONV);
+        var fa = (1 - ft) * imp.life * 0.9;
+        var fr = ft * MAX_R * 0.055;
+        if (fr > 0.4) {
+          var fg = ctx.createRadialGradient(imp.cx, imp.cy, 0, imp.cx, imp.cy, fr);
+          fg.addColorStop(0,   rgba(imp.col, fa));
+          fg.addColorStop(0.4, rgba(imp.col, fa * 0.28));
+          fg.addColorStop(1,   rgba(imp.col, 0));
+          ctx.beginPath(); ctx.arc(imp.cx, imp.cy, fr, 0, 6.2832);
+          ctx.fillStyle = fg; ctx.fill();
+        }
+      }
     }
 
     raf = requestAnimationFrame(tick);
   }
 
-  init(); tick();
-  window.addEventListener('resize', init);
+  resize(); tick();
+  window.addEventListener('resize', resize);
 })();
 </script>
 {% endblock %}

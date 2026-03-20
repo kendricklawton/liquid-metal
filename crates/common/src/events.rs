@@ -119,12 +119,15 @@ pub struct TrafficPulseEvent {
     pub slug: String,
 }
 
-/// Published by the proxy when a request arrives for a cold Metal service.
-/// Consumed by the daemon to restore the VM from its snapshot.
+/// Published by the proxy when a request arrives for a cold service.
+/// Metal: restored from Firecracker snapshot. Liquid: re-compiled from cached Wasm module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WakeEvent {
     pub service_id:   String,
     pub slug:         String,
+    pub engine:       Engine,
+    /// S3 key prefix for snapshot files (Metal only). Empty for Liquid.
+    #[serde(default)]
     pub snapshot_key: String,
 }
 

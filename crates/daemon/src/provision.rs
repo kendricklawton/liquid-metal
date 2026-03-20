@@ -73,6 +73,9 @@ pub struct ProvisionedService {
     /// S3 key prefix for snapshot files (Metal only, set after snapshot create).
     /// Format: `snapshots/{service_id}/{deploy_id}/`
     pub snapshot_key:  Option<String>,
+    /// Metal dedicated VM tracking — written to DB for post-restart recovery.
+    pub tap_name:      Option<String>,
+    pub fc_pid:        Option<u32>,
 }
 
 /// Shared context passed into each provision task.
@@ -411,14 +414,13 @@ pub async fn provision(ctx: &ProvisionCtx, event: &ProvisionEvent) -> Result<Pro
 
     // Write final status to the DB.
     //
-    // Metal (serverless): status='ready', upstream_addr=NULL, snapshot_key set.
-    //   The VM was halted after snapshotting — no resources consumed. The next
-    //   request triggers a snapshot restore (Phase 2).
+    // Metal (dedicated VM): status='running', upstream_addr set, tap_name/fc_pid/vm_id
+    //   persisted for post-restart registry recovery. VM stays alive permanently.
     //
     // Liquid: status='running', upstream_addr set, snapshot_key=NULL.
     //   The Wasm module is loaded in-process and actively serving.
     let (status, db_result) = if svc.snapshot_key.is_some() {
-        // Metal serverless — service is ready but not running
+        // Snapshot path (unused in current model — kept for compatibility)
         let result = async {
             let db = ctx.pool.get().await.context("db pool")?;
             db.execute(
@@ -431,12 +433,22 @@ pub async fn provision(ctx: &ProvisionCtx, event: &ProvisionEvent) -> Result<Pro
         .await;
         ("ready", result)
     } else {
-        // Liquid (or future always-on) — service is running
+        // Metal dedicated VM or Liquid — service is running.
+        // For Metal: also persist tap_name, fc_pid, vm_id so the startup
+        // registry re-population (main.rs) works after a daemon restart.
         let result = async {
             let db = ctx.pool.get().await.context("db pool")?;
+            let vm_id_str = if svc.engine == Engine::Metal {
+                Some(svc.id.to_string())
+            } else {
+                None
+            };
             db.execute(
-                "UPDATE services SET upstream_addr = $1, status = 'running', node_id = $2 WHERE id = $3",
-                &[&svc.upstream_addr, &ctx.cfg.node_id, &svc_id],
+                "UPDATE services SET upstream_addr = $1, status = 'running', node_id = $2, \
+                 tap_name = $3, fc_pid = $4, vm_id = $5 WHERE id = $6",
+                &[&svc.upstream_addr, &ctx.cfg.node_id,
+                  &svc.tap_name, &svc.fc_pid.map(|p| p as i32), &vm_id_str,
+                  &svc_id],
             )
             .await
             .context("writing upstream_addr + node_id to services")
@@ -729,59 +741,12 @@ async fn provision_metal(
             return Err(e);
         }
 
-        // ── Snapshot the running VM ──────────────────────────────────────
-        // The startup probe passed — the app is healthy. Pause the VM,
-        // snapshot its memory + state, upload to S3, then halt it.
-        // The snapshot becomes the deployable artifact. The next request
-        // restores from snapshot (~10-15ms) instead of cold booting (~200ms).
-        publish_progress(&ctx.nats, &event.service_id, DeployStep::Snapshotting, "Creating VM snapshot").await;
-
-        let snap_dir = PathBuf::from(&ctx.cfg.artifact_dir)
-            .join(&event.service_id)
-            .join("snapshot");
-        tokio::fs::create_dir_all(&snap_dir).await.context("creating snapshot dir")?;
-
-        let vmstate_path = snap_dir.join("vmstate.snap");
-        let mem_path     = snap_dir.join("memory.snap");
-        let vmstate_str  = vmstate_path.to_string_lossy().into_owned();
-        let mem_str      = mem_path.to_string_lossy().into_owned();
-
-        // Pause → snapshot → kill. The VM does not resume after this.
-        let sock = if ctx.cfg.use_jailer {
-            format!("{}/firecracker/{}/root/run/api.sock", ctx.cfg.chroot_base, vm_id)
-        } else {
-            format!("{}/{}.sock", ctx.cfg.sock_dir, vm_id)
-        };
-
-        firecracker::pause_vm(&sock).await.context("pausing VM for snapshot")?;
-        firecracker::create_snapshot(&sock, &vmstate_str, &mem_str)
-            .await
-            .context("creating VM snapshot")?;
-
-        tracing::info!(service_id = event.service_id, "VM snapshot created");
-
-        // Upload snapshot files to S3
-        let snap_key_prefix = format!("snapshots/{}/{}", event.service_id, vm_id);
-        let vmstate_key = format!("{}/vmstate.snap", snap_key_prefix);
-        let mem_key     = format!("{}/memory.snap", snap_key_prefix);
-
-        storage::upload(&ctx.s3, &ctx.bucket, &vmstate_key, &vmstate_path)
-            .await
-            .context("uploading vmstate snapshot to S3")?;
-        storage::upload(&ctx.s3, &ctx.bucket, &mem_key, &mem_path)
-            .await
-            .context("uploading memory snapshot to S3")?;
-
-        tracing::info!(service_id = event.service_id, snap_key = snap_key_prefix, "snapshot uploaded to S3");
-
-        // Kill the VM — the snapshot is the artifact now.
-        unsafe { libc::kill(fc_pid as libc::pid_t, libc::SIGKILL); }
-
-        // Clean up all kernel resources (TAP, eBPF, cgroup, jailer chroot).
-        // The VM is dead; we only need the snapshot for future restores.
-        release_tap_index(&tap).await;
-        deprovision::metal(
-            &event.service_id,
+        // ── Dedicated VM — register handle and stay running ────────────────
+        // The startup probe passed — the VM is healthy. For dedicated Metal VMs,
+        // we keep the VM running permanently (no snapshot, no scale-to-zero).
+        // Register the handle so deprovision and crash-watcher can tear it down later.
+        ctx.registry.lock().await.insert(
+            event.service_id.clone(),
             deprovision::VmHandle {
                 tap_name:    tap.clone(),
                 fc_pid,
@@ -789,17 +754,22 @@ async fn provision_metal(
                 use_jailer:  ctx.cfg.use_jailer,
                 chroot_base: ctx.cfg.chroot_base.clone(),
             },
-            &ctx.cfg.artifact_dir,
-        ).await;
+        );
 
-        tracing::info!(vm_id = %vm_id, snap_key = snap_key_prefix, "metal deploy complete — snapshot ready");
-        publish_progress(&ctx.nats, &event.service_id, DeployStep::Ready, "Snapshot ready — service will wake on first request").await;
+        tracing::info!(
+            vm_id = %vm_id, %upstream_addr, service_id = event.service_id,
+            "metal VM running — dedicated, always on"
+        );
+        publish_progress(&ctx.nats, &event.service_id, DeployStep::Running,
+            "VM is live — dedicated Metal service running").await;
 
         return Ok(ProvisionedService {
             id: vm_id,
             engine: Engine::Metal,
-            upstream_addr: None,  // No VM running — wakes from snapshot on first request
-            snapshot_key: Some(snap_key_prefix),
+            upstream_addr: Some(upstream_addr),
+            snapshot_key: None,
+            tap_name: Some(tap),
+            fc_pid: Some(fc_pid),
         });
     }
 
@@ -810,6 +780,8 @@ async fn provision_metal(
         engine: Engine::Metal,
         upstream_addr: None,
         snapshot_key: None,
+        tap_name: None,
+        fc_pid: None,
     })
 }
 
@@ -906,6 +878,20 @@ async fn provision_liquid(
 
     tracing::info!(service_id = %id, app = event.app_name, "provisioning liquid (wasm)");
 
+    // Persist metadata for serverless wake — env vars and app name are needed
+    // to re-start the Wasm shim after scale-to-zero idle teardown.
+    let metadata = serde_json::json!({
+        "app_name": event.app_name,
+        "env_vars": event.env_vars,
+        "tenant_id": event.tenant_id,
+    });
+    let metadata_path = PathBuf::from(&ctx.cfg.artifact_dir)
+        .join(&event.service_id)
+        .join("metadata.json");
+    tokio::fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap_or_default())
+        .await
+        .context("writing liquid metadata for wake recovery")?;
+
     // Invocation counter — shared with wasm_http::dispatch (writes) and usage reporter (reads).
     let invocations = Arc::new(AtomicU64::new(0));
 
@@ -938,7 +924,7 @@ async fn provision_liquid(
     tracing::info!(service_id = %id, %upstream_addr, "liquid wasm ready");
     publish_progress(&ctx.nats, &event.service_id, DeployStep::Running, "Wasm module is live").await;
 
-    Ok(ProvisionedService { id, engine: Engine::Liquid, upstream_addr: Some(upstream_addr), snapshot_key: None })
+    Ok(ProvisionedService { id, engine: Engine::Liquid, upstream_addr: Some(upstream_addr), snapshot_key: None, tap_name: None, fc_pid: None })
 }
 
 /// HTTP startup probe: poll upstream_addr with `GET /` until any HTTP response is received

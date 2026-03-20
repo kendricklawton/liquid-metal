@@ -39,10 +39,11 @@ pub struct AppState {
 pub fn build_router(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .route("/", get(routes::public::splash))
-        .route("/pricing", get(routes::public::pricing))
+        .route("/plans", get(routes::public::plans))
         .route("/about", get(routes::public::about))
         .route("/docs", get(routes::public::docs))
-        .route("/help", get(routes::public::help));
+        .route("/help", get(routes::public::help))
+        .route("/templates", get(routes::public::templates));
 
     // compile-time absolute path; override with WEB_STATIC_DIR for Docker/prod.
     let static_dir = std::env::var("WEB_STATIC_DIR")
