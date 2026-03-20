@@ -1,9 +1,9 @@
 # Liquid Metal Daemon — Liquid tier (Wasmtime)
-# Runs on node-b-01 and node-b-02 only (node_class = "liquid").
+# Beta topology: single instance on node-b-01 (node_class = "liquid").
 # Consumes NATS ProvisionEvent → loads .wasm modules into Wasmtime, spins up HTTP shim.
-# Stateless — both nodes run active/active. No KVM, no TAP, no eBPF needed.
+# Stateless — no KVM, no TAP, no eBPF needed.
 #
-# Deploy: nomad job run infra/jobs/daemon-liquid.nomad.hcl
+# Deploy: nomad job run infra/nomad/daemon-liquid.nomad.hcl
 
 job "daemon-liquid" {
   datacenters = ["ord"]
@@ -14,21 +14,15 @@ job "daemon-liquid" {
     min_healthy_time = "15s"
     healthy_deadline = "2m"
     auto_revert      = true
-    stagger          = "15s"
   }
 
   group "daemon" {
-    count = 2 # One per Liquid node
+    count = 1
 
     constraint {
       attribute = "${node.class}"
       operator  = "="
       value     = "liquid"
-    }
-
-    constraint {
-      operator = "distinct_hosts"
-      value    = "true"
     }
 
     task "daemon" {
@@ -64,15 +58,37 @@ EOF
 
       env {
         NODE_ENGINE  = "liquid"
-        NODE_ID      = "${node.unique.name}" # node-b-01 / node-b-02
+        NODE_ID      = "${node.unique.name}" # node-b-01
         ARTIFACT_DIR = "/var/lib/liquid-metal/artifacts"
+        HEALTH_PORT  = "${NOMAD_PORT_health}"
         RUST_LOG     = "info"
+        OTEL_EXPORTER_OTLP_ENDPOINT = "${OTEL_ENDPOINT}"
       }
 
       resources {
         cpu    = 2000 # MHz — Wasmtime JIT compilation is CPU-intensive at load time
         memory = 1024 # MB — each loaded Wasm module lives in memory
       }
+
+      logs {
+        max_files     = 10
+        max_file_size = 10
+      }
+
+      service {
+        name = "daemon-liquid"
+        port = "health"
+        check {
+          type     = "http"
+          path     = "/health"
+          interval = "10s"
+          timeout  = "3s"
+        }
+      }
+    }
+
+    network {
+      port "health" {}
     }
   }
 

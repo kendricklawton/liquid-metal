@@ -1,0 +1,551 @@
+{% extends "base.html" %}
+
+{% block title %}Liquid Metal{% endblock %}
+{% block description %}Dedicated VMs and serverless Wasm for compiled binaries. Deploy Go, Rust, or Zig — no Dockerfiles, no infrastructure.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+
+  {# ── HERO ──────────────────────────────────────────────────────────────── #}
+  <div class="relative mt-12">
+    <section class="relative flex flex-col items-center justify-center text-center" style="height:calc(100vh - 3rem);overflow:hidden;">
+      <canvas id="hero-canvas" style="position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;z-index:0;"></canvas>
+      <div class="relative z-10 w-full flex flex-col items-center gap-8 max-w-4xl mx-auto px-4">
+
+        <div class="flex items-center gap-2 flex-wrap justify-center">
+          <span class="glass-card border-accent-go px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest" style="color:#00ADD8">Go</span>
+          <span class="glass-card border-accent-rust px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest" style="color:#CE422B">Rust</span>
+          <span class="glass-card border-accent-zig px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-widest" style="color:#F7A41D">Zig</span>
+        </div>
+
+        <h1 class="text-4xl sm:text-6xl font-black tracking-tighter">
+          Dedicated VM.<br/>
+          <span class="text-zwl-muted dark:text-zw-muted">Or serverless Wasm.</span>
+        </h1>
+
+        <p class="text-base sm:text-lg text-zwl-muted dark:text-zw-muted max-w-xl leading-relaxed">
+          Metal runs your compiled binary in a dedicated Firecracker VM &mdash; always on, no cold starts.
+          Liquid runs your Wasm module serverless, sub-millisecond. One CLI, two engines.
+        </p>
+
+        <div class="flex flex-col items-center gap-3">
+          <div class="flex flex-wrap items-center justify-center gap-4">
+            <a href="/auth/login" class="inline-flex items-center px-8 py-3.5 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+              Start Deploying
+            </a>
+            <a href="/docs" class="glass-btn inline-flex items-center px-8 py-3.5 text-xs font-bold uppercase tracking-widest transition-colors">
+              Read the Docs
+            </a>
+          </div>
+          <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Free tier &mdash; no credit card required</span>
+        </div>
+
+        <div class="glass-card grid grid-cols-3 divide-x divide-zwl-border dark:divide-zw-border">
+          <div class="px-6 py-4 flex flex-col gap-1 items-center">
+            <span class="text-lg font-black font-mono">0ms</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal cold start</span>
+          </div>
+          <div class="px-6 py-4 flex flex-col gap-1 items-center">
+            <span class="text-lg font-black font-mono">&lt;1ms</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid cold start</span>
+          </div>
+          <div class="px-6 py-4 flex flex-col gap-1 items-center">
+            <span class="text-lg font-black font-mono">$6</span>
+            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal starts at</span>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-center gap-3 mt-2">
+          <span class="proof-badge">Built with Rust</span>
+          <span class="proof-badge">Firecracker VMs</span>
+          <span class="proof-badge">eBPF isolated</span>
+          <span class="proof-badge">Wasmtime</span>
+        </div>
+
+      </div>
+    </section>
+  </div>
+
+  {# ── TERMINAL ──────────────────────────────────────────────────────────── #}
+  <section
+    class="py-20 border-b border-zwl-border dark:border-zw-border"
+    x-data="{ lang: 0 }"
+  >
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// write code, ship binary, get url</p>
+    <h2 class="text-2xl font-black tracking-tight mb-8">Compile. Deploy. Done.</h2>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+
+      {# ── Source code panel ─────────────────────────────────────────────── #}
+      <div class="terminal-panel overflow-hidden" style="background:#0b0e14;border:1px solid #1c2433;color:#bfbdb6">
+        <div class="flex" style="border-bottom:1px solid #1c2433">
+          <button @click="lang = 0" class="cursor-pointer flex-1 py-2.5 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
+            :style="lang === 0 ? 'color:#00ADD8;border-bottom:3px solid #00ADD8' : 'color:#00ADD8;border-bottom:3px solid transparent'">Go</button>
+          <button @click="lang = 1" class="cursor-pointer flex-1 py-2.5 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
+            :style="lang === 1 ? 'color:#CE422B;border-bottom:3px solid #CE422B' : 'color:#CE422B;border-bottom:3px solid transparent'">Rust</button>
+          <button @click="lang = 2" class="cursor-pointer flex-1 py-2.5 text-[10px] font-mono font-bold uppercase tracking-widest transition-all"
+            :style="lang === 2 ? 'color:#F7A41D;border-bottom:3px solid #F7A41D' : 'color:#F7A41D;border-bottom:3px solid transparent'">Zig</button>
+        </div>
+        <div class="px-5 py-2" style="border-bottom:1px solid #1c2433">
+          <span class="text-[10px] font-mono" style="color:#636a72" x-text="['main.go', 'main.rs', 'main.zig'][lang]"></span>
+        </div>
+        <div class="px-5 py-5 overflow-hidden font-mono">
+          {# Go #}
+          <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre"><span style="color:#ff8f40">package</span> <span style="color:#d2a6ff">main</span>
+
+<span style="color:#ff8f40">import</span> (
+	<span style="color:#aad94c">"fmt"</span>
+	<span style="color:#aad94c">"net/http"</span>
+)
+
+<span style="color:#ff8f40">func</span> <span style="color:#ffb454">handler</span>(w <span style="color:#73b8ff">http.ResponseWriter</span>, r *<span style="color:#73b8ff">http.Request</span>) {
+	fmt.<span style="color:#ffb454">Fprintln</span>(w, <span style="color:#aad94c">"hello from liquid metal"</span>)
+}
+
+<span style="color:#ff8f40">func</span> <span style="color:#ffb454">main</span>() {
+	http.<span style="color:#ffb454">HandleFunc</span>(<span style="color:#aad94c">"/"</span>, handler)
+	http.<span style="color:#ffb454">ListenAndServe</span>(<span style="color:#aad94c">":8080"</span>, <span style="color:#ff8f40">nil</span>)
+}</pre>
+          {# Rust #}
+          <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre"><span style="color:#ff8f40">use</span> <span style="color:#d2a6ff">std::net</span>::<span style="color:#73b8ff">TcpListener</span>;
+<span style="color:#ff8f40">use</span> <span style="color:#d2a6ff">std::io</span>::<span style="color:#73b8ff">Write</span>;
+
+<span style="color:#ff8f40">fn</span> <span style="color:#ffb454">main</span>() {
+    <span style="color:#ff8f40">let</span> listener = <span style="color:#73b8ff">TcpListener</span>::<span style="color:#ffb454">bind</span>(<span style="color:#aad94c">"0.0.0.0:8080"</span>).<span style="color:#ffb454">unwrap</span>();
+
+    <span style="color:#ff8f40">for</span> stream <span style="color:#ff8f40">in</span> listener.<span style="color:#ffb454">incoming</span>() {
+        <span style="color:#ff8f40">let mut</span> stream = stream.<span style="color:#ffb454">unwrap</span>();
+        <span style="color:#ff8f40">let</span> response = <span style="color:#aad94c">b"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>;
+        stream.<span style="color:#ffb454">write_all</span>(response).<span style="color:#ffb454">ok</span>();
+    }
+}</pre>
+          {# Zig #}
+          <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre"><span style="color:#ff8f40">const</span> std = @<span style="color:#ffb454">import</span>(<span style="color:#aad94c">"std"</span>);
+
+<span style="color:#ff8f40">pub fn</span> <span style="color:#ffb454">main</span>() !<span style="color:#73b8ff">void</span> {
+    <span style="color:#ff8f40">const</span> addr = <span style="color:#ff8f40">try</span> std.net.Address.<span style="color:#ffb454">resolveIp</span>(<span style="color:#aad94c">"0.0.0.0"</span>, 8080);
+    <span style="color:#ff8f40">var</span> server = <span style="color:#ff8f40">try</span> addr.<span style="color:#ffb454">listen</span>(.{});
+    <span style="color:#ff8f40">defer</span> server.<span style="color:#ffb454">deinit</span>();
+
+    <span style="color:#ff8f40">while</span> (<span style="color:#ff8f40">true</span>) {
+        <span style="color:#ff8f40">const</span> conn = <span style="color:#ff8f40">try</span> server.<span style="color:#ffb454">accept</span>();
+        _ = conn.stream.<span style="color:#ffb454">write</span>(<span style="color:#aad94c">"HTTP/1.1 200 OK\r\n\r\nhello from liquid metal"</span>);
+        conn.stream.<span style="color:#ffb454">close</span>();
+    }
+}</pre>
+        </div>
+        <div class="px-5 py-2.5 flex items-center gap-2" style="border-top:1px solid #1c2433">
+          <span class="text-xs" style="color:#636a72">$</span>
+          <span class="text-xs font-semibold" style="color:#bfbdb6">flux deploy</span>
+          <span class="ml-auto inline-flex items-center gap-1.5 leading-none">
+            <span class="w-2.5 h-2.5 shrink-0 rounded-full" style="background:#aad94c"></span>
+            <span class="text-[10px] leading-none font-bold uppercase tracking-widest" style="color:#aad94c">Ready</span>
+          </span>
+        </div>
+      </div>
+
+      {# ── Config + deploy log ───────────────────────────────────────────── #}
+      <div class="flex flex-col gap-4">
+        <div class="terminal-panel overflow-hidden" style="background:#0b0e14;border:1px solid #1c2433;color:#bfbdb6">
+          <div class="px-5 py-2 flex items-center justify-between" style="border-bottom:1px solid #1c2433">
+            <span class="text-[10px]" style="color:#636a72">liquid-metal.toml</span>
+            <span class="text-[9px] font-bold px-2 py-1 border uppercase tracking-widest inline-flex items-center leading-none"
+              :class="lang === 0 ? 'border-accent-go' : lang === 1 ? 'border-accent-rust' : 'border-accent-zig'"
+              :style="lang === 0 ? 'color:#00ADD8' : lang === 1 ? 'color:#CE422B' : 'color:#F7A41D'"
+              x-text="lang === 2 ? 'liquid' : 'metal'"></span>
+          </div>
+          <div class="px-5 py-5 font-mono">
+            <pre x-show="lang === 0" class="text-xs leading-relaxed whitespace-pre"><span style="color:#73b8ff">[service]</span>
+name = <span style="color:#aad94c">"hello-world"</span>
+engine = <span style="color:#aad94c">"metal"</span>
+port = <span style="color:#e6b450">8080</span>
+
+<span style="color:#73b8ff">[build]</span>
+command = <span style="color:#aad94c">"go build -o app ."</span>
+output = <span style="color:#aad94c">"app"</span></pre>
+            <pre x-show="lang === 1" x-cloak class="text-xs leading-relaxed whitespace-pre"><span style="color:#73b8ff">[service]</span>
+name = <span style="color:#aad94c">"rust-api"</span>
+engine = <span style="color:#aad94c">"metal"</span>
+port = <span style="color:#e6b450">8080</span>
+
+<span style="color:#73b8ff">[build]</span>
+command = <span style="color:#aad94c">"cargo build --target x86_64-unknown-linux-musl --release"</span>
+output = <span style="color:#aad94c">"target/x86_64-unknown-linux-musl/release/rust-api"</span></pre>
+            <pre x-show="lang === 2" x-cloak class="text-xs leading-relaxed whitespace-pre"><span style="color:#73b8ff">[service]</span>
+name = <span style="color:#aad94c">"zig-wasm"</span>
+engine = <span style="color:#aad94c">"liquid"</span>
+
+<span style="color:#73b8ff">[liquid]</span>
+wasm = <span style="color:#aad94c">"main.wasm"</span></pre>
+          </div>
+        </div>
+
+        <div class="terminal-panel overflow-hidden" style="background:#0b0e14;border:1px solid #1c2433;color:#bfbdb6">
+          <div class="px-5 py-2 flex items-center justify-between" style="border-bottom:1px solid #1c2433">
+            <span class="text-[10px]" style="color:#636a72">deploy log</span>
+            <span class="inline-flex items-center gap-1.5 leading-none">
+              <span class="w-2.5 h-2.5 shrink-0 rounded-full" style="background:#aad94c;animation:pulse 2s infinite"></span>
+              <span class="text-[10px] leading-none font-bold uppercase tracking-widest" style="color:#aad94c">Live</span>
+            </span>
+          </div>
+          <div class="px-5 py-4 text-[11px] leading-loose font-mono" style="color:#636a72">
+            <div>
+              <span>$</span>
+              <span class="font-semibold ml-1" style="color:#bfbdb6"
+                x-text="'flux deploy --name ' + ['hello-world','rust-api','zig-wasm'][lang]"></span>
+            </div>
+            <div class="mt-2 flex flex-col gap-0.5">
+              <div class="deploy-line"><span class="deploy-arrow">&#8594;</span> reading liquid-metal.toml</div>
+              <div class="deploy-line" x-show="lang === 0"><span class="deploy-arrow">&#8594;</span> go build <span class="deploy-done">done</span> (0.8s)</div>
+              <div class="deploy-line" x-show="lang === 1" x-cloak><span class="deploy-arrow">&#8594;</span> cargo build --release <span class="deploy-done">done</span> (1.4s)</div>
+              <div class="deploy-line" x-show="lang === 2" x-cloak><span class="deploy-arrow">&#8594;</span> zig build-exe -target wasm32-wasi <span class="deploy-done">done</span></div>
+              <div class="deploy-line"><span class="deploy-arrow">&#8594;</span> uploading artifact <span class="deploy-done">done</span></div>
+              <div x-show="lang !== 2" class="mt-1">
+                <div class="deploy-line"><span class="deploy-arrow">&#8594;</span> building rootfs</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> binary injected</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> vm booted, health check passed</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> vm running <span class="deploy-done">live</span></div>
+              </div>
+              <div x-show="lang === 2" x-cloak class="mt-1">
+                <div class="deploy-line"><span class="deploy-arrow">&#8594;</span> loading wasm module</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> wasmtime compiled</div>
+                <div class="deploy-line pl-3"><span class="deploy-check">&#10003;</span> cold start <span class="deploy-done">&lt;1ms</span></div>
+              </div>
+              <div class="deploy-line mt-2 flex items-center gap-2">
+                <span class="deploy-check font-bold">&#10003;</span>
+                <span class="deploy-done">service live</span>
+                <span class="ml-1" style="color:#aad94c" x-text="['hello-world','rust-api','zig-wasm'][lang] + '.lm.dev'"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  {# ── WHY ─────────────────────────────────────────────────────────────── #}
+  <section class="py-20 border-b border-zwl-border dark:border-zw-border">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// the problem</p>
+    <h2 class="text-2xl font-black tracking-tight mb-4">Deploy platforms forgot about compiled languages.</h2>
+    <p class="text-sm text-zwl-muted dark:text-zw-muted max-w-2xl mb-12 leading-relaxed">
+      Most platforms want a Dockerfile, a runtime, or a framework. If you write Go, Rust, or Zig,
+      you already have a binary. You shouldn't need to wrap it in a container just to deploy it.
+      Liquid Metal takes your compiled binary and runs it &mdash; on a dedicated VM or as serverless WebAssembly.
+    </p>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="glass-card p-8 flex flex-col gap-4">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
+          <i data-lucide="server" style="width:14px;height:14px;"></i>
+        </div>
+        <h3 class="text-xs font-bold uppercase tracking-widest">Metal &mdash; Dedicated VM</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">Your binary runs in a KVM-isolated VM on bare metal hardware. Always on, no cold starts, fixed monthly price. Real Linux kernel, real networking.</p>
+      </div>
+      <div class="glass-card p-8 flex flex-col gap-4">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
+          <i data-lucide="zap" style="width:14px;height:14px;"></i>
+        </div>
+        <h3 class="text-xs font-bold uppercase tracking-widest">Liquid &mdash; Serverless Wasm</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">Compile to .wasm and run it in Wasmtime. Sub-millisecond cold starts, scale to zero, per-invocation billing. For lightweight stateless workloads.</p>
+      </div>
+      <div class="glass-card p-8 flex flex-col gap-4">
+        <div class="w-8 h-8 flex items-center justify-center shrink-0 border border-zwl-border dark:border-zw-border">
+          <i data-lucide="binary" style="width:14px;height:14px;"></i>
+        </div>
+        <h3 class="text-xs font-bold uppercase tracking-widest">Your binary, as-is</h3>
+        <p class="text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">No SDK. No wrapper. No runtime dependency. If <code>go build</code>, <code>cargo build</code>, or <code>zig build</code> produces it, we run it.</p>
+      </div>
+    </div>
+  </section>
+
+  {# ── COMPARISON TABLE ─────────────────────────────────────────────────── #}
+  <section class="py-20 border-b border-zwl-border dark:border-zw-border">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// choose your engine</p>
+    <h2 class="text-2xl font-black tracking-tight mb-12">Liquid or Metal?</h2>
+    <div class="glass-card overflow-hidden">
+      <table class="w-full text-xs font-mono">
+        <thead>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <th class="text-left px-6 py-4 text-[10px] uppercase tracking-widest text-zwl-muted dark:text-zw-muted"></th>
+            <th class="text-left px-6 py-4 text-[10px] uppercase tracking-widest">Liquid (Wasm)</th>
+            <th class="text-left px-6 py-4 text-[10px] uppercase tracking-widest">Metal (Dedicated VM)</th>
+          </tr>
+        </thead>
+        <tbody class="text-zwl-muted dark:text-zw-muted">
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Model</td>
+            <td class="px-6 py-3">Serverless</td>
+            <td class="px-6 py-3">Always-on VM</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Cold start</td>
+            <td class="px-6 py-3">&lt;1ms</td>
+            <td class="px-6 py-3">None &mdash; always running</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Isolation</td>
+            <td class="px-6 py-3">Wasm sandbox</td>
+            <td class="px-6 py-3">KVM + eBPF</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Filesystem</td>
+            <td class="px-6 py-3">&#10007;</td>
+            <td class="px-6 py-3">&#10003; Full ext4</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Networking</td>
+            <td class="px-6 py-3">HTTP in/out</td>
+            <td class="px-6 py-3">&#10003; TCP/UDP/ICMP</td>
+          </tr>
+          <tr class="border-b border-zwl-border dark:border-zw-border">
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Target</td>
+            <td class="px-6 py-3"><code>wasm32-wasip1</code></td>
+            <td class="px-6 py-3"><code>x86_64-linux-musl</code></td>
+          </tr>
+          <tr>
+            <td class="px-6 py-3 font-bold text-zwl-fg dark:text-zw-fg">Pricing</td>
+            <td class="px-6 py-3">$0.30 / 1M inv</td>
+            <td class="px-6 py-3">From $6/mo</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {# ── HOW IT WORKS TIMELINE ──────────────────────────────────────────── #}
+  <section class="py-20 border-b border-zwl-border dark:border-zw-border">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-2">// how it works</p>
+    <h2 class="text-2xl font-black tracking-tight mb-12">From code to production in seconds.</h2>
+    <div class="max-w-2xl mx-auto">
+      <div class="timeline">
+        <div class="timeline-step">
+          <div class="timeline-dot">1</div>
+          <h3 class="text-sm font-bold mb-1">Write code</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Go, Rust, Zig &mdash; any language that compiles to a static binary or Wasm module.</p>
+        </div>
+        <div class="timeline-step">
+          <div class="timeline-dot">2</div>
+          <h3 class="text-sm font-bold mb-1">flux deploy</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">One command. Builds your binary, uploads it, provisions your VM (Metal) or compiles the Wasm module (Liquid).</p>
+        </div>
+        <div class="timeline-step">
+          <div class="timeline-dot">3</div>
+          <h3 class="text-sm font-bold mb-1">Get a URL</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Your service is live at <code>your-app.liquidmetal.dev</code>. Custom domains supported.</p>
+        </div>
+        <div class="timeline-step">
+          <div class="timeline-dot">4</div>
+          <h3 class="text-sm font-bold mb-1">Traffic flows</h3>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Metal VMs are always on &mdash; instant response. Liquid services wake in &lt;1ms. No loading screens either way.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {# ── CTA ───────────────────────────────────────────────────────────────── #}
+  <section class="py-24 flex flex-col items-center text-center gap-6">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-zwl-muted dark:text-zw-muted">// get started</p>
+    <h2 class="text-3xl font-black tracking-tight">
+      Deploy a binary.<br/>Get a URL.
+    </h2>
+    <p class="text-sm text-zwl-muted dark:text-zw-muted max-w-md">
+      Dedicated VMs or serverless Wasm. Go, Rust, Zig. No containers, no Dockerfiles.
+    </p>
+    <div class="flex flex-wrap items-center justify-center gap-4">
+      <a href="/auth/login" class="inline-flex items-center px-10 py-4 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+        Start for Free
+      </a>
+      <a href="/plans" class="glass-btn inline-flex items-center px-10 py-4 text-xs font-bold uppercase tracking-widest transition-colors">
+        See Plans
+      </a>
+    </div>
+    <p class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted">Free Liquid tier &mdash; no credit card required</p>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  var c = document.getElementById('hero-canvas');
+  if (!c) return;
+  var ctx = c.getContext('2d');
+  var W, H, raf;
+  var metal = [], liquid = [];
+  var mouseX = -9999, mouseY = -9999;
+
+  // Metal nodes — --lm-accent gold. Heavy, anchored, pulsing.
+  var METAL_COL = [230, 180, 80];
+  // Liquid particles — --lm-fg silver/muted. Light, free-drifting.
+  var LIQUID_COL  = [191, 189, 182];
+  var LIQUID_DIM  = [138, 145, 153];
+
+  function rgba(col, a) {
+    return 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + a + ')';
+  }
+
+  window.addEventListener('mousemove', function(e) {
+    var b = c.getBoundingClientRect();
+    mouseX = e.clientX - b.left;
+    mouseY = e.clientY - b.top;
+  });
+
+  function init() {
+    var b = c.getBoundingClientRect();
+    W = b.width; H = b.height;
+    c.width  = Math.round(W * devicePixelRatio);
+    c.height = Math.round(H * devicePixelRatio);
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+
+    // ── Metal nodes — 20 anchored nodes, spring to home position
+    metal = [];
+    for (var i = 0; i < 20; i++) {
+      var hx = W * (0.08 + Math.random() * 0.84);
+      var hy = H * (0.08 + Math.random() * 0.84);
+      metal.push({
+        hx: hx, hy: hy, x: hx, y: hy,
+        vx: 0, vy: 0,
+        sz:    3.5 + Math.random() * 2.5,
+        phase: Math.random() * 6.2832,
+        pspd:  0.008 + Math.random() * 0.006,
+      });
+    }
+
+    // ── Liquid particles — 700 free-drifting tiny dots
+    liquid = [];
+    for (var i = 0; i < 700; i++) {
+      liquid.push({
+        x:   Math.random() * W,
+        y:   Math.random() * H,
+        vx:  (Math.random() - 0.5) * 0.5,
+        vy:  (Math.random() - 0.5) * 0.5,
+        sz:  0.4 + Math.random() * 0.9,
+        lum: 0.25 + Math.random() * 0.50,
+        col: Math.random() < 0.6 ? LIQUID_COL : LIQUID_DIM,
+      });
+    }
+  }
+
+  var CONNECT  = 190;  // Metal edge draw distance
+  var MOUSE_R  = 120;
+
+  function tick() {
+    if (!document.getElementById('hero-canvas')) {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', init);
+      return;
+    }
+    ctx.clearRect(0, 0, W, H);
+
+    // ── Metal edges ────────────────────────────────────────────────
+    for (var i = 0; i < metal.length; i++) {
+      for (var j = i + 1; j < metal.length; j++) {
+        var dx = metal[i].x - metal[j].x, dy = metal[i].y - metal[j].y;
+        var d  = Math.sqrt(dx * dx + dy * dy);
+        if (d < CONNECT) {
+          ctx.beginPath();
+          ctx.moveTo(metal[i].x, metal[i].y);
+          ctx.lineTo(metal[j].x, metal[j].y);
+          ctx.strokeStyle = rgba(METAL_COL, (1 - d / CONNECT) * 0.22);
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+        }
+      }
+    }
+
+    // ── Metal nodes ────────────────────────────────────────────────
+    for (var i = 0; i < metal.length; i++) {
+      var n = metal[i];
+
+      // Spring toward home
+      n.vx += (n.hx - n.x) * 0.007;
+      n.vy += (n.hy - n.y) * 0.007;
+
+      // Mouse repulsion
+      var mdx = n.x - mouseX, mdy = n.y - mouseY;
+      var md  = Math.sqrt(mdx * mdx + mdy * mdy);
+      if (md < MOUSE_R && md > 0.5) {
+        var f = 1.4 * (1 - md / MOUSE_R);
+        n.vx += (mdx / md) * f;
+        n.vy += (mdy / md) * f;
+      }
+      n.vx *= 0.90; n.vy *= 0.90;
+      n.x  += n.vx;  n.y  += n.vy;
+      n.phase += n.pspd;
+
+      var pulse = (Math.sin(n.phase) + 1) * 0.5;  // 0..1
+
+      // Glow
+      var gr = n.sz * (3.0 + pulse * 2.0);
+      var grad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, gr);
+      grad.addColorStop(0,   rgba(METAL_COL, 0.18 + pulse * 0.14));
+      grad.addColorStop(0.5, rgba(METAL_COL, 0.06 + pulse * 0.06));
+      grad.addColorStop(1,   rgba(METAL_COL, 0));
+      ctx.beginPath(); ctx.arc(n.x, n.y, gr, 0, 6.2832);
+      ctx.fillStyle = grad; ctx.fill();
+
+      // Core
+      ctx.beginPath(); ctx.arc(n.x, n.y, n.sz, 0, 6.2832);
+      ctx.fillStyle = rgba(METAL_COL, 0.70 + pulse * 0.25);
+      ctx.fill();
+
+      // Bright centre pinpoint
+      ctx.beginPath(); ctx.arc(n.x, n.y, n.sz * 0.38, 0, 6.2832);
+      ctx.fillStyle = rgba([255, 245, 210], 0.95);
+      ctx.fill();
+    }
+
+    // ── Liquid particles ───────────────────────────────────────────
+    for (var i = 0; i < liquid.length; i++) {
+      var p = liquid[i];
+
+      // Brownian drift
+      p.vx += (Math.random() - 0.5) * 0.045;
+      p.vy += (Math.random() - 0.5) * 0.045;
+
+      // Faint attraction to nearest Metal node beyond 80px, repel within 60px
+      var nearD = 1e9, nearDx = 0, nearDy = 0;
+      for (var j = 0; j < metal.length; j++) {
+        var dx = metal[j].x - p.x, dy = metal[j].y - p.y;
+        var d2 = dx * dx + dy * dy;
+        if (d2 < nearD) { nearD = d2; nearDx = dx; nearDy = dy; }
+      }
+      nearD = Math.sqrt(nearD);
+      if (nearD > 80 && nearD < 280) {
+        p.vx += (nearDx / nearD) * 0.0009;
+        p.vy += (nearDy / nearD) * 0.0009;
+      } else if (nearD <= 80 && nearD > 0.5) {
+        p.vx -= (nearDx / nearD) * 0.018;
+        p.vy -= (nearDy / nearD) * 0.018;
+      }
+
+      // Mouse repulsion
+      var mdx = p.x - mouseX, mdy = p.y - mouseY;
+      var md  = Math.sqrt(mdx * mdx + mdy * mdy);
+      if (md < 90 && md > 0.5) {
+        var f = 0.28 * (1 - md / 90);
+        p.vx += (mdx / md) * f;
+        p.vy += (mdy / md) * f;
+      }
+
+      p.vx *= 0.96; p.vy *= 0.96;
+      p.x  += p.vx;  p.y  += p.vy;
+
+      // Wrap edges
+      if (p.x < 0) p.x += W; else if (p.x > W) p.x -= W;
+      if (p.y < 0) p.y += H; else if (p.y > H) p.y -= H;
+
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.sz, 0, 6.2832);
+      ctx.fillStyle = rgba(p.col, p.lum);
+      ctx.fill();
+    }
+
+    raf = requestAnimationFrame(tick);
+  }
+
+  init(); tick();
+  window.addEventListener('resize', init);
+})();
+</script>
+{% endblock %}

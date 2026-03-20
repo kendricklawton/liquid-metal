@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing_subscriber::EnvFilter;
 
 use api::{AppState, RateLimitConfig, build_router};
 use common::{
@@ -11,9 +10,33 @@ use common::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "api=info".into()))
-        .init();
+    let startup = std::time::Instant::now();
+    let _tracer_provider = common::config::init_tracing("api");
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("rustls CryptoProvider already installed");
+
+    // ── Prometheus metrics server ─────────────────────────────────────────────
+    let metrics_bind = env_or("METRICS_BIND_ADDR", "0.0.0.0:9090");
+    let metrics_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+        .install_recorder()
+        .context("installing metrics recorder")?;
+    {
+        let listener = tokio::net::TcpListener::bind(&metrics_bind).await?;
+        tracing::info!(%metrics_bind, "metrics server listening");
+        tokio::spawn(async move {
+            let app = axum::Router::new().route(
+                "/metrics",
+                axum::routing::get(move || {
+                    let h = metrics_handle.clone();
+                    async move { h.render() }
+                }),
+            );
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!(error = %e, "metrics server exited with error");
+            }
+        });
+    }
 
     // ── Migrate-only mode ────────────────────────────────────────────────────
     if std::env::args().any(|a| a == "--migrate") {
@@ -41,59 +64,37 @@ async fn main() -> Result<()> {
         anyhow::bail!("INTERNAL_SECRET must contain at least one non-empty value");
     }
 
-    // ── OIDC configuration ───────────────────────────────────────────────────
-    let (oidc_client_id, oidc_device_auth_url, oidc_token_url, oidc_userinfo_url, oidc_revoke_url) = {
-        let issuer = std::env::var("OIDC_ISSUER")
-            .or_else(|_| std::env::var("ZITADEL_DOMAIN"))
-            .ok();
+    // ── OIDC configuration (Zitadel discovery) ────────────────────────────────
+    let oidc_issuer = require_env("OIDC_ISSUER")?;
+    let oidc_cli_client_id = require_env("OIDC_CLI_CLIENT_ID")?;
 
-        let client_id = std::env::var("OIDC_CLIENT_ID")
-            .or_else(|_| std::env::var("ZITADEL_CLIENT_ID"))
-            .ok();
+    let disc = oidc_discover(&oidc_issuer)
+        .await
+        .with_context(|| format!("OIDC discovery failed for {oidc_issuer}"))?;
+    tracing::info!(%oidc_issuer, "OIDC endpoints discovered");
 
-        if let Some(issuer) = issuer {
-            let client_id = client_id.context(
-                "OIDC_CLIENT_ID (or ZITADEL_CLIENT_ID) is required when using OIDC_ISSUER",
-            )?;
-
-            let disc = oidc_discover(&issuer)
-                .await
-                .with_context(|| format!("OIDC discovery failed for {issuer}"))?;
-
-            tracing::info!(issuer, "OIDC endpoints discovered");
-            (
-                client_id,
-                disc.device_authorization_endpoint,
-                disc.token_endpoint,
-                disc.userinfo_endpoint,
-                disc.revocation_endpoint,
-            )
-        } else {
-            (
-                require_env("OIDC_CLIENT_ID")?,
-                require_env("OIDC_DEVICE_AUTH_URL")?,
-                require_env("OIDC_TOKEN_URL")?,
-                require_env("OIDC_USERINFO_URL")?,
-                std::env::var("OIDC_REVOKE_URL").ok(),
-            )
-        }
-    };
+    let oidc_device_auth_url = disc.device_authorization_endpoint;
+    let oidc_token_url       = disc.token_endpoint;
+    let oidc_userinfo_url    = disc.userinfo_endpoint;
+    let oidc_revoke_url      = disc.revocation_endpoint;
 
     let nats_url    = env_or("NATS_URL", "nats://127.0.0.1:4222");
     let bind        = env_or("BIND_ADDR", "0.0.0.0:7070");
     let bucket      = env_or("OBJECT_STORAGE_BUCKET", "liquid-metal-artifacts");
 
     // ── Postgres pool ────────────────────────────────────────────────────────
+    let pool_size: usize = env_or("DATABASE_POOL_SIZE", "16").parse().unwrap_or(16);
     let pg_cfg: tokio_postgres::Config = db_url.parse().context("invalid DATABASE_URL")?;
     let pool = if let Some(tls) = common::config::pg_tls()? {
         let mgr = deadpool_postgres::Manager::new(pg_cfg, tls);
-        deadpool_postgres::Pool::builder(mgr).max_size(16).build()
+        deadpool_postgres::Pool::builder(mgr).max_size(pool_size).build()
             .context("building postgres pool (TLS)")?
     } else {
         let mgr = deadpool_postgres::Manager::new(pg_cfg, tokio_postgres::NoTls);
-        deadpool_postgres::Pool::builder(mgr).max_size(16).build()
+        deadpool_postgres::Pool::builder(mgr).max_size(pool_size).build()
             .context("building postgres pool")?
     };
+    tracing::info!(pool_size, "postgres pool configured");
 
     // ── Verify migrations are up to date ─────────────────────────────────────
     // Migrations are applied by `nomad job dispatch migrate` (or `api --migrate`)
@@ -106,9 +107,10 @@ async fn main() -> Result<()> {
     let nc = common::config::nats_connect(&nats_url).await?;
     let js = async_nats::jetstream::new(nc.clone());
     api::nats::ensure_stream(&js).await?;
+    tracing::info!(%nats_url, "NATS JetStream connected");
 
     // ── S3 client ────────────────────────────────────────────────────────────
-    let s3 = api::storage::build_client().await;
+    let s3 = api::storage::build_client()?;
     api::storage::ensure_bucket(&s3, &bucket).await;
 
     // ── Shared HTTP client ───────────────────────────────────────────────────
@@ -127,11 +129,41 @@ async fn main() -> Result<()> {
         tracing::info!("Stripe billing disabled (STRIPE_SECRET_KEY not set)");
     }
 
-    // ── AppState ─────────────────────────────────────────────────────────────
-    let metal_capacity_mb: i64 = env_or("METAL_CAPACITY_MB", "0")
-        .parse()
-        .unwrap_or(0);
+    // ── Resource quotas ─────────────────────────────────────────────────────
+    let default_quota = common::events::ResourceQuota::from_env();
+    tracing::info!(
+        disk_read_bps  = ?default_quota.disk_read_bps,
+        disk_write_bps = ?default_quota.disk_write_bps,
+        disk_read_iops = ?default_quota.disk_read_iops,
+        disk_write_iops = ?default_quota.disk_write_iops,
+        net_ingress_kbps = ?default_quota.net_ingress_kbps,
+        net_egress_kbps  = ?default_quota.net_egress_kbps,
+        "default resource quotas"
+    );
 
+    // ── GCP KMS (envelope encryption + cert DEK unwrap) ──────────────────────
+    let kms_key = require_env("GCP_KMS_KEY")
+        .context("GCP_KMS_KEY is required — set to the full Cloud KMS cryptoKey resource name")?;
+    let kms: Arc<dyn api::envelope::KmsClient> = Arc::new(
+        api::envelope::GcpKmsClient::new(kms_key)
+            .await
+            .context("initializing GCP KMS client — check GCP_KMS_CREDENTIALS (or GOOGLE_APPLICATION_CREDENTIALS in production)")?,
+    );
+    tracing::info!("GCP KMS envelope encryption enabled");
+
+    // ── Platform cert DEK (KMS-wrapped) ──────────────────────────────────────
+    // The plaintext DEK lives in memory only — never logged or persisted.
+    // See certs.rs for the full key management rationale.
+    let cert_encryption_key = api::certs::unwrap_cert_dek(
+        &*kms,
+        &require_env("CERT_DEK_WRAPPED")
+            .context("CERT_DEK_WRAPPED is required — see .env.example for how to generate")?,
+    )
+    .await
+    .context("unwrapping platform cert DEK via KMS")?;
+    tracing::info!("platform cert DEK loaded");
+
+    // ── AppState ─────────────────────────────────────────────────────────────
     let state = Arc::new(AppState {
         db: pool,
         nats: js,
@@ -139,23 +171,28 @@ async fn main() -> Result<()> {
         s3,
         bucket,
         internal_secrets,
-        oidc_client_id,
+        oidc_cli_client_id,
         oidc_device_auth_url,
         oidc_token_url,
         oidc_userinfo_url,
         oidc_revoke_url,
+        default_quota,
         features,
-        metal_capacity_mb,
         http_client,
         victorialogs_url: env_or("VICTORIALOGS_URL", ""),
+        kms,
         stripe,
         stripe_webhook_secret,
         stripe_price_pro,
         stripe_price_team,
+        cert_encryption_key,
     });
 
     // ── Outbox poller ────────────────────────────────────────────────────────
     tokio::spawn(api::outbox::run(state.db.clone(), state.nats.clone()));
+
+    // ── TLS cert manager (ACME HTTP-01, renewal) ─────────────────────────────
+    tokio::spawn(api::cert_manager::run(state.clone()));
 
     // ── Billing background tasks ───────────────────────────────────────────
     tokio::spawn(api::billing::usage_subscriber(state.clone()));
@@ -163,25 +200,25 @@ async fn main() -> Result<()> {
     tokio::spawn(api::billing::monthly_credit_reset(state.clone()));
 
     // ── Stuck provisioning watchdog ──────────────────────────────────────────
-    // Marks services stuck in 'provisioning' for >10 minutes as 'failed'.
+    // Marks services stuck in 'provisioning' for longer than the threshold as 'failed'.
     {
+        let watchdog_interval_secs: u64 = env_or("WATCHDOG_INTERVAL_SECS", "60").parse().unwrap_or(60);
+        let watchdog_timeout_mins: i32  = env_or("PROVISIONING_TIMEOUT_MINS", "10").parse().unwrap_or(10);
+        tracing::info!(watchdog_interval_secs, watchdog_timeout_mins, "watchdog configured");
+
         let pool = state.db.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            let timeout_str = watchdog_timeout_mins.to_string();
+            let query = "UPDATE services SET status = 'failed' \
+                 WHERE status = 'provisioning' \
+                   AND created_at < NOW() - ($1 || ' minutes')::interval \
+                   AND deleted_at IS NULL";
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(watchdog_interval_secs));
             loop {
                 interval.tick().await;
                 match pool.get().await {
                     Ok(db) => {
-                        match db
-                            .execute(
-                                "UPDATE services SET status = 'failed' \
-                                 WHERE status = 'provisioning' \
-                                   AND created_at < NOW() - INTERVAL '10 minutes' \
-                                   AND deleted_at IS NULL",
-                                &[],
-                            )
-                            .await
-                        {
+                        match db.execute(query, &[&timeout_str]).await {
                             Ok(n) if n > 0 => tracing::warn!(
                                 count = n,
                                 "watchdog: marked stuck provisioning services as failed"
@@ -209,14 +246,26 @@ async fn main() -> Result<()> {
 
     let app = build_router(state, rate_limits);
 
-    tracing::info!(%bind, "api listening");
+    let version = env!("CARGO_PKG_VERSION");
+    let git_sha = env!("GIT_SHA");
+    let startup_ms = startup.elapsed().as_millis();
+    tracing::info!(%bind, %version, %git_sha, startup_ms, "api listening");
     let listener = tokio::net::TcpListener::bind(&bind).await?;
 
+    let shutdown_instant = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
+    let shutdown_instant_clone = shutdown_instant.clone();
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            *shutdown_instant_clone.lock().unwrap() = Some(std::time::Instant::now());
+        })
         .await?;
-
-    tracing::info!("api exited cleanly");
+    let drain_ms = shutdown_instant
+        .lock()
+        .unwrap()
+        .map(|t| t.elapsed().as_millis())
+        .unwrap_or(0);
+    tracing::info!(drain_ms, "api exited cleanly — in-flight requests drained");
     Ok(())
 }
 
@@ -231,7 +280,7 @@ async fn oidc_discover(issuer: &str) -> Result<OidcDiscovery> {
     };
     let url = format!("{issuer}/.well-known/openid-configuration");
 
-    let resp = reqwest::Client::new()
+    let disc = reqwest::Client::new()
         .get(&url)
         .send()
         .await
@@ -242,7 +291,27 @@ async fn oidc_discover(issuer: &str) -> Result<OidcDiscovery> {
         .await
         .context("deserializing OIDC discovery document")?;
 
-    Ok(resp)
+    // Validate discovered endpoints are well-formed URLs.
+    validate_oidc_url(&disc.device_authorization_endpoint, "device_authorization_endpoint")?;
+    validate_oidc_url(&disc.token_endpoint, "token_endpoint")?;
+    validate_oidc_url(&disc.userinfo_endpoint, "userinfo_endpoint")?;
+    if let Some(rev) = &disc.revocation_endpoint {
+        validate_oidc_url(rev, "revocation_endpoint")?;
+    }
+
+    Ok(disc)
+}
+
+/// Validate that `raw` is a well-formed HTTP(S) URL. Fails fast at startup
+/// rather than letting a bad URL surface as a confusing reqwest error when a
+/// user tries to log in.
+fn validate_oidc_url(raw: &str, field: &str) -> Result<()> {
+    let parsed = url::Url::parse(raw)
+        .with_context(|| format!("OIDC {field} is not a valid URL: {raw}"))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(()),
+        other => anyhow::bail!("OIDC {field} has unsupported scheme \"{other}\": {raw}"),
+    }
 }
 
 #[derive(serde::Deserialize)]

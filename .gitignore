@@ -1,5 +1,7 @@
 # ── Rust ──────────────────────────────────────────────────────────────────────
 /target
+crates/ebpf-programs/target/
+crates/ebpf-programs/Cargo.lock
 Cargo.lock.bak
 
 # ── Go ────────────────────────────────────────────────────────────────────────
@@ -47,6 +49,7 @@ Thumbs.db
 coverage.out
 FEATURES.md
 PLANS.md
+PRICING.md
 AI.md
 
 # ── GitHub Actions (not ready for CI/CD yet) ──────────────────────────────────
@@ -61,3 +64,4 @@ infra/terraform/*.tfplan
 
 # ── GCP service account keys (Terraform state backend) ────────────────────────
 keys/
+RESUME.md

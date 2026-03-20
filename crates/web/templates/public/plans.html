@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+
+{% block title %}Plans{% endblock %}
+{% block description %}Deploy compiled binaries. Dedicated VMs or serverless Wasm. Simple pricing.{% endblock %}
+
+{% block content %}
+
+{# ── Grid hero — the animation lives here now ───────────────────────────── #}
+<div class="relative overflow-hidden" style="height:62vh;">
+  <canvas id="metal-grid" style="position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;"></canvas>
+  <div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,transparent 0%,transparent 38%,var(--lm-bg) 88%);pointer-events:none;"></div>
+  <div style="position:absolute;bottom:0;left:0;right:0;height:140px;background:linear-gradient(to bottom,transparent,var(--lm-bg));pointer-events:none;"></div>
+  <div class="relative z-10 h-full flex flex-col items-center justify-center text-center px-4">
+    <p class="lm-label mb-4">// plans</p>
+    <h1 class="text-5xl font-black tracking-tighter mb-4">Honest pricing</h1>
+    <p class="text-zwl-muted dark:text-zw-muted max-w-lg text-sm">Real hardware costs real money. Here's what you're paying for.</p>
+  </div>
+</div>
+
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  {# ── METAL — Dedicated VMs ──────────────────────────────────────────── #}
+  <div class="mb-16">
+    <p class="lm-label mb-6">// metal &mdash; dedicated vms</p>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-2 max-w-xl">Always-on Linux VMs on bare metal. Dedicated vCPU &mdash; no noisy neighbors, no throttling. NVMe storage. Deploy with <code class="font-mono">flux deploy</code> and get a URL.</p>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8 max-w-xl">More RAM than AWS or Fly at every tier. RAM is cheap on bare metal &mdash; I pass that on.</p>
+
+    <div class="grid sm:grid-cols-3 gap-4 mb-6">
+
+      {# 0.5 vCPU #}
+      <div class="glass-card p-6 flex flex-col">
+        <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-4">0.5 vCPU</p>
+        <div class="mb-4">
+          <span class="text-3xl font-black font-mono">$17</span>
+          <span class="text-zwl-muted dark:text-zw-muted font-mono text-sm ml-1">/mo</span>
+        </div>
+        <ul class="space-y-2 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
+          <li>2 GB RAM</li>
+          <li>Dedicated vCPU</li>
+          <li>20 GB NVMe</li>
+          <li>2 TB bandwidth</li>
+        </ul>
+      </div>
+
+      {# 1 vCPU #}
+      <div class="glass-card glass-card--featured p-6 flex flex-col">
+        <p class="text-[10px] font-mono font-bold uppercase tracking-widest mb-4">
+          1 vCPU <span class="ml-2 text-[9px] text-zwl-muted dark:text-zw-muted font-normal normal-case tracking-normal">most popular</span>
+        </p>
+        <div class="mb-4">
+          <span class="text-3xl font-black font-mono">$33</span>
+          <span class="text-zwl-muted dark:text-zw-muted font-mono text-sm ml-1">/mo</span>
+        </div>
+        <ul class="space-y-2 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
+          <li>4 GB RAM</li>
+          <li>Dedicated vCPU</li>
+          <li>40 GB NVMe</li>
+          <li>4 TB bandwidth</li>
+        </ul>
+      </div>
+
+      {# 2 vCPU #}
+      <div class="glass-card p-6 flex flex-col">
+        <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-4">2 vCPU</p>
+        <div class="mb-4">
+          <span class="text-3xl font-black font-mono">$66</span>
+          <span class="text-zwl-muted dark:text-zw-muted font-mono text-sm ml-1">/mo</span>
+        </div>
+        <ul class="space-y-2 text-xs font-mono text-zwl-muted dark:text-zw-muted mt-auto">
+          <li>8 GB RAM</li>
+          <li>Dedicated vCPU</li>
+          <li>80 GB NVMe</li>
+          <li>8 TB bandwidth</li>
+        </ul>
+      </div>
+
+    </div>
+
+    <p class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Bare metal &mdash; capacity is finite, seats are limited</p>
+    <p class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted mt-2">$0.02 / GB overage &mdash; included bandwidth resets monthly</p>
+  </div>
+
+  {# ── LIQUID — Serverless Wasm ───────────────────────────────────────── #}
+  <div class="mb-16">
+    <p class="lm-label mb-6">// liquid &mdash; serverless wasm</p>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8 max-w-xl">Per-invocation billing. Scale to zero. Sub-millisecond cold starts. For stateless APIs, webhooks, and data transforms.</p>
+
+    <div class="glass-card p-8">
+      <div class="grid sm:grid-cols-3 gap-8 text-xs font-mono">
+        <div>
+          <p class="text-2xl font-black font-mono mb-1">$0.30</p>
+          <p class="text-zwl-muted dark:text-zw-muted">per 1M invocations</p>
+        </div>
+        <div>
+          <p class="text-2xl font-black font-mono mb-1">&lt;1ms</p>
+          <p class="text-zwl-muted dark:text-zw-muted">cold start</p>
+        </div>
+        <div>
+          <p class="text-2xl font-black font-mono mb-1">1M</p>
+          <p class="text-zwl-muted dark:text-zw-muted">free invocations / mo</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Choose your engine ─────────────────────────────────────────────── #}
+  <div class="glass-card p-8 mb-16">
+    <p class="lm-label mb-3">// choose your engine</p>
+    <h2 class="text-xl font-black tracking-tight mb-2">Liquid or Metal?</h2>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mb-8">Different tools for different jobs. Same CLI, same deploy flow.</p>
+    <div class="grid sm:grid-cols-2 gap-8 text-xs font-mono text-zwl-muted dark:text-zw-muted">
+      <div>
+        <p class="text-[10px] uppercase tracking-widest font-bold mb-3 text-zwl-fg dark:text-zw-fg">Liquid</p>
+        <ul class="space-y-1">
+          <li>Serverless &mdash; scale to zero, wake on request</li>
+          <li>Wasm sandbox &mdash; no kernel, no filesystem</li>
+          <li>Sub-millisecond cold starts</li>
+          <li>Pay per invocation</li>
+          <li>Best for: APIs, webhooks, data transforms</li>
+          <li>Target: <code>wasm32-wasip1</code></li>
+        </ul>
+      </div>
+      <div>
+        <p class="text-[10px] uppercase tracking-widest font-bold mb-3 text-zwl-fg dark:text-zw-fg">Metal</p>
+        <ul class="space-y-1">
+          <li>Dedicated VM &mdash; always on, fixed monthly price</li>
+          <li>Dedicated vCPU &mdash; no shared resources, no throttling</li>
+          <li>Real Linux &mdash; full kernel, filesystem, networking</li>
+          <li>No cold starts &mdash; always running</li>
+          <li>NVMe storage, KVM isolation, bare metal hardware</li>
+          <li>Best for: APIs, databases, background jobs, anything</li>
+          <li>Target: <code>x86_64-unknown-linux-musl</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  {# ── What you don't pay for ─────────────────────────────────────────── #}
+  <div class="glass-card p-8 mb-16">
+    <p class="lm-label mb-3">// included</p>
+    <h2 class="text-xl font-black tracking-tight mb-6">Every plan includes</h2>
+    <div class="grid sm:grid-cols-3 gap-6 text-xs font-mono text-zwl-muted dark:text-zw-muted">
+      <div>
+        <p class="font-bold text-zwl-fg dark:text-zw-fg mb-1">TLS</p>
+        <p>Automatic HTTPS on every service. No cert management.</p>
+      </div>
+      <div>
+        <p class="font-bold text-zwl-fg dark:text-zw-fg mb-1">Custom domains</p>
+        <p>Point your domain. Everything else is automatic.</p>
+      </div>
+      <div>
+        <p class="font-bold text-zwl-fg dark:text-zw-fg mb-1">Deploy logs</p>
+        <p>Real-time build and deploy output.</p>
+      </div>
+      <div>
+        <p class="font-bold text-zwl-fg dark:text-zw-fg mb-1">CLI access</p>
+        <p><code>flux deploy</code> &mdash; one command to production.</p>
+      </div>
+      <div>
+        <p class="font-bold text-zwl-fg dark:text-zw-fg mb-1">No Dockerfiles</p>
+        <p>Bring your binary. It just runs.</p>
+      </div>
+      <div>
+        <p class="font-bold text-zwl-fg dark:text-zw-fg mb-1">Dashboard</p>
+        <p>Service status, logs, and management.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="text-center">
+    <a href="/auth/login" class="inline-flex items-center px-10 py-4 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-bold font-mono uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+      [ TRY IT ]
+    </a>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  var c = document.getElementById('metal-grid');
+  if (!c) return;
+  var ctx = c.getContext('2d'), raf, W, H, frame = 0, strikes = [];
+  var GAP = 44, COLS, ROWS, GX, GY;
+
+  function rs() {
+    var b = c.getBoundingClientRect();
+    W = b.width; H = b.height;
+    c.width  = Math.round(W * devicePixelRatio);
+    c.height = Math.round(H * devicePixelRatio);
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    COLS = Math.round(W / GAP) || 1;
+    ROWS = Math.round(H / GAP) || 1;
+    GX = W / COLS; GY = H / ROWS;
+  }
+
+  function addStrike() {
+    // Light-mode colors are deeper/more saturated so they pop on #fafafa
+    var dk = document.documentElement.classList.contains('dark');
+    var colors = dk
+      ? ['rgba(230,180,80,',  'rgba(217,87,87,']
+      : ['rgba(160,110,0,',   'rgba(180,30,30,'];
+    var color = colors[Math.floor(Math.random() * colors.length)];
+    if (Math.random() < 0.35) {
+      strikes.push({ h: true,  row: Math.floor(Math.random() * ROWS), pos: 0, spd: 0.8 + Math.random() * 1.2, len: 3 + Math.floor(Math.random() * 4), color: color });
+    } else {
+      strikes.push({ h: false, col: Math.floor(Math.random() * COLS), pos: 0, spd: 0.8 + Math.random() * 1.2, len: 3 + Math.floor(Math.random() * 4), color: color });
+    }
+  }
+
+  function init() { rs(); strikes = []; frame = 0; for (var s = 0; s < 8; s++) addStrike(); }
+
+  function tick() {
+    if (!document.getElementById('metal-grid')) { cancelAnimationFrame(raf); window.removeEventListener('resize', init); return; }
+    ctx.clearRect(0, 0, W, H);
+    var dk = document.documentElement.classList.contains('dark');
+
+    // Grid dots and lines
+    var dotColor = dk ? 'rgba(113,113,122,0.75)' : 'rgba(100,100,110,0.45)';
+    for (var col = 0; col <= COLS; col++) {
+      for (var row = 0; row <= ROWS; row++) {
+        ctx.beginPath(); ctx.arc(col * GX, row * GY, 1, 0, 6.2832);
+        ctx.fillStyle = dotColor; ctx.fill();
+      }
+    }
+    ctx.strokeStyle = dk ? 'rgba(82,82,91,0.55)' : 'rgba(160,160,168,0.55)';
+    ctx.lineWidth = 0.5;
+    for (var col = 0; col <= COLS; col++) { ctx.beginPath(); ctx.moveTo(col * GX, 0); ctx.lineTo(col * GX, H); ctx.stroke(); }
+    for (var row = 0; row <= ROWS; row++) { ctx.beginPath(); ctx.moveTo(0, row * GY); ctx.lineTo(W, row * GY); ctx.stroke(); }
+
+    frame++;
+    if (frame % 50 === 0 && strikes.length < 22) addStrike();
+
+    // Strikes — alpha boosted in light mode for visibility
+    var maxAlpha = dk ? 0.70 : 0.92;
+    for (var i = strikes.length - 1; i >= 0; i--) {
+      var s = strikes[i]; s.pos += s.spd;
+      if (s.h) {
+        if (s.pos > COLS + s.len) { strikes.splice(i, 1); continue; }
+        var gy = s.row * GY;
+        for (var k = s.len; k >= 0; k--) {
+          var tc = Math.round(s.pos) - k;
+          if (tc < 0 || tc >= COLS) continue;
+          var frac = 1 - (k / s.len), alpha = frac * maxAlpha;
+          ctx.beginPath(); ctx.moveTo(tc * GX, gy); ctx.lineTo((tc + 1) * GX, gy);
+          ctx.strokeStyle = s.color + (alpha * 0.85) + ')'; ctx.lineWidth = k === 0 ? 2.2 : 1.4; ctx.stroke();
+          ctx.beginPath(); ctx.arc(tc * GX, gy, k === 0 ? 4 : 2, 0, 6.2832);
+          ctx.fillStyle = s.color + alpha + ')'; ctx.fill();
+        }
+      } else {
+        if (s.pos > ROWS + s.len) { strikes.splice(i, 1); continue; }
+        var ri = Math.round(s.pos), gx2 = s.col * GX;
+        for (var k = s.len; k >= 0; k--) {
+          var tr = ri - k;
+          if (tr < 0 || tr >= ROWS) continue;
+          var frac = 1 - (k / s.len), alpha = frac * maxAlpha;
+          ctx.beginPath(); ctx.moveTo(gx2, tr * GY); ctx.lineTo(gx2, (tr + 1) * GY);
+          ctx.strokeStyle = s.color + (alpha * 0.85) + ')'; ctx.lineWidth = k === 0 ? 2.2 : 1.4; ctx.stroke();
+          ctx.beginPath(); ctx.arc(gx2, tr * GY, k === 0 ? 4 : 2, 0, 6.2832);
+          ctx.fillStyle = s.color + alpha + ')'; ctx.fill();
+        }
+      }
+    }
+    raf = requestAnimationFrame(tick);
+  }
+
+  init(); tick();
+  window.addEventListener('resize', init);
+})();
+</script>
+{% endblock %}

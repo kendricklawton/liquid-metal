@@ -1,0 +1,252 @@
+/* Liquid Metal — Ayu Light / Dark
+ *
+ * Warm neutrals for light, deep navy for dark.
+ * Terminal panels use Ayu Dark bg in both modes.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Ayu Light */
+  --lm-bg:        #fafafa;
+  --lm-surface:   #f0f0f0;
+  --lm-border:    #e7e8e9;
+  --lm-muted:     #8a9199;
+  --lm-fg:        #5c6166;
+  --lm-accent:    #ff9940;
+  --lm-green:     #86b300;
+  --lm-red:       #f07171;
+  --lm-yellow:    #f2ae49;
+  --lm-magenta:   #a37acc;
+  --lm-cyan:      #399ee6;
+}
+
+.dark {
+  /* Ayu Dark */
+  --lm-bg:        #0b0e14;
+  --lm-surface:   #131721;
+  --lm-border:    #1c2433;
+  --lm-muted:     #636a72;
+  --lm-fg:        #bfbdb6;
+  --lm-accent:    #e6b450;
+  --lm-green:     #aad94c;
+  --lm-red:       #d95757;
+  --lm-yellow:    #e6b450;
+  --lm-magenta:   #d2a6ff;
+  --lm-cyan:      #73b8ff;
+}
+
+/* ── Dark mode smooth transition ─────────────────────────────────────────── */
+body, nav, footer, .glass-card, .glass, .glass-btn, .terminal-panel {
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+
+/* ── Alpine.js ────────────────────────────────────────────────────────────── */
+[x-cloak] { display: none !important; }
+
+/* ── Section label ────────────────────────────────────────────────────────── */
+.lm-label {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lm-muted);
+}
+
+/* ── Panel ────────────────────────────────────────────────────────────────── */
+.glass {
+  background: var(--lm-surface);
+  border: 1px solid var(--lm-border);
+}
+
+.glass-card {
+  background: var(--lm-surface);
+  border: 1px solid var(--lm-border);
+  transition: transform 150ms ease, border-color 150ms ease,
+              background-color 200ms ease, color 200ms ease;
+}
+.glass-card:hover {
+  transform: scale(1.008);
+  border-color: var(--lm-muted);
+}
+
+.glass-card--featured {
+  border-width: 2px;
+  border-color: var(--lm-accent);
+}
+.glass-card--featured:hover {
+  border-color: var(--lm-accent);
+}
+
+/* ── Language brand colors ────────────────────────────────────────────────── */
+.lang-go   { color: #00ADD8 !important; border-color: #00ADD8 !important; }
+.lang-rust { color: #CE422B !important; border-color: #CE422B !important; }
+.lang-zig  { color: #F7A41D !important; border-color: #F7A41D !important; }
+
+/* ── Accent borders ───────────────────────────────────────────────────────── */
+.border-accent-go      { border-color: #00ADD8; }
+.border-accent-rust    { border-color: #CE422B; }
+.border-accent-zig     { border-color: #F7A41D; }
+.border-accent-green   { border-color: var(--lm-green); }
+.border-accent-subtle  { border-color: var(--lm-border); }
+.border-accent-danger  { border-color: var(--lm-muted); }
+.border-accent-whisper { border-color: var(--lm-border); }
+
+/* ── Button ───────────────────────────────────────────────────────────────── */
+.glass-btn {
+  background: var(--lm-surface);
+  border: 1px solid var(--lm-border);
+  transition: background 150ms, border-color 150ms;
+}
+.glass-btn:hover {
+  background: var(--lm-border);
+  border-color: var(--lm-muted);
+}
+
+/* ── Primary button (accent) ──────────────────────────────────────────────── */
+.btn-accent {
+  background: var(--lm-accent);
+  color: #0b0e14;
+  transition: opacity 150ms;
+}
+.btn-accent:hover {
+  opacity: 0.85;
+}
+
+/* ── Status badges ────────────────────────────────────────────────────────── */
+.status-running      { color: var(--lm-green); }
+.status-ready        { color: var(--lm-accent); }
+.status-provisioning { color: var(--lm-muted); }
+.status-stopped      { color: var(--lm-muted); }
+.status-failed       { color: var(--lm-fg); }
+.status-crashed      { color: var(--lm-fg); }
+.status-suspended    { color: var(--lm-muted); }
+.status-canceled     { color: var(--lm-muted); }
+
+/* ── Pulse (deploy log indicator) ─────────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* ── Deploy log colors (on Ayu Dark terminal bg) ─────────────────────────── */
+.deploy-line  { color: var(--lm-muted); }
+.deploy-check { color: var(--lm-green); }
+.deploy-done  { color: var(--lm-green); font-weight: 600; }
+.deploy-arrow { color: var(--lm-cyan); }
+
+/* ── Staggered deploy log animation ──────────────────────────────────────── */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.deploy-line {
+  opacity: 0;
+  animation: fadeSlideIn 300ms ease forwards;
+}
+.deploy-line:nth-child(1)  { animation-delay: 0ms; }
+.deploy-line:nth-child(2)  { animation-delay: 200ms; }
+.deploy-line:nth-child(3)  { animation-delay: 400ms; }
+.deploy-line:nth-child(4)  { animation-delay: 600ms; }
+.deploy-line:nth-child(5)  { animation-delay: 800ms; }
+.deploy-line:nth-child(6)  { animation-delay: 1000ms; }
+.deploy-line:nth-child(7)  { animation-delay: 1200ms; }
+.deploy-line:nth-child(8)  { animation-delay: 1400ms; }
+.deploy-line:nth-child(9)  { animation-delay: 1600ms; }
+.deploy-line:nth-child(10) { animation-delay: 1800ms; }
+
+/* ── Syntax highlighting (Ayu tokens — page context) ─────────────────────── */
+.tok-kw     { color: var(--lm-accent) !important; }
+.tok-str    { color: var(--lm-green) !important; }
+.tok-fn     { color: var(--lm-yellow) !important; }
+.tok-type   { color: var(--lm-cyan) !important; }
+.tok-cmt    { color: var(--lm-muted) !important; font-style: italic; }
+.tok-pkg    { color: var(--lm-magenta) !important; }
+.tok-yellow { color: var(--lm-yellow) !important; }
+
+/* ── Vertical timeline ───────────────────────────────────────────────────── */
+.timeline {
+  position: relative;
+  padding-left: 2rem;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 0.6rem;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 2px;
+  background: var(--lm-border);
+}
+.timeline-step {
+  position: relative;
+  padding-bottom: 1.5rem;
+}
+.timeline-step:last-child {
+  padding-bottom: 0;
+}
+.timeline-dot {
+  position: absolute;
+  left: -1.65rem;
+  top: 0.15rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 2px solid var(--lm-accent);
+  background: var(--lm-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--lm-accent);
+}
+
+/* ── Social proof badges ─────────────────────────────────────────────────── */
+.proof-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 10px;
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--lm-muted);
+  border: 1px solid var(--lm-border);
+  background: var(--lm-surface);
+  transition: border-color 150ms;
+}
+.proof-badge:hover {
+  border-color: var(--lm-accent);
+}
+
+/* ── Terminal / code panel ────────────────────────────────────────────────── */
+/* Matches glass-card: same surface, border, and shadow. */
+.terminal-panel {
+  background: var(--lm-surface) !important;
+  color: var(--lm-fg) !important;
+  border: 1px solid var(--lm-border) !important;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+.terminal-panel pre {
+  color: var(--lm-fg);
+  font-family: inherit;
+}
+
+/* Terminal syntax tokens — use theme-aware page tokens (no override needed) */
+
+/* ── Terminal tab bar ────────────────────────────────────────────────────── */
+.terminal-panel button {
+  background: transparent;
+  transition: opacity 150ms ease;
+}
+.terminal-panel button:hover {
+  opacity: 0.7;
+}
+
+/* ── Hero gradient overlay ───────────────────────────────────────────────── */
+.hero-gradient {
+  background: radial-gradient(ellipse at center, transparent 0%, var(--lm-bg) 70%);
+  pointer-events: none;
+}

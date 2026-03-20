@@ -16,3 +16,9 @@ tokio-postgres        = { workspace = true }
 tokio-postgres-rustls = { workspace = true }
 rustls                = { workspace = true }
 rustls-pemfile        = { workspace = true }
+utoipa                = { workspace = true }
+tracing-subscriber    = { workspace = true }
+opentelemetry         = { workspace = true }
+opentelemetry_sdk     = { workspace = true }
+opentelemetry-otlp    = { workspace = true }
+tracing-opentelemetry = { workspace = true }

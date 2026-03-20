@@ -1,12 +1,5 @@
-pub mod deploy;
+pub mod auth;
+pub mod service;
+
 pub mod init;
-pub mod invite;
-pub mod login;
-pub mod logout;
-pub mod logs;
-pub mod project;
-pub mod restart;
-pub mod status;
-pub mod stop;
-pub mod whoami;
 pub mod workspace;

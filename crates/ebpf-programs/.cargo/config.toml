@@ -1,8 +1,23 @@
-# Build eBPF programs for the little-endian BPF target.
-# Requires: rustup target add bpfel-unknown-none
-#           rustup component add rust-src
+# ── BPF compilation target ───────────────────────────────────────────────────
+#
+# bpfel-unknown-none = little-endian BPF, no OS, no std library.
+# This is the instruction set that the Linux kernel's BPF virtual machine
+# executes. It's a completely different ISA from x86 — like compiling for ARM,
+# but the "CPU" is inside the kernel.
+#
+# Prerequisites (one-time setup on the build host):
+#   rustup target add bpfel-unknown-none
+#   rustup component add rust-src  (needed for build-std below)
 [build]
 target = "bpfel-unknown-none"
 
+# ── Build std from source ────────────────────────────────────────────────────
+#
+# BPF doesn't have a pre-compiled standard library (there's no std for
+# "kernel bytecode"). build-std tells cargo to compile `core` from source
+# for the BPF target. Only `core` — no `alloc`, no `std`.
+#
+# This requires the nightly toolchain (build-std is unstable). The daemon's
+# build.rs sets RUSTUP_TOOLCHAIN=nightly when invoking this build.
 [unstable]
 build-std = ["core"]

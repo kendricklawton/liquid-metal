@@ -1,41 +1,46 @@
 use anyhow::Result;
-use serde::Deserialize;
 
-use crate::client::ApiClient;
+use common::contract::WorkspaceResponse;
+
+use crate::context::CommandContext;
 use crate::config::Config;
+use crate::output::{OutputMode, print_data, print_ok};
+use crate::table::print_table;
 
-#[derive(Deserialize)]
-struct Workspace {
-    id: String,
-    name: String,
-    slug: String,
-    tier: String,
-}
+pub async fn run_list(config: &Config, output: OutputMode) -> Result<()> {
+    let ctx = CommandContext::new(config, output)?;
 
-pub async fn run_list(config: &Config) -> Result<()> {
-    let token = config.require_token()?;
-    let client = ApiClient::new(config.api_url(), Some(token));
+    let workspaces: Vec<WorkspaceResponse> = ctx.client.get("/workspaces").await?;
 
-    let workspaces: Vec<Workspace> = client.get("/workspaces").await?;
-    if workspaces.is_empty() {
-        println!("No workspaces found.");
-        return Ok(());
-    }
+    print_data(ctx.output, &workspaces, |workspaces| {
+        if workspaces.is_empty() {
+            println!("No workspaces found.");
+            return;
+        }
 
-    let active = config.workspace_id.as_deref().unwrap_or("");
-    println!("  {:<20} {:<20} {:<10} {}", "SLUG", "NAME", "TIER", "ID");
-    for ws in &workspaces {
-        let marker = if ws.id == active { "* " } else { "  " };
-        println!("{}{:<20} {:<20} {:<10} {}", marker, ws.slug, ws.name, ws.tier, ws.id);
-    }
+        let active = config.workspace_id.as_deref().unwrap_or("");
+        let rows: Vec<Vec<String>> = workspaces
+            .iter()
+            .map(|ws| vec![ws.slug.clone(), ws.name.clone(), ws.tier.clone(), ws.id.clone()])
+            .collect();
+        let markers: Vec<&str> = workspaces
+            .iter()
+            .map(|ws| if ws.id == active { "* " } else { "  " })
+            .collect();
+        print_table(
+            &["SLUG", "NAME", "TIER", "ID"],
+            &rows,
+            &[],
+            Some(&markers),
+        );
+    });
     Ok(())
 }
 
-pub async fn run_use(config: &mut Config, slug_or_id: &str) -> Result<()> {
-    let token = config.require_token()?;
-    let client = ApiClient::new(config.api_url(), Some(token));
+pub async fn run_use(config: &mut Config, slug_or_id: &str, output: OutputMode) -> Result<()> {
+    let ctx = CommandContext::new(config, output)?;
 
-    let workspaces: Vec<Workspace> = client.get("/workspaces").await?;
+    let workspaces: Vec<WorkspaceResponse> = ctx.client.get("/workspaces").await?;
 
     let ws = workspaces
         .iter()
@@ -44,6 +49,6 @@ pub async fn run_use(config: &mut Config, slug_or_id: &str) -> Result<()> {
 
     config.workspace_id = Some(ws.id.clone());
     config.save()?;
-    println!("Switched to workspace: {}", ws.slug);
+    print_ok(output, &format!("Switched to workspace: {}", ws.slug));
     Ok(())
 }

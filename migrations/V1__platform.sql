@@ -251,7 +251,7 @@ CREATE TABLE build_log_lines_default PARTITION OF build_log_lines DEFAULT;
 -- AUDIT LOG (Partitioned by month)
 --
 -- Every mutation in the system gets an entry. Partition key in PK required.
--- Old partitions can be detached and archived to RustFS/S3 after 12–18 months.
+-- Old partitions can be detached and archived to S3 after 12–18 months.
 CREATE TABLE audit_log (
     id            UUID        NOT NULL,
     workspace_id  UUID        NOT NULL,
@@ -329,4 +329,4 @@ CREATE INDEX idx_usage_workspace_metric ON usage_records(workspace_id, metric, p
 --
 -- To archive old partitions:
 --   ALTER TABLE build_log_lines DETACH PARTITION build_log_lines_2026_03;
---   -- pg_dump → RustFS, then DROP TABLE build_log_lines_2026_03;
+--   -- pg_dump → S3, then DROP TABLE build_log_lines_2026_03;

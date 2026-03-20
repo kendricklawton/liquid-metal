@@ -5,7 +5,7 @@ dotenv: [".env"]
 tasks:
   # ── Dependencies ─────────────────────────────────────────────────────────
   up:
-    desc: "Start local Postgres + NATS + RustFS (S3)"
+    desc: "Start local Postgres + NATS + MinIO (S3)"
     cmds:
       - docker compose up -d
 
@@ -19,10 +19,10 @@ tasks:
     cmds:
       - docker compose up -d nats
 
-  up:rustfs:
-    desc: "Start local RustFS (S3) only"
+  up:minio:
+    desc: "Start local MinIO (S3) only"
     cmds:
-      - docker compose up -d rustfs
+      - docker compose up -d minio
 
   down:
     desc: "Stop local dependencies"
@@ -33,6 +33,12 @@ tasks:
     desc: "Open a psql shell in the local Postgres container"
     cmds:
       - docker exec -it liquid-metal-db-1 psql -U liquid-metal liquid-metal
+
+  # ── Database ─────────────────────────────────────────────────────────────
+  migrate:
+    desc: "Run database migrations (requires Postgres via docker compose)"
+    cmds:
+      - cargo run -p api -- --migrate
 
   # ── Build ─────────────────────────────────────────────────────────────────
   build:
@@ -54,6 +60,15 @@ tasks:
     cmds:
       - cargo run -p api
 
+  dev:web:
+    desc: "Run the web dashboard on :3000"
+    ignore_error: true
+    env:
+      RUST_LOG: "web=debug"
+      WEB_BIND_ADDR: "0.0.0.0:3000"
+    cmds:
+      - cargo run -p web
+
   dev:proxy:
     desc: "Run the Pingora edge proxy locally"
     ignore_error: true
@@ -70,6 +85,7 @@ tasks:
     env:
       NATS_URL: "nats://127.0.0.1:4222"
       ROOTFS_DEVICE: "8:0" # override in .env for your node
+      HEALTH_PORT: "9091"  # avoid collision with API metrics on :9090
       RUST_LOG: "daemon=debug"
     cmds:
       - cargo run -p daemon
@@ -109,81 +125,6 @@ tasks:
     cmds:
       - cargo run -p cli -- {{.CLI_ARGS}}
 
-  # ── T480 / Linux one-time setup ───────────────────────────────────────────
-  security:setup:
-    desc: "Full security setup: jailer user, cpuset, IFB, Cilium policy (run as root, after metal:setup)"
-    cmds:
-      # Create the unprivileged user/group Firecracker runs as inside the jailer
-      - |
-        if ! id liquid-metal-vm &>/dev/null; then
-          useradd --system --no-create-home --uid 10000 --gid 10000 liquid-metal-vm 2>/dev/null || \
-          useradd --system --no-create-home --uid 10000 liquid-metal-vm
-          echo "created user liquid-metal-vm (uid=10000)"
-        else
-          echo "liquid-metal-vm user already exists"
-        fi
-      # Jailer chroot base directory
-      - mkdir -p /srv/jailer
-      # Enable cpuset controller in the liquid-metal cgroup subtree
-      - mkdir -p /sys/fs/cgroup/liquid-metal
-      - |
-        for ctrl in io cpuset; do
-          if ! grep -q "$ctrl" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
-            echo "+$ctrl" | tee /sys/fs/cgroup/cgroup.subtree_control
-          fi
-        done
-        echo "cgroup v2 controllers: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
-      # IFB module for ingress bandwidth shaping
-      - modprobe ifb numifbs=256 2>/dev/null || true
-      # Apply Cilium network isolation policy
-      - |
-        if command -v cilium &>/dev/null; then
-          cilium policy import deploy/cilium/vm-isolation.yaml && echo "Cilium policy applied"
-        else
-          echo "WARNING: cilium CLI not found — skipping network policy"
-          echo "  Install Cilium and run: cilium policy import deploy/cilium/vm-isolation.yaml"
-        fi
-      - |
-        echo ""
-        echo "Security setup complete. Add to .env:"
-        echo "  USE_JAILER=true"
-        echo "  JAILER_BIN=/usr/local/bin/jailer"
-        echo "  JAILER_CHROOT_BASE=/srv/jailer"
-        echo "  JAILER_UID=10000"
-        echo "  JAILER_GID=10000"
-        echo "  PHYSICAL_CORES=4          # physical cores on your node"
-        echo "  ROOTFS_DEVICE=8:0         # from: lsblk -o NAME,MAJ:MIN"
-
-  metal:quota-setup:
-    desc: "One-time Triple-Lock setup: cgroup v2 io controller + IFB module (run as root)"
-    cmds:
-      # Layer 2: verify cgroup v2 unified hierarchy
-      - |
-        if ! grep -q "^cgroup2" /proc/mounts 2>/dev/null; then
-          echo "ERROR: cgroup v2 not mounted."
-          echo "  Add 'systemd.unified_cgroup_hierarchy=1' to kernel cmdline and reboot."
-          exit 1
-        fi
-        echo "cgroup v2 OK"
-      # Create the liquid-metal subtree and enable the io controller
-      - mkdir -p /sys/fs/cgroup/liquid-metal
-      - |
-        if ! grep -q "\bio\b" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
-          echo "+io" | tee /sys/fs/cgroup/cgroup.subtree_control
-          echo "io controller enabled"
-        else
-          echo "io controller already enabled"
-        fi
-      # Layer 3: IFB module for ingress shaping (tap0 → ifb0, etc.)
-      - modprobe ifb numifbs=256 2>/dev/null || true
-      - echo "ifb" >> /etc/modules-load.d/liquid-metal.conf 2>/dev/null || true
-      - |
-        echo ""
-        echo "Triple-Lock setup complete."
-        echo "Set ROOTFS_DEVICE in .env to the block device of your rootfs images:"
-        echo "  lsblk -o NAME,MAJ:MIN   # find major:minor (e.g. 8:0 for /dev/sda)"
-        echo "  echo 'ROOTFS_DEVICE=8:0' >> .env"
-
   # ── Infrastructure (Terraform + Nomad) ───────────────────────────────────────
 
   _tf:
@@ -197,7 +138,8 @@ tasks:
       TF_VAR_region: '{{.VULTR_REGION | default "ord"}}'
       TF_VAR_vultr_api_key: "{{.VULTR_API_KEY}}"
       TF_VAR_ssh_key_id: "{{.VULTR_SSH_KEY_ID}}"
-      TF_VAR_bare_metal_plan: '{{.VULTR_BARE_METAL_PLAN | default "vbm-4c-32gb"}}'
+      TF_VAR_bare_metal_plan_metal: '{{.VULTR_BARE_METAL_PLAN_METAL | default "vbm-6c-32gb"}}'
+      TF_VAR_bare_metal_plan_liquid: '{{.VULTR_BARE_METAL_PLAN_LIQUID | default "vbm-4c-32gb"}}'
       TF_VAR_vps_plan: '{{.VULTR_VPS_PLAN | default "vc2-2c-4gb"}}'
       TF_VAR_os_id: '{{.VULTR_OS_ID | default "2136"}}'
       TF_VAR_cloudflare_api_token: "{{.CLOUDFLARE_API_TOKEN}}"
@@ -264,25 +206,127 @@ tasks:
   nomad:deploy:
     desc: "Deploy all Nomad jobs to the cluster"
     cmds:
-      - nomad job run infra/jobs/api.nomad.hcl
-      - nomad job run infra/jobs/daemon-metal.nomad.hcl
-      - nomad job run infra/jobs/daemon-liquid.nomad.hcl
-      - nomad job run infra/jobs/proxy.nomad.hcl
+      - nomad job run infra/nomad/api.nomad.hcl
+      - nomad job run infra/nomad/daemon-metal.nomad.hcl
+      - nomad job run infra/nomad/daemon-liquid.nomad.hcl
+      - nomad job run infra/nomad/proxy.nomad.hcl
 
   nomad:status:
     desc: "Show status of all Nomad jobs"
     cmds:
       - nomad job status
 
-  # ── T480 / Linux one-time setup ───────────────────────────────────────────
-
-  metal:setup:
-    desc: "One-time setup: br0 bridge, /run/firecracker, Firecracker binary"
+  # ── Base Alpine template for Metal rootfs ─────────────────────────────────
+  metal:build-template:
+    desc: "Build base Alpine ext4 template and upload to Object Storage (run as root)"
+    vars:
+      ALPINE_VERSION: "3.21"
+      ALPINE_ARCH: "x86_64"
+      IMAGE_SIZE_MB: "256"
+      TEMPLATE_KEY: "templates/base-alpine-v1.ext4"
+      WORK_DIR: "/tmp/lm-template-build"
+      IMAGE_PATH: "/tmp/lm-template-build/base-alpine.ext4"
+      BUCKET: '{{.OBJECT_STORAGE_BUCKET | default "liquid-metal-artifacts"}}'
     cmds:
+      - |
+        set -euo pipefail
+
+        # Clean up on any failure — unmount if mounted, remove temp dir.
+        cleanup() { umount {{.WORK_DIR}}/mnt 2>/dev/null || true; rm -rf {{.WORK_DIR}}; }
+        trap cleanup EXIT
+
+        echo "==> Building base Alpine ext4 template"
+
+        rm -rf {{.WORK_DIR}}
+        mkdir -p {{.WORK_DIR}}/mnt
+
+        # Create sparse ext4 image
+        dd if=/dev/zero of={{.IMAGE_PATH}} bs=1M count=0 seek={{.IMAGE_SIZE_MB}} 2>/dev/null
+        mkfs.ext4 -F -q {{.IMAGE_PATH}}
+
+        # Mount
+        mount -o loop {{.IMAGE_PATH}} {{.WORK_DIR}}/mnt
+
+        # Download and extract Alpine minirootfs.
+        # Find the latest patch release for v{{.ALPINE_VERSION}} (e.g. 3.21.3).
+        RELEASES_URL="https://dl-cdn.alpinelinux.org/alpine/v{{.ALPINE_VERSION}}/releases/{{.ALPINE_ARCH}}/"
+        ALPINE_TAR=$(curl -sL "${RELEASES_URL}" | grep -oP 'alpine-minirootfs-{{.ALPINE_VERSION}}\.\d+-{{.ALPINE_ARCH}}\.tar\.gz' | sort -V | tail -1)
+        if [ -z "${ALPINE_TAR}" ]; then
+          echo "ERROR: Could not find Alpine minirootfs at ${RELEASES_URL}"
+          exit 1
+        fi
+        ALPINE_URL="${RELEASES_URL}${ALPINE_TAR}"
+        echo "==> Downloading ${ALPINE_TAR}"
+        curl -sfL "${ALPINE_URL}" | tar xz -C {{.WORK_DIR}}/mnt
+
+        # Write init script — the kernel runs this as PID 1.
+        # printf avoids heredoc indentation issues (YAML would prefix spaces).
+        printf '#!/bin/sh\nmount -t proc proc /proc\nmount -t sysfs sysfs /sys\nmount -t devtmpfs devtmpfs /dev\nif [ -f /etc/lm-env ]; then\n  set -a\n  . /etc/lm-env\n  set +a\nfi\nexec /app\n' \
+          > {{.WORK_DIR}}/mnt/sbin/init
+        chmod +x {{.WORK_DIR}}/mnt/sbin/init
+
+        # Create placeholder app binary and env file
+        touch {{.WORK_DIR}}/mnt/app
+        chmod +x {{.WORK_DIR}}/mnt/app
+        touch {{.WORK_DIR}}/mnt/etc/lm-env
+
+        # Unmount
+        umount {{.WORK_DIR}}/mnt
+        echo "==> Template built at {{.IMAGE_PATH}}"
+
+        # Upload to Object Storage.
+        # mc requires an alias named "local" pointing at your MinIO instance:
+        #   mc alias set local http://localhost:9000 <access-key> <secret-key>
+        if command -v mc &>/dev/null; then
+          mc cp {{.IMAGE_PATH}} "local/{{.BUCKET}}/{{.TEMPLATE_KEY}}"
+          echo "==> Uploaded to local/{{.BUCKET}}/{{.TEMPLATE_KEY}} (MinIO)"
+        elif command -v aws &>/dev/null; then
+          aws s3 cp {{.IMAGE_PATH}} "s3://{{.BUCKET}}/{{.TEMPLATE_KEY}}" \
+            --endpoint-url "${OBJECT_STORAGE_ENDPOINT}"
+          echo "==> Uploaded to s3://{{.BUCKET}}/{{.TEMPLATE_KEY}}"
+        else
+          echo "WARNING: No S3 CLI found (mc or aws). Template built but not uploaded."
+          echo "  Install mc:  https://min.io/docs/minio/linux/reference/minio-mc.html"
+          echo "  Then: mc alias set local http://localhost:9000 <access-key> <secret-key>"
+          echo "        mc cp {{.IMAGE_PATH}} local/{{.BUCKET}}/{{.TEMPLATE_KEY}}"
+        fi
+
+        # Compute SHA-256 for .env
+        SHA=$(sha256sum {{.IMAGE_PATH}} | cut -d' ' -f1)
+        echo ""
+        echo "Add to .env:"
+        echo "  BASE_IMAGE_KEY={{.TEMPLATE_KEY}}"
+        echo "  BASE_IMAGE_SHA256=${SHA}"
+
+  # ── T480 / Linux one-time setup ───────────────────────────────────────────
+  metal:setup:
+    desc: "One-time setup: KVM check, br0 bridge, NAT, /run/firecracker, Firecracker + jailer binaries, artifact dir"
+    cmds:
+      # Verify KVM is available — fail fast if not
+      - |
+        if [ ! -e /dev/kvm ]; then
+          echo "ERROR: /dev/kvm not found. KVM is required for Firecracker."
+          echo "  Ensure your CPU supports virtualization and the kvm module is loaded:"
+          echo "    sudo modprobe kvm_intel   # Intel"
+          echo "    sudo modprobe kvm_amd     # AMD"
+          exit 1
+        fi
+        echo "/dev/kvm OK"
+      # Bridge network for VM TAP devices
       - mkdir -p /run/firecracker
       - ip link add br0 type bridge 2>/dev/null || true
       - ip link set br0 up
-      - ip addr add 172.20.0.1/24 dev br0 2>/dev/null || true
+      - ip addr add 172.16.0.1/16 dev br0 2>/dev/null || true
+      # Enable IP forwarding and NAT so VMs can reach the internet
+      - sysctl -w net.ipv4.ip_forward=1
+      - |
+        if ! iptables -t nat -C POSTROUTING -s 172.16.0.0/16 ! -o br0 -j MASQUERADE 2>/dev/null; then
+          iptables -t nat -A POSTROUTING -s 172.16.0.0/16 ! -o br0 -j MASQUERADE
+          echo "NAT MASQUERADE rule added"
+        else
+          echo "NAT MASQUERADE rule already exists"
+        fi
+      # Download Firecracker + jailer binaries
       - |
         if [ ! -f /usr/local/bin/firecracker ]; then
           echo "Downloading Firecracker v1.9.0..."
@@ -290,15 +334,100 @@ tasks:
             https://github.com/firecracker-microvm/firecracker/releases/download/v1.9.0/firecracker-v1.9.0-x86_64.tgz
           tar -xzf /tmp/firecracker.tgz -C /tmp/
           mv /tmp/release-v1.9.0-x86_64/firecracker-v1.9.0-x86_64 /usr/local/bin/firecracker
-          chmod +x /usr/local/bin/firecracker
-          echo "firecracker installed"
+          mv /tmp/release-v1.9.0-x86_64/jailer-v1.9.0-x86_64 /usr/local/bin/jailer
+          chmod +x /usr/local/bin/firecracker /usr/local/bin/jailer
+          rm -rf /tmp/firecracker.tgz /tmp/release-v1.9.0-x86_64
+          echo "firecracker + jailer installed"
         else
           echo "firecracker already installed"
+          # Ensure jailer is also present
+          if [ ! -f /usr/local/bin/jailer ]; then
+            echo "WARNING: jailer not found — re-run after removing /usr/local/bin/firecracker to re-extract both"
+          fi
         fi
+      # Guest kernel — download if missing
       - |
         if [ ! -f /opt/firecracker/vmlinux ]; then
-          echo "WARNING: no kernel at /opt/firecracker/vmlinux"
-          echo "  See: https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md"
+          mkdir -p /opt/firecracker
+          echo "Downloading Firecracker guest kernel (5.10)..."
+          curl -sL -o /opt/firecracker/vmlinux \
+            https://s3.amazonaws.com/spec.ccfc.min/ci-artifacts/kernels/x86_64/vmlinux-5.10.217
+          echo "guest kernel installed"
         else
           echo "guest kernel present"
         fi
+      # Artifact directory for downloaded user binaries/wasm
+      - mkdir -p /var/lib/liquid-metal/artifacts
+
+  security:setup:
+    desc: "Full security setup: jailer user, cpuset, IFB module (run as root, after metal:setup)"
+    cmds:
+      # Create the unprivileged group + user Firecracker runs as inside the jailer.
+      # Group must exist before useradd --gid can reference it.
+      - |
+        if ! getent group liquid-metal-vm &>/dev/null; then
+          groupadd --system --gid 10000 liquid-metal-vm
+          echo "created group liquid-metal-vm (gid=10000)"
+        else
+          echo "liquid-metal-vm group already exists"
+        fi
+      - |
+        if ! id liquid-metal-vm &>/dev/null; then
+          useradd --system --no-create-home --uid 10000 --gid 10000 liquid-metal-vm
+          echo "created user liquid-metal-vm (uid=10000)"
+        else
+          echo "liquid-metal-vm user already exists"
+        fi
+      # Jailer chroot base directory
+      - mkdir -p /srv/jailer
+      # Enable cpuset controller in the liquid-metal cgroup subtree
+      - mkdir -p /sys/fs/cgroup/liquid-metal
+      - |
+        for ctrl in io cpuset; do
+          if ! grep -q "$ctrl" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
+            echo "+$ctrl" | tee /sys/fs/cgroup/cgroup.subtree_control
+          fi
+        done
+        echo "cgroup v2 controllers: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
+      # IFB module for ingress bandwidth shaping (tap → ifb mirroring, see tc.rs)
+      - modprobe ifb numifbs=256 2>/dev/null || true
+      - |
+        echo ""
+        echo "Security setup complete. Add to .env:"
+        echo "  USE_JAILER=true"
+        echo "  JAILER_BIN=/usr/local/bin/jailer"
+        echo "  JAILER_CHROOT_BASE=/srv/jailer"
+        echo "  JAILER_UID=10000"
+        echo "  JAILER_GID=10000"
+        echo "  PHYSICAL_CORES=4          # physical cores on your node"
+        echo "  ROOTFS_DEVICE=8:0         # from: lsblk -o NAME,MAJ:MIN"
+
+  metal:quota-setup:
+    desc: "One-time Triple-Lock setup: cgroup v2 io controller + IFB module (run as root)"
+    cmds:
+      # Layer 2: verify cgroup v2 unified hierarchy
+      - |
+        if ! grep -q "^cgroup2" /proc/mounts 2>/dev/null; then
+          echo "ERROR: cgroup v2 not mounted."
+          echo "  Add 'systemd.unified_cgroup_hierarchy=1' to kernel cmdline and reboot."
+          exit 1
+        fi
+        echo "cgroup v2 OK"
+      # Create the liquid-metal subtree and enable the io controller
+      - mkdir -p /sys/fs/cgroup/liquid-metal
+      - |
+        if ! grep -q "\bio\b" /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
+          echo "+io" | tee /sys/fs/cgroup/cgroup.subtree_control
+          echo "io controller enabled"
+        else
+          echo "io controller already enabled"
+        fi
+      # Layer 3: IFB module for ingress shaping (tap0 → ifb0, etc.)
+      - modprobe ifb numifbs=256 2>/dev/null || true
+      - echo "ifb" >> /etc/modules-load.d/liquid-metal.conf 2>/dev/null || true
+      - |
+        echo ""
+        echo "Triple-Lock setup complete."
+        echo "Set ROOTFS_DEVICE in .env to the block device of your rootfs images:"
+        echo "  lsblk -o NAME,MAJ:MIN   # find major:minor (e.g. 8:0 for /dev/sda)"
+        echo "  echo 'ROOTFS_DEVICE=8:0' >> .env"

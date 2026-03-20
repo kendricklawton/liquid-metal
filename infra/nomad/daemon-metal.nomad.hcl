@@ -1,13 +1,13 @@
-# Liquid Metal Daemon — Metal tier (Firecracker)
-# Runs on node-a-01 and node-a-02 only (node_class = "metal").
-# Consumes NATS ProvisionEvent → boots Firecracker VMs via KVM.
+# Liquid Metal Daemon — Metal tier (Firecracker serverless)
+# Beta topology: single instance on node-a-01 (node_class = "metal").
+# Consumes NATS events: ProvisionEvent (build rootfs + snapshot), WakeEvent (restore from snapshot).
 #
 # NOTE: raw_exec driver requires privileged access on these nodes
 # because the daemon creates TAP devices, attaches eBPF programs,
 # and spawns Firecracker processes. Nomad client must be configured
 # with: options { "driver.raw_exec.enable" = "1" }
 #
-# Deploy: nomad job run infra/jobs/daemon-metal.nomad.hcl
+# Deploy: nomad job run infra/nomad/daemon-metal.nomad.hcl
 
 job "daemon-metal" {
   datacenters = ["ord"]
@@ -18,24 +18,16 @@ job "daemon-metal" {
     min_healthy_time = "20s"
     healthy_deadline = "3m"
     auto_revert      = true
-    # Stagger updates so node-a-01 and node-a-02 never update simultaneously
-    stagger          = "30s"
   }
 
   group "daemon" {
-    count = 2 # One per Metal node
+    count = 1
 
     # Pin exclusively to Metal tier nodes
     constraint {
       attribute = "${node.class}"
       operator  = "="
       value     = "metal"
-    }
-
-    # One allocation per host — never two daemons on same node
-    constraint {
-      operator = "distinct_hosts"
-      value    = "true"
     }
 
     task "daemon" {
@@ -70,22 +62,48 @@ EOF
       }
 
       env {
-        NODE_ENGINE    = "metal"
-        NODE_ID        = "${node.unique.name}" # node-a-01 / node-a-02
-        ARTIFACT_DIR   = "/var/lib/liquid-metal/artifacts"
-        FC_BIN         = "/usr/local/bin/firecracker"
-        FC_KERNEL_PATH = "/opt/firecracker/vmlinux"
-        FC_SOCK_DIR    = "/run/firecracker"
-        BRIDGE         = "br0"
-        USE_JAILER     = "true"
-        JAILER_BIN     = "/usr/local/bin/jailer"
-        RUST_LOG       = "info"
+        NODE_ENGINE        = "metal"
+        NODE_ID            = "${node.unique.name}" # node-a-01
+        ARTIFACT_DIR       = "/var/lib/liquid-metal/artifacts"
+        FC_BIN             = "/usr/local/bin/firecracker"
+        FC_KERNEL_PATH     = "/opt/firecracker/vmlinux"
+        FC_SOCK_DIR        = "/run/firecracker"
+        BRIDGE             = "br0"
+        BASE_IMAGE_KEY     = "templates/base-alpine-v1.ext4"
+        USE_JAILER         = "true"
+        JAILER_BIN         = "/usr/local/bin/jailer"
+        JAILER_CHROOT_BASE = "/srv/jailer"
+        JAILER_UID         = "10000"
+        JAILER_GID         = "10000"
+        HEALTH_PORT        = "${NOMAD_PORT_health}"
+        RUST_LOG           = "info"
+        OTEL_EXPORTER_OTLP_ENDPOINT = "${OTEL_ENDPOINT}"
       }
 
       resources {
         cpu    = 1000 # MHz — daemon itself is lightweight; VMs are separate processes
         memory = 512  # MB
       }
+
+      logs {
+        max_files     = 10
+        max_file_size = 10
+      }
+
+      service {
+        name = "daemon-metal"
+        port = "health"
+        check {
+          type     = "http"
+          path     = "/health"
+          interval = "10s"
+          timeout  = "3s"
+        }
+      }
+    }
+
+    network {
+      port "health" {}
     }
   }
 

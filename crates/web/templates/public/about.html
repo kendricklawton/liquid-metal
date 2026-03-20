@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}About{% endblock %}
+{% block description %}Dedicated VMs and serverless Wasm for compiled binaries. Deploy Go, Rust, or Zig — no Dockerfiles, no infrastructure.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  <div class="max-w-2xl mb-20">
+    <p class="lm-label mb-3">// about</p>
+    <h1 class="text-4xl font-black tracking-tight mb-6">Liquid Metal</h1>
+    <p class="text-base text-zwl-muted dark:text-zw-muted leading-relaxed">
+      I built Liquid Metal because deploy platforms kept asking me for a Dockerfile.
+      If you write Go, Rust, or Zig, you already have a binary. You shouldn't need to
+      wrap it in a container just to run it. So I built a platform that takes your compiled
+      output and runs it directly &mdash; on a dedicated VM or as serverless Wasm.
+    </p>
+  </div>
+
+  <div class="space-y-8">
+
+    {# Problem #}
+    <div class="glass-card grid md:grid-cols-3 overflow-hidden">
+      <div class="p-8 col-span-1 border-b md:border-b-0 md:border-r border-zwl-border dark:border-zw-border">
+        <p class="lm-label mb-3">// problem</p>
+        <h2 class="text-xl font-black tracking-tight">Deploy platforms weren't built for compiled languages</h2>
+      </div>
+      <div class="p-8 col-span-2">
+        <p class="text-sm text-zwl-muted dark:text-zw-muted leading-relaxed">
+          Lambda wants a runtime. Vercel wants JavaScript. Cloudflare Workers want V8. If you write Go, Rust, or Zig,
+          you already have a binary &mdash; you shouldn't need to wrap it in a container or an SDK just to run it.
+          Liquid Metal takes your compiled output and runs it directly, on real hardware or in a Wasm sandbox.
+        </p>
+      </div>
+    </div>
+
+    {# Approach #}
+    <div class="glass-card grid md:grid-cols-3 overflow-hidden">
+      <div class="p-8 col-span-1 border-b md:border-b-0 md:border-r border-zwl-border dark:border-zw-border">
+        <p class="lm-label mb-3">// approach</p>
+        <h2 class="text-xl font-black tracking-tight">Two engines, one CLI</h2>
+      </div>
+      <div class="p-8 col-span-2">
+        <p class="text-sm text-zwl-muted dark:text-zw-muted leading-relaxed mb-4">
+          <strong>Metal</strong> runs your binary in a dedicated Firecracker microVM on bare metal hardware.
+          Always on, no cold starts, fixed monthly price. Real Linux kernel, real networking, real isolation.
+          For anything that compiles to <code class="font-mono text-xs">x86_64-unknown-linux-musl</code>.
+        </p>
+        <p class="text-sm text-zwl-muted dark:text-zw-muted leading-relaxed">
+          <strong>Liquid</strong> runs your Wasm module in Wasmtime. Serverless &mdash; scale to zero,
+          wake on request, sub-millisecond cold starts. Per-invocation billing. For APIs, webhooks,
+          and data transforms that compile to <code class="font-mono text-xs">wasm32-wasip1</code>.
+        </p>
+      </div>
+    </div>
+
+    {# How it works #}
+    <div>
+      <p class="lm-label mb-6">// how it works</p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">Deploy</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">
+            <code class="font-mono">flux deploy</code> builds your binary, uploads it to object storage,
+            and provisions your service. No Dockerfiles. No YAML. One command.
+          </p>
+        </div>
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">Metal &mdash; always on</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">
+            Metal VMs boot once, pass a health check, and stay running permanently.
+            Traffic hits your binary directly &mdash; no wake-up, no cold start, no latency tax.
+          </p>
+        </div>
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">Liquid &mdash; wake on request</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">
+            Liquid services scale to zero when idle. When a request arrives, Wasmtime
+            cold-starts your module in under a millisecond. The user never waits.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    {# Stack #}
+    <div>
+      <p class="lm-label mb-6">// under the hood</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">Firecracker on Bare Metal</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">
+            Metal services run in KVM-isolated Firecracker microVMs on dedicated bare metal servers.
+            Always on, full Linux kernel, no containers, no neighbours sharing your CPU.
+          </p>
+        </div>
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">eBPF Tenant Isolation</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">
+            Per-VM network isolation via TC egress classifiers. Cross-tenant traffic is blocked
+            at the kernel level &mdash; no userspace proxy in the data path.
+          </p>
+        </div>
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">Billing</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">
+            Metal is fixed monthly pricing &mdash; always on, no metering. Liquid bills per invocation
+            with a generous free tier. No idle cost, no surprises.
+          </p>
+        </div>
+        <div class="glass-card p-6 flex flex-col gap-2">
+          <p class="text-[10px] font-mono font-bold uppercase tracking-widest">Written in Rust</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">
+            The entire platform &mdash; API, daemon, proxy, CLI &mdash; is Rust. I wrote all of it.
+            Postgres for state. NATS for events. Pingora for edge routing. Firecracker for VMs. eBPF for isolation. No ORMs. No frameworks.
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+{% endblock %}

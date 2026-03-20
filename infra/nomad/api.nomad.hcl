@@ -1,15 +1,14 @@
 # Liquid Metal API
-# Runs active/active on all 4 bare metal nodes.
+# Beta topology: single instance on NAT VPS (node_class = "gateway").
 # Axum REST/JSON server on :7070. Writes Postgres, publishes to NATS.
 #
-# Deploy: nomad job run infra/jobs/api.nomad.hcl
+# Deploy: nomad job run infra/nomad/api.nomad.hcl
 # Update binary: bump meta.version + artifact URL, re-run above.
 
 job "api" {
   datacenters = ["ord"]
   type        = "service"
 
-  # Rolling deploy — one allocation at a time, zero downtime
   update {
     max_parallel     = 1
     min_healthy_time = "15s"
@@ -18,16 +17,28 @@ job "api" {
   }
 
   group "api" {
-    count = 4 # One per node — Nomad spreads across available nodes
+    count = 1
 
-    # Spread evenly across all nodes
-    spread {
-      attribute = "${node.unique.name}"
+    # Pin to primary gateway — API is the control plane, only runs on gateway-a.
+    # Gateway-b is data plane only (HAProxy + Pingora).
+    constraint {
+      attribute = "${node.class}"
+      operator  = "="
+      value     = "gateway"
+    }
+
+    constraint {
+      attribute = "${meta.gateway_role}"
+      operator  = "="
+      value     = "primary"
     }
 
     network {
       port "http" {
         static = 7070
+      }
+      port "metrics" {
+        static = 9090
       }
     }
 
@@ -58,15 +69,11 @@ job "api" {
       }
 
       env {
-        BIND_ADDR                  = "0.0.0.0:7070"
-        DATABASE_URL               = "${DATABASE_URL}"
-        NATS_URL                   = "${NATS_URL}"
-        INTERNAL_SECRET            = "${INTERNAL_SECRET}"
-        OBJECT_STORAGE_ENDPOINT    = "${OBJECT_STORAGE_ENDPOINT}"
-        OBJECT_STORAGE_BUCKET      = "${OBJECT_STORAGE_BUCKET}"
-        OBJECT_STORAGE_ACCESS_KEY  = "${OBJECT_STORAGE_ACCESS_KEY}"
-        OBJECT_STORAGE_SECRET_KEY  = "${OBJECT_STORAGE_SECRET_KEY}"
-        RUST_LOG                   = "info"
+        BIND_ADDR                       = "0.0.0.0:7070"
+        RUST_LOG                        = "info"
+        OTEL_EXPORTER_OTLP_ENDPOINT     = "${OTEL_ENDPOINT}"
+        # GCP KMS — service account JSON rendered to secrets/gcp-sa.json below
+        GOOGLE_APPLICATION_CREDENTIALS  = "${NOMAD_SECRETS_DIR}/gcp-sa.json"
       }
 
       # Secrets injected from Nomad Variables (nomad var put secrets/api ...)
@@ -84,15 +91,35 @@ OBJECT_STORAGE_ENDPOINT={{ .object_storage_endpoint }}
 OBJECT_STORAGE_BUCKET={{ .object_storage_bucket }}
 OBJECT_STORAGE_ACCESS_KEY={{ .object_storage_access_key }}
 OBJECT_STORAGE_SECRET_KEY={{ .object_storage_secret_key }}
+GCP_KMS_KEY={{ .gcp_kms_key }}
+CERT_DEK_WRAPPED={{ .cert_dek_wrapped }}
+OIDC_ISSUER={{ .oidc_issuer }}
+OIDC_CLI_CLIENT_ID={{ .oidc_cli_client_id }}
 {{ end }}
 EOF
         destination = "secrets/env"
         env         = true
       }
 
+      # GCP service account JSON — rendered from Nomad Variables to a file.
+      # No persistent key files on disk — lives in Nomad's tmpfs-backed secrets dir,
+      # only readable by this task, deleted when the allocation stops.
+      # Store with: nomad var put secrets/api gcp_sa_json='$(cat sa.json)'
+      template {
+        data        = <<EOF
+{{ with nomadVar "secrets/api" }}{{ .gcp_sa_json }}{{ end }}
+EOF
+        destination = "secrets/gcp-sa.json"
+      }
+
       resources {
         cpu    = 500  # MHz
         memory = 256  # MB
+      }
+
+      logs {
+        max_files     = 10
+        max_file_size = 10
       }
     }
   }

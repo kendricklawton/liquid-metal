@@ -33,12 +33,25 @@ aws-config           = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-smithy-runtime-api = { workspace = true }
 aes-gcm            = { workspace = true }
+gcp_auth           = { workspace = true }
+base64             = { workspace = true }
 async-trait        = { workspace = true }
 reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls             = { workspace = true }
 governor           = { workspace = true }
 hmac               = { workspace = true }
 subtle             = { workspace = true }
 futures            = { workspace = true }
+tokio-stream       = "0.1"
+url                = "2"
+chrono             = { workspace = true }
+instant-acme       = { workspace = true }
+rcgen              = { workspace = true }
+utoipa             = { workspace = true }
+utoipa-swagger-ui  = { workspace = true }
+metrics                    = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+hickory-resolver           = { workspace = true }
 
 [dev-dependencies]
 tower          = { workspace = true }
