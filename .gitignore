@@ -21,7 +21,7 @@ web/tmp/
 # buf.lock is intentionally committed — do not add it here
 
 # ── Environment ───────────────────────────────────────────────────────────────
-.claude
+.claude/
 .env
 .env.local
 .env.*.local
