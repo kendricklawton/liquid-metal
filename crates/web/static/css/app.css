@@ -4,6 +4,12 @@
  * Terminal panels use Ayu Dark bg in both modes.
  * ─────────────────────────────────────────────────────────────────────────── */
 
+/* ── Fluid base font — scales with viewport so text stays readable on 2K/4K ── */
+/* 16px at 1080p (~1920w), grows to ~20px at 4K (~3840w), floors at 15px on mobile */
+html {
+  font-size: clamp(0.9375rem, 0.75rem + 0.5vw, 1.25rem);
+}
+
 :root {
   /* Ayu Light */
   --lm-bg:        #fafafa;
@@ -45,9 +51,9 @@ body, nav, footer, .glass-card, .glass, .glass-btn, .terminal-panel {
 /* ── Section label ────────────────────────────────────────────────────────── */
 .lm-label {
   font-family: ui-monospace, monospace;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--lm-muted);
 }
@@ -195,7 +201,7 @@ body, nav, footer, .glass-card, .glass, .glass-btn, .terminal-panel {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 8px;
+  font-size: 0.5rem;
   font-weight: 700;
   color: var(--lm-accent);
 }
@@ -206,10 +212,10 @@ body, nav, footer, .glass-card, .glass, .glass-btn, .terminal-panel {
   align-items: center;
   gap: 0.4rem;
   padding: 0.35rem 0.75rem;
-  font-size: 10px;
+  font-size: 0.6875rem;
   font-family: ui-monospace, monospace;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-weight: 500;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--lm-muted);
   border: 1px solid var(--lm-border);

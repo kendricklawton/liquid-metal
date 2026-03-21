@@ -50,3 +50,19 @@ pub struct TemplatesTemplate;
 pub async fn templates() -> Result<impl IntoResponse, WebError> {
     Ok(Html(TemplatesTemplate.render()?))
 }
+
+#[derive(Template)]
+#[template(path = "public/changelog.html")]
+pub struct ChangelogTemplate;
+
+pub async fn changelog() -> Result<impl IntoResponse, WebError> {
+    Ok(Html(ChangelogTemplate.render()?))
+}
+
+#[derive(Template)]
+#[template(path = "public/status.html")]
+pub struct StatusTemplate;
+
+pub async fn status() -> Result<impl IntoResponse, WebError> {
+    Ok(Html(StatusTemplate.render()?))
+}

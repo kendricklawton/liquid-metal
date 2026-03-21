@@ -141,27 +141,12 @@ async fn main() -> Result<()> {
         "default resource quotas"
     );
 
-    // ── GCP KMS (envelope encryption + cert DEK unwrap) ──────────────────────
-    let kms_key = require_env("GCP_KMS_KEY")
-        .context("GCP_KMS_KEY is required — set to the full Cloud KMS cryptoKey resource name")?;
-    let kms: Arc<dyn api::envelope::KmsClient> = Arc::new(
-        api::envelope::GcpKmsClient::new(kms_key)
-            .await
-            .context("initializing GCP KMS client — check GCP_KMS_CREDENTIALS (or GOOGLE_APPLICATION_CREDENTIALS in production)")?,
+    // ── Vault (secret management) ────────────────────────────────────────────
+    let vault = Arc::new(
+        common::vault::VaultClient::from_env()
+            .context("initializing Vault client — check VAULT_ADDR and VAULT_TOKEN")?,
     );
-    tracing::info!("GCP KMS envelope encryption enabled");
-
-    // ── Platform cert DEK (KMS-wrapped) ──────────────────────────────────────
-    // The plaintext DEK lives in memory only — never logged or persisted.
-    // See certs.rs for the full key management rationale.
-    let cert_encryption_key = api::certs::unwrap_cert_dek(
-        &*kms,
-        &require_env("CERT_DEK_WRAPPED")
-            .context("CERT_DEK_WRAPPED is required — see .env.example for how to generate")?,
-    )
-    .await
-    .context("unwrapping platform cert DEK via KMS")?;
-    tracing::info!("platform cert DEK loaded");
+    vault.health_check().await.context("vault health check failed — is Vault running and unsealed?")?;
 
     // ── AppState ─────────────────────────────────────────────────────────────
     let state = Arc::new(AppState {
@@ -180,12 +165,11 @@ async fn main() -> Result<()> {
         features,
         http_client,
         victorialogs_url: env_or("VICTORIALOGS_URL", ""),
-        kms,
+        vault,
         stripe,
         stripe_webhook_secret,
         stripe_price_pro,
         stripe_price_team,
-        cert_encryption_key,
     });
 
     // ── Outbox poller ────────────────────────────────────────────────────────

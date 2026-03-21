@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Changelog{% endblock %}
+{% block description %}What's new in Liquid Metal. Product updates, new features, and improvements.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  <div class="max-w-2xl mb-20">
+    <p class="lm-label mb-3">// changelog</p>
+    <h1 class="text-4xl font-semibold tracking-tight mb-6">What's new</h1>
+    <p class="text-base text-zwl-muted dark:text-zw-muted leading-relaxed">
+      Product updates, shipped as they happen.
+    </p>
+  </div>
+
+  <div class="max-w-2xl space-y-16">
+
+    {# ── Entry template ─────────────────────────────────────────────────── #}
+    {# Copy this block for each new entry. Newest first.                    #}
+
+    <article class="relative pl-8 border-l border-zwl-border dark:border-zw-border">
+      <div class="absolute left-[-5px] top-1 w-2.5 h-2.5 bg-zwl-fg dark:bg-zw-fg"></div>
+      <time class="text-xs font-mono text-zwl-muted dark:text-zw-muted">2026-03-20</time>
+      <h2 class="text-lg font-semibold tracking-tight mt-2 mb-3">Beta launch</h2>
+      <div class="text-sm text-zwl-muted dark:text-zw-muted space-y-2 leading-relaxed">
+        <p>Liquid Metal is live in beta. Four bare metal nodes in Dallas, two engines, one CLI.</p>
+        <ul class="list-disc list-inside space-y-1">
+          <li><strong>Metal</strong> &mdash; Dedicated Firecracker microVMs. 1, 2, or 4 vCPU. Real Linux, KVM isolation, NVMe storage.</li>
+          <li><strong>Liquid</strong> &mdash; Serverless Wasm. Sub-millisecond cold starts, scale to zero, per-invocation billing.</li>
+          <li><code class="font-mono text-xs">flux deploy</code> &mdash; one command from binary to URL.</li>
+          <li>Dashboard, deploy logs, custom domains, automatic TLS.</li>
+        </ul>
+      </div>
+    </article>
+
+  </div>
+
+</div>
+{% endblock %}

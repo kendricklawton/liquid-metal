@@ -28,20 +28,6 @@ fn main() -> Result<()> {
     let wildcard_key      = env_or("PLATFORM_WILDCARD_KEY",
                                    &format!("/etc/letsencrypt/live/{platform_domain}/privkey.pem"));
 
-    // ── Platform cert DEK (KMS-wrapped) ──────────────────────────────────────
-    // Unwrapped once at startup via GCP KMS; used synchronously for all cert
-    // cache operations. If unset, the proxy runs in wildcard-only mode.
-    let cert_key: [u8; 32] = match std::env::var("CERT_DEK_WRAPPED").ok() {
-        Some(ref wrapped) => {
-            otel_rt.block_on(tls::unwrap_cert_dek(wrapped))
-                .context("unwrapping platform cert DEK — check GCP_KMS_KEY + GCP_KMS_CREDENTIALS")?
-        }
-        None => {
-            tracing::warn!("CERT_DEK_WRAPPED not set — custom domain certs will not be loaded");
-            [0u8; 32]
-        }
-    };
-
     let pool        = Arc::new(db::build_pool(&db_url)?);
     let route_cache = cache::new();
 
@@ -53,10 +39,12 @@ fn main() -> Result<()> {
     cache::warm_domains(&domain_cache, &pool);
 
     // ── TLS cert cache ──────────────────────────────────────────────────────
+    // Certs are stored in Vault and served by the API via internal endpoint.
+    // Warm-up and hot-reload fetch from API, not from Postgres directly.
     let cert_cache = tls::new_cert_cache();
-    if cert_key != [0u8; 32] {
-        tls::warm_cert_cache(&cert_cache, &pool, &cert_key);
-    }
+    let api_url = env_or("API_URL", "http://127.0.0.1:7070");
+    let internal_secret = std::env::var("INTERNAL_SECRET").unwrap_or_default();
+    tls::warm_cert_cache_from_api(&cert_cache, &pool, &api_url, &internal_secret);
 
     // NATS subscriber keeps the route cache warm and handles route eviction.
     cache::start_subscriber(route_cache.clone(), nats_url.clone());
@@ -74,11 +62,12 @@ fn main() -> Result<()> {
     }
 
     // Subscribe to cert_provisioned events to hot-reload custom domain certs.
+    // Certs are fetched from the API (which reads from Vault) on each event.
     if let Some(ref nats) = nats_client {
         let cert_cache2 = cert_cache.clone();
-        let pool2       = pool.clone();
         let nats2       = nats.clone();
-        let cert_key2   = cert_key;
+        let api_url2    = api_url.clone();
+        let secret2     = internal_secret.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -89,29 +78,30 @@ fn main() -> Result<()> {
                     Ok(s) => s,
                     Err(e) => { tracing::warn!(error = %e, "cert reload: NATS subscribe failed"); return; }
                 };
+                let http = reqwest::Client::new();
                 use futures::StreamExt as _;
                 while let Some(msg) = sub.next().await {
                     if let Ok(ev) = serde_json::from_slice::<common::events::CertProvisionedEvent>(&msg.payload) {
-                        // Fetch the new cert from DB and hot-load it.
-                        if let Ok(db) = pool2.get().await {
-                            let row = db.query_opt(
-                                "SELECT dc.cert_pem_enc, dc.key_pem_enc
-                                 FROM domain_certs dc
-                                 JOIN domains d ON d.id = dc.domain_id
-                                 WHERE d.domain = $1 AND dc.expires_at > NOW()",
-                                &[&ev.domain],
-                            ).await;
-                            if let Ok(Some(row)) = row {
-                                let cert_enc: Vec<u8> = row.get("cert_pem_enc");
-                                let key_enc:  Vec<u8> = row.get("key_pem_enc");
-                                match (tls::decrypt_blob(&cert_key2, &cert_enc), tls::decrypt_blob(&cert_key2, &key_enc)) {
-                                    (Ok(cert), Ok(key)) => {
-                                        tls::insert_cert(&cert_cache2, &ev.domain, &cert, &key);
-                                    }
-                                    (Err(e), _) | (_, Err(e)) => {
-                                        tracing::warn!(domain = %ev.domain, error = %e, "cert hot-reload: decrypt failed");
+                        // Fetch cert from API (which reads from Vault).
+                        let url = format!("{}/internal/certs/{}", api_url2, ev.domain);
+                        match http.get(&url)
+                            .header("X-Internal-Secret", &secret2)
+                            .send()
+                            .await
+                        {
+                            Ok(resp) if resp.status().is_success() => {
+                                if let Ok(body) = resp.json::<std::collections::HashMap<String, String>>().await {
+                                    if let (Some(cert), Some(key)) = (body.get("cert_pem"), body.get("key_pem")) {
+                                        tls::insert_cert(&cert_cache2, &ev.domain, cert.as_bytes(), key.as_bytes());
+                                        tracing::info!(domain = %ev.domain, "cert hot-reload: loaded from API");
                                     }
                                 }
+                            }
+                            Ok(resp) => {
+                                tracing::warn!(domain = %ev.domain, status = %resp.status(), "cert hot-reload: API returned error");
+                            }
+                            Err(e) => {
+                                tracing::warn!(domain = %ev.domain, error = %e, "cert hot-reload: API request failed");
                             }
                         }
                     }

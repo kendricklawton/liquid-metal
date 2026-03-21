@@ -8,8 +8,8 @@
 
   <div class="mb-16">
     <p class="lm-label mb-3">// help</p>
-    <h1 class="text-4xl font-black tracking-tight mb-3">Help &amp; Support</h1>
-    <p class="text-zwl-muted dark:text-zw-muted max-w-lg">Answers to common questions and how to get in touch.</p>
+    <h1 class="text-4xl font-semibold tracking-tight mb-3">Help &amp; Support</h1>
+    <p class="text-base text-zwl-muted dark:text-zw-muted max-w-lg">Answers to common questions and how to get in touch.</p>
   </div>
 
   {# FAQ #}
@@ -19,20 +19,20 @@
 
       <div x-data="{ open: false }">
         <button @click="open = !open" :aria-expanded="open" class="w-full flex items-center justify-between px-6 py-5 text-left transition-colors">
-          <span class="text-sm font-bold">What languages are supported?</span>
+          <span class="text-base font-medium">What languages are supported?</span>
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
-        <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
+        <div x-show="open" x-cloak class="px-6 pb-5 text-sm text-zwl-muted dark:text-zw-muted leading-relaxed">
           Any language that compiles to a Linux x86_64 static binary (Metal) or a WASI WebAssembly module (Liquid). Go, Rust, Zig, C, and C++ work out of the box. Install the CLI via Homebrew (<code>brew install liquidmetal/tap/flux</code>) or the install script (<code>curl -fsSL https://get.liquidmetal.dev | sh</code>). The CLI auto-detects Go and Rust projects and configures build commands automatically.
         </div>
       </div>
 
       <div x-data="{ open: false }">
         <button @click="open = !open" :aria-expanded="open" class="w-full flex items-center justify-between px-6 py-5 text-left transition-colors">
-          <span class="text-sm font-bold">What's the difference between Metal and Liquid?</span>
+          <span class="text-base font-medium">What's the difference between Metal and Liquid?</span>
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
-        <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
+        <div x-show="open" x-cloak class="px-6 pb-5 text-sm text-zwl-muted dark:text-zw-muted leading-relaxed">
           Two different engines for different workloads.<br><br>
           <strong>Metal</strong> gives you a dedicated VM on bare metal hardware. Always on, fixed monthly price, real Linux kernel, filesystem, and networking. Best for production APIs, databases, background jobs &mdash; anything that needs a real server.<br><br>
           <strong>Liquid</strong> is serverless WebAssembly. Scale to zero, wake on request, pay per invocation. Sub-millisecond cold starts. Best for lightweight APIs, webhooks, and data transforms.
@@ -41,10 +41,10 @@
 
       <div x-data="{ open: false }">
         <button @click="open = !open" :aria-expanded="open" class="w-full flex items-center justify-between px-6 py-5 text-left transition-colors">
-          <span class="text-sm font-bold">How does billing work?</span>
+          <span class="text-base font-medium">How does billing work?</span>
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
-        <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
+        <div x-show="open" x-cloak class="px-6 pb-5 text-sm text-zwl-muted dark:text-zw-muted leading-relaxed">
           <strong>Metal</strong> VMs are billed at a fixed monthly rate based on dedicated vCPU tier: $17/mo (0.5 vCPU, 2GB RAM), $33/mo (1 vCPU, 4GB RAM), or $66/mo (2 vCPU, 8GB RAM). All tiers include NVMe storage and dedicated CPU &mdash; no shared resources.<br><br>
           <strong>Liquid</strong> is billed per invocation at $0.30 per 1M requests. Every account gets 1M free Liquid invocations per month. No credit card required to start.
         </div>
@@ -52,10 +52,10 @@
 
       <div x-data="{ open: false }">
         <button @click="open = !open" :aria-expanded="open" class="w-full flex items-center justify-between px-6 py-5 text-left transition-colors">
-          <span class="text-sm font-bold">Is there a free tier?</span>
+          <span class="text-base font-medium">Is there a free tier?</span>
           <span class="font-mono text-zwl-muted dark:text-zw-muted ml-4 shrink-0" x-text="open ? '−' : '+'"></span>
         </button>
-        <div x-show="open" x-cloak class="px-6 pb-5 text-xs text-zwl-muted dark:text-zw-muted leading-relaxed">
+        <div x-show="open" x-cloak class="px-6 pb-5 text-sm text-zwl-muted dark:text-zw-muted leading-relaxed">
           Yes. Every account gets 1M free Liquid (Wasm) invocations per month. Liquid services scale to zero when idle. No credit card required. Metal VMs start at $17/mo.
         </div>
       </div>
@@ -67,23 +67,23 @@
   <div class="mb-16">
     <p class="lm-label mb-6">// troubleshooting</p>
     <div class="glass-card overflow-hidden">
-      <div class="grid grid-cols-2 gap-4 px-6 py-3 border-b border-zwl-border dark:border-zw-border text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">
+      <div class="grid grid-cols-2 gap-4 px-6 py-3 border-b border-zwl-border dark:border-zw-border text-xs font-mono font-medium uppercase tracking-wider text-zwl-muted dark:text-zw-muted">
         <span>Symptom</span><span>Fix</span>
       </div>
       <div class="divide-y divide-zwl-border dark:divide-zw-border">
-        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
+        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-sm">
           <code class="font-mono">flux: command not found</code>
           <span class="text-zwl-muted dark:text-zw-muted">Reinstall via <code class="font-mono">brew install liquidmetal/tap/flux</code> or <code class="font-mono">curl -fsSL https://get.liquidmetal.dev | sh</code></span>
         </div>
-        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
+        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-sm">
           <code class="font-mono">flux login fails</code>
           <span class="text-zwl-muted dark:text-zw-muted">Check internet connectivity and OIDC provider status</span>
         </div>
-        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
+        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-sm">
           <code class="font-mono">flux deploy upload fails</code>
           <span class="text-zwl-muted dark:text-zw-muted">Check if the API and object storage are running</span>
         </div>
-        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-xs">
+        <div class="grid grid-cols-2 gap-4 px-6 py-4 text-sm">
           <code class="font-mono">Status stuck at "provisioning"</code>
           <span class="text-zwl-muted dark:text-zw-muted">Check daemon logs for errors</span>
         </div>
@@ -95,11 +95,11 @@
   <div class="glass-card p-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
     <div>
       <p class="lm-label mb-2">// contact</p>
-      <h2 class="text-xl font-black tracking-tight mb-1">Still need help?</h2>
-      <p class="text-xs text-zwl-muted dark:text-zw-muted">It's one person on the other end. I read every email.</p>
+      <h2 class="text-xl font-semibold tracking-tight mb-1">Still need help?</h2>
+      <p class="text-sm text-zwl-muted dark:text-zw-muted">Small team, real people. We read every email.</p>
     </div>
-    <a href="mailto:support@liquidmetal.dev" class="shrink-0 inline-flex items-center px-8 py-3 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-[11px] font-mono font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
-      Email Support
+    <a href="mailto:support@liquidmetal.dev" class="shrink-0 inline-flex items-center px-8 py-3 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-medium tracking-wide hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+      Email support
     </a>
   </div>
 

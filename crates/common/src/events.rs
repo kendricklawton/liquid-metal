@@ -328,3 +328,192 @@ fn parse_quota_env<T: std::str::FromStr + PartialEq + Default>(key: &str, fallba
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Engine ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn engine_from_str_metal() {
+        assert_eq!("metal".parse::<Engine>().unwrap(), Engine::Metal);
+    }
+
+    #[test]
+    fn engine_from_str_liquid() {
+        assert_eq!("liquid".parse::<Engine>().unwrap(), Engine::Liquid);
+    }
+
+    #[test]
+    fn engine_from_str_unknown() {
+        assert!("docker".parse::<Engine>().is_err());
+    }
+
+    #[test]
+    fn engine_from_str_case_sensitive() {
+        assert!("Metal".parse::<Engine>().is_err());
+    }
+
+    #[test]
+    fn engine_as_str_roundtrip() {
+        assert_eq!(Engine::Metal.as_str(), "metal");
+        assert_eq!(Engine::Liquid.as_str(), "liquid");
+    }
+
+    #[test]
+    fn engine_display() {
+        assert_eq!(format!("{}", Engine::Metal), "metal");
+        assert_eq!(format!("{}", Engine::Liquid), "liquid");
+    }
+
+    // ── Event serialization roundtrips ───────────────────────────────────
+
+    #[test]
+    fn provision_event_roundtrip() {
+        let event = ProvisionEvent {
+            tenant_id: "t1".to_string(),
+            service_id: "s1".to_string(),
+            app_name: "myapp".to_string(),
+            slug: "myapp".to_string(),
+            engine: Engine::Metal,
+            spec: EngineSpec::Metal(MetalSpec {
+                vcpu: 1,
+                memory_mb: 512,
+                port: 8080,
+                artifact_key: "metal/p1/d1/app".to_string(),
+                artifact_sha256: Some("abc123".to_string()),
+                quota: ResourceQuota::default(),
+            }),
+            env_vars: [("PORT".to_string(), "8080".to_string())].into(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: ProvisionEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.service_id, "s1");
+        assert_eq!(deserialized.slug, "myapp");
+        assert!(matches!(deserialized.engine, Engine::Metal));
+        assert_eq!(deserialized.env_vars.get("PORT").unwrap(), "8080");
+    }
+
+    #[test]
+    fn route_updated_event_roundtrip() {
+        let event = RouteUpdatedEvent {
+            slug: "myapp".to_string(),
+            upstream_addr: "172.16.0.2:8080".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let d: RouteUpdatedEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(d.slug, "myapp");
+        assert_eq!(d.upstream_addr, "172.16.0.2:8080");
+    }
+
+    #[test]
+    fn deprovision_event_roundtrip() {
+        let event = DeprovisionEvent {
+            service_id: "s1".to_string(),
+            slug: "myapp".to_string(),
+            engine: Engine::Liquid,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let d: DeprovisionEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(d.slug, "myapp");
+        assert!(matches!(d.engine, Engine::Liquid));
+    }
+
+    #[test]
+    fn deploy_step_serialization() {
+        let step = DeployStep::HealthCheck;
+        let json = serde_json::to_value(&step).unwrap();
+        assert_eq!(json, "health_check");
+    }
+
+    #[test]
+    fn deploy_step_all_variants_serialize() {
+        let steps = vec![
+            DeployStep::Queued,
+            DeployStep::Downloading,
+            DeployStep::Verifying,
+            DeployStep::Building,
+            DeployStep::Booting,
+            DeployStep::Starting,
+            DeployStep::HealthCheck,
+            DeployStep::Snapshotting,
+            DeployStep::Ready,
+            DeployStep::Running,
+            DeployStep::Failed,
+        ];
+        for step in steps {
+            let json = serde_json::to_value(&step).unwrap();
+            assert!(json.is_string(), "step {:?} should serialize as string", step);
+            // Roundtrip
+            let back: DeployStep = serde_json::from_value(json).unwrap();
+            assert_eq!(
+                serde_json::to_string(&step).unwrap(),
+                serde_json::to_string(&back).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn failure_kind_roundtrip() {
+        let t: FailureKind = serde_json::from_str("\"transient\"").unwrap();
+        assert_eq!(t, FailureKind::Transient);
+        let p: FailureKind = serde_json::from_str("\"permanent\"").unwrap();
+        assert_eq!(p, FailureKind::Permanent);
+    }
+
+    #[test]
+    fn engine_spec_tagged_serialization() {
+        let spec = EngineSpec::Liquid(LiquidSpec {
+            artifact_key: "wasm/p1/d1/main.wasm".to_string(),
+            artifact_sha256: None,
+        });
+        let json = serde_json::to_value(&spec).unwrap();
+        assert_eq!(json["type"], "liquid");
+        assert_eq!(json["artifact_key"], "wasm/p1/d1/main.wasm");
+    }
+
+    // ── ResourceQuota ────────────────────────────────────────────────────
+
+    #[test]
+    fn resource_quota_defaults_are_conservative() {
+        let q = ResourceQuota::default();
+        assert_eq!(q.disk_read_bps, Some(100 * 1024 * 1024));
+        assert_eq!(q.disk_write_bps, Some(100 * 1024 * 1024));
+        assert_eq!(q.disk_read_iops, Some(5000));
+        assert_eq!(q.disk_write_iops, Some(2000));
+        assert_eq!(q.net_ingress_kbps, Some(100_000));
+        assert_eq!(q.net_egress_kbps, Some(100_000));
+    }
+
+    #[test]
+    fn resource_quota_serializes_with_defaults() {
+        let q = ResourceQuota::default();
+        let json = serde_json::to_value(&q).unwrap();
+        assert!(json["disk_read_bps"].is_number());
+        assert!(json["net_egress_kbps"].is_number());
+    }
+
+    #[test]
+    fn provision_event_defaults_env_vars() {
+        // env_vars should default to empty when missing from JSON
+        let json = r#"{
+            "tenant_id": "t1",
+            "service_id": "s1",
+            "app_name": "app",
+            "engine": "metal",
+            "spec": {
+                "type": "metal",
+                "vcpu": 1,
+                "memory_mb": 512,
+                "port": 8080,
+                "artifact_key": "k",
+                "artifact_sha256": null
+            }
+        }"#;
+        let event: ProvisionEvent = serde_json::from_str(json).unwrap();
+        assert!(event.env_vars.is_empty());
+        assert_eq!(event.slug, ""); // serde(default)
+    }
+}

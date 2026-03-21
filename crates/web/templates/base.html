@@ -4,12 +4,12 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>
-            {% block title %}Liquid Metal{% endblock %} | Serverless for
-            compiled languages
+            {% block title %}Liquid Metal{% endblock %} | Deploy compiled
+            binaries
         </title>
         <meta
             name="description"
-            content="{% block description %}Deploy Rust and Go binaries as serverless functions. Sub-millisecond Wasm cold starts. 15ms Firecracker snapshot restore. No Dockerfiles.{% endblock %}"
+            content="{% block description %}Deploy compiled binaries on dedicated VMs or serverless Wasm. Go, Rust, Zig. No Dockerfiles. Now in beta.{% endblock %}"
         />
 
         {# Theme: respect system preference, allow manual override #}
@@ -106,38 +106,48 @@
                     <div class="flex items-center gap-8">
                         <a
                             href="/"
-                            class="font-mono font-black text-sm tracking-tight uppercase"
+                            class="font-mono font-medium text-sm tracking-tight"
                         >
                             Liquid Metal
                         </a>
                         <div class="hidden md:flex items-center gap-6">
                             <a
                                 href="/plans"
-                                class="text-xs font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                                class="text-xs font-normal text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
                                 >Plans</a
                             >
                             <a
                                 href="/docs"
-                                class="text-xs font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                                class="text-xs font-normal text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
                                 >Docs</a
                             >
                             <a
                                 href="/about"
-                                class="text-xs font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                                class="text-xs font-normal text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
                                 >About</a
+                            >
+                            <a
+                                href="/changelog"
+                                class="text-xs font-normal text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                                >Changelog</a
+                            >
+                            <a
+                                href="/status"
+                                class="text-xs font-normal text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                                >Status</a
                             >
                         </div>
                     </div>
-                    <div class="flex items-center gap-3">
+                    <div class="flex items-center justify-center gap-3">
                         <a
                             href="/auth/login"
-                            class="text-xs font-semibold uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                            class="text-center text-xs text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
                         >
                             Sign In
                         </a>
                         <a
                             href="/auth/login"
-                            class="text-xs font-bold uppercase tracking-widest bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg px-4 py-2 hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors"
+                            class="text-center text-xs bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg px-4 py-2 hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors"
                         >
                             Get Started
                         </a>
@@ -159,7 +169,7 @@
                 <div class="flex flex-col items-center gap-6 text-center">
                     <a
                         href="/"
-                        class="font-mono font-black text-sm tracking-tight uppercase"
+                        class="font-mono font-medium text-sm tracking-tight"
                     >
                         Liquid Metal
                     </a>
@@ -168,23 +178,33 @@
                     >
                         <a
                             href="/plans"
-                            class="text-xs uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                            class="text-xs text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
                             >Plans</a
                         >
                         <a
                             href="/docs"
-                            class="text-xs uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                            class="text-xs text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
                             >Docs</a
                         >
                         <a
                             href="/about"
-                            class="text-xs uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                            class="text-xs text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
                             >About</a
                         >
                         <a
                             href="/help"
-                            class="text-xs uppercase tracking-widest text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                            class="text-xs text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
                             >Help</a
+                        >
+                        <a
+                            href="/changelog"
+                            class="text-xs text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                            >Changelog</a
+                        >
+                        <a
+                            href="/status"
+                            class="text-xs text-zwl-muted dark:text-zw-muted hover:text-zwl-fg dark:hover:text-zw-fg transition-colors"
+                            >Status</a
                         >
                     </div>
                     <p class="text-xs text-zwl-muted dark:text-zw-muted">

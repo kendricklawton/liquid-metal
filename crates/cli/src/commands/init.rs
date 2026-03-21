@@ -20,8 +20,11 @@ struct ServiceSection<'a> {
 
 #[derive(Serialize)]
 struct BuildSection {
-    command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
     output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dockerfile: Option<toml::Value>,
 }
 
 #[derive(Serialize)]
@@ -102,6 +105,7 @@ pub async fn run(config: &Config, name_override: Option<String>, engine_override
         build: BuildSection {
             command: build.command.clone(),
             output: build.output.clone(),
+            dockerfile: build.dockerfile.as_ref().map(|p| toml::Value::String(p.clone())),
         },
     };
 
@@ -114,14 +118,19 @@ pub async fn run(config: &Config, name_override: Option<String>, engine_override
     if is_metal {
         msg.push_str("\n  port:    8080");
     }
-    msg.push_str(&format!("\n  build:   {}\n  output:  {}\n\nRun `flux deploy` when ready.", build.command, build.output));
+    if let Some(dockerfile) = &build.dockerfile {
+        msg.push_str(&format!("\n  docker:  {}\n  output:  {}\n\nRun `flux deploy` when ready.", dockerfile, build.output));
+    } else if let Some(command) = &build.command {
+        msg.push_str(&format!("\n  build:   {}\n  output:  {}\n\nRun `flux deploy` when ready.", command, build.output));
+    }
     print_ok(output, &msg);
     Ok(())
 }
 
 struct DetectedBuild {
-    command: String,
+    command: Option<String>,
     output: String,
+    dockerfile: Option<String>,
 }
 
 fn prompt_engine() -> Result<String> {
@@ -151,61 +160,135 @@ fn detect_build(engine: &str) -> Result<DetectedBuild> {
 }
 
 fn detect_build_liquid() -> Result<DetectedBuild> {
+    let has_dockerfile = std::path::Path::new("Dockerfile").exists();
+
     if std::path::Path::new("go.mod").exists() {
+        if has_dockerfile {
+            println!("Detected Go project. Using native build command.");
+            println!("Tip: Dockerfile found. To use it instead, set dockerfile = true in liquid-metal.toml\n");
+        }
         return Ok(DetectedBuild {
-            command: "GOOS=wasip1 GOARCH=wasm go build -o main.wasm .".to_string(),
+            command: Some("GOOS=wasip1 GOARCH=wasm go build -o main.wasm .".to_string()),
             output: "main.wasm".to_string(),
+            dockerfile: None,
         });
     }
 
     if std::path::Path::new("Cargo.toml").exists() {
         let bin_name = parse_rust_bin_name()?;
+        if has_dockerfile {
+            println!("Detected Rust project. Using native build command.");
+            println!("Tip: Dockerfile found. To use it instead, set dockerfile = true in liquid-metal.toml\n");
+        }
         return Ok(DetectedBuild {
-            command: "cargo build --target wasm32-wasip1 --release".to_string(),
+            command: Some("cargo build --target wasm32-wasip1 --release".to_string()),
             output: format!("target/wasm32-wasip1/release/{bin_name}.wasm"),
+            dockerfile: None,
         });
     }
 
     if std::path::Path::new("build.zig").exists() {
+        if has_dockerfile {
+            println!("Detected Zig project. Using native build command.");
+            println!("Tip: Dockerfile found. To use it instead, set dockerfile = true in liquid-metal.toml\n");
+        }
         return Ok(DetectedBuild {
-            command: "zig build -Dtarget=wasm32-wasi".to_string(),
+            command: Some("zig build -Dtarget=wasm32-wasi".to_string()),
             output: "zig-out/bin/main.wasm".to_string(),
+            dockerfile: None,
         });
     }
 
+    if has_dockerfile {
+        return prompt_dockerfile_build();
+    }
+
     bail!(
-        "could not detect language — no go.mod, Cargo.toml, or build.zig found.\n\
+        "could not detect language — no go.mod, Cargo.toml, build.zig, or Dockerfile found.\n\
          Create one of those files or edit liquid-metal.toml manually."
     )
 }
 
 fn detect_build_metal() -> Result<DetectedBuild> {
+    let has_dockerfile = std::path::Path::new("Dockerfile").exists();
+
     if std::path::Path::new("go.mod").exists() {
+        if has_dockerfile {
+            println!("Detected Go project. Using native build command.");
+            println!("Tip: Dockerfile found. To use it instead, set dockerfile = true in liquid-metal.toml\n");
+        }
         return Ok(DetectedBuild {
-            command: "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o app .".to_string(),
+            command: Some("GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o app .".to_string()),
             output: "app".to_string(),
+            dockerfile: None,
         });
     }
 
     if std::path::Path::new("Cargo.toml").exists() {
         let bin_name = parse_rust_bin_name()?;
+        if has_dockerfile {
+            println!("Detected Rust project. Using native build command.");
+            println!("Tip: Dockerfile found. To use it instead, set dockerfile = true in liquid-metal.toml\n");
+        }
         return Ok(DetectedBuild {
-            command: "cargo build --target x86_64-unknown-linux-musl --release".to_string(),
+            command: Some("cargo build --target x86_64-unknown-linux-musl --release".to_string()),
             output: format!("target/x86_64-unknown-linux-musl/release/{bin_name}"),
+            dockerfile: None,
         });
     }
 
     if std::path::Path::new("build.zig").exists() {
+        if has_dockerfile {
+            println!("Detected Zig project. Using native build command.");
+            println!("Tip: Dockerfile found. To use it instead, set dockerfile = true in liquid-metal.toml\n");
+        }
         return Ok(DetectedBuild {
-            command: "zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe".to_string(),
+            command: Some("zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe".to_string()),
             output: "zig-out/bin/app".to_string(),
+            dockerfile: None,
         });
     }
 
+    if has_dockerfile {
+        return prompt_dockerfile_build();
+    }
+
     bail!(
-        "could not detect language — no go.mod, Cargo.toml, or build.zig found.\n\
+        "could not detect language — no go.mod, Cargo.toml, build.zig, or Dockerfile found.\n\
          Create one of those files or edit liquid-metal.toml manually."
     )
+}
+
+fn prompt_dockerfile_build() -> Result<DetectedBuild> {
+    println!("Found Dockerfile but no go.mod, Cargo.toml, or build.zig.");
+    println!("Use Dockerfile as build tool? (Docker builds your binary, no containers at runtime)\n");
+    print!("Enter y/n: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    if input.trim().to_lowercase() != "y" {
+        bail!(
+            "Dockerfile build declined.\n\
+             Add a go.mod, Cargo.toml, or build.zig, or edit liquid-metal.toml manually."
+        );
+    }
+
+    print!("Path to compiled binary inside the container (e.g. /app/myapp): ");
+    io::stdout().flush()?;
+
+    let mut output_path = String::new();
+    io::stdin().read_line(&mut output_path)?;
+    let output_path = output_path.trim().to_string();
+    if output_path.is_empty() {
+        bail!("binary path is required");
+    }
+
+    Ok(DetectedBuild {
+        command: None,
+        output: output_path,
+        dockerfile: Some("Dockerfile".to_string()),
+    })
 }
 
 fn parse_rust_bin_name() -> Result<String> {

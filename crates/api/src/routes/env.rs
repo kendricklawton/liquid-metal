@@ -28,7 +28,7 @@ pub async fn get_env_vars(
 
     let row = db
         .query_opt(
-            "SELECT s.env_ciphertext, s.env_nonce, p.workspace_id \
+            "SELECT p.workspace_id \
              FROM services s \
              JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
@@ -40,21 +40,14 @@ pub async fn get_env_vars(
         .map_err(|_| ApiError::internal("env vars lookup failed"))?
         .ok_or_else(|| ApiError::not_found("service not found"))?;
 
-    let ciphertext: Option<Vec<u8>> = row.get("env_ciphertext");
-    let nonce: Option<Vec<u8>> = row.get("env_nonce");
+    let workspace_id: Uuid = row.get("workspace_id");
 
-    let vars = match (ciphertext, nonce) {
-        (Some(ct), Some(n)) => {
-            let workspace_id: Uuid = row.get("workspace_id");
-            envelope::decrypt_env_vars(&db, &*state.kms, workspace_id, &ct, &n)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, %service_id, "env var decryption failed");
-                    ApiError::internal("failed to decrypt environment variables")
-                })?
-        }
-        _ => std::collections::HashMap::new(),
-    };
+    let vars = envelope::read_env_vars(&state.vault, workspace_id, service_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %service_id, "failed to read env vars from vault");
+            ApiError::internal("failed to read environment variables")
+        })?;
 
     Ok(Json(contract::EnvVarsResponse { vars }))
 }
@@ -78,10 +71,9 @@ pub async fn set_env_vars(
 
     let db = db_conn(&state.db).await?;
 
-    // Fetch existing encrypted env vars + workspace_id.
     let row = db
         .query_opt(
-            "SELECT s.env_ciphertext, s.env_nonce, p.workspace_id \
+            "SELECT p.workspace_id \
              FROM services s \
              JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
@@ -94,39 +86,24 @@ pub async fn set_env_vars(
         .ok_or_else(|| ApiError::not_found("service not found"))?;
 
     let workspace_id: Uuid = row.get("workspace_id");
-    let ciphertext: Option<Vec<u8>> = row.get("env_ciphertext");
-    let nonce: Option<Vec<u8>> = row.get("env_nonce");
 
-    // Decrypt existing vars (if any), merge new ones in.
-    let mut vars = match (ciphertext, nonce) {
-        (Some(ct), Some(n)) => {
-            envelope::decrypt_env_vars(&db, &*state.kms, workspace_id, &ct, &n)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, %service_id, "env var decryption failed during set");
-                    ApiError::internal("failed to decrypt environment variables")
-                })?
-        }
-        _ => std::collections::HashMap::new(),
-    };
+    // Read existing vars from Vault, merge new ones in.
+    let mut vars = envelope::read_env_vars(&state.vault, workspace_id, service_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %service_id, "failed to read env vars from vault during set");
+            ApiError::internal("failed to read environment variables")
+        })?;
 
     vars.extend(body.vars.into_iter());
 
-    // Re-encrypt the merged map and store.
-    let (new_ct, new_nonce) = envelope::encrypt_env_vars(&db, &*state.kms, workspace_id, &vars)
+    // Write merged map back to Vault.
+    envelope::store_env_vars(&state.vault, workspace_id, service_id, &vars)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, %service_id, "env var encryption failed");
-            ApiError::internal("failed to encrypt environment variables")
+            tracing::error!(error = %e, %service_id, "failed to write env vars to vault");
+            ApiError::internal("failed to store environment variables")
         })?;
-
-    db.execute(
-        "UPDATE services SET env_ciphertext = $2, env_nonce = $3 \
-         WHERE id = $1",
-        &[&service_id, &new_ct, &new_nonce],
-    )
-    .await
-    .map_err(|_| ApiError::internal("failed to update env vars"))?;
 
     Ok(Json(contract::EnvVarsResponse { vars }))
 }
@@ -150,10 +127,9 @@ pub async fn unset_env_vars(
 
     let db = db_conn(&state.db).await?;
 
-    // Fetch existing encrypted env vars + workspace_id.
     let row = db
         .query_opt(
-            "SELECT s.env_ciphertext, s.env_nonce, p.workspace_id \
+            "SELECT p.workspace_id \
              FROM services s \
              JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
@@ -166,41 +142,25 @@ pub async fn unset_env_vars(
         .ok_or_else(|| ApiError::not_found("service not found"))?;
 
     let workspace_id: Uuid = row.get("workspace_id");
-    let ciphertext: Option<Vec<u8>> = row.get("env_ciphertext");
-    let nonce: Option<Vec<u8>> = row.get("env_nonce");
 
-    // Decrypt, remove requested keys, re-encrypt.
-    let mut vars = match (ciphertext, nonce) {
-        (Some(ct), Some(n)) => {
-            envelope::decrypt_env_vars(&db, &*state.kms, workspace_id, &ct, &n)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, %service_id, "env var decryption failed during unset");
-                    ApiError::internal("failed to decrypt environment variables")
-                })?
-        }
-        _ => std::collections::HashMap::new(),
-    };
+    // Read existing vars from Vault, remove requested keys, write back.
+    let mut vars = envelope::read_env_vars(&state.vault, workspace_id, service_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %service_id, "failed to read env vars from vault during unset");
+            ApiError::internal("failed to read environment variables")
+        })?;
 
     for key in &body.keys {
         vars.remove(key);
     }
 
-    // Re-encrypt and store.
-    let (new_ct, new_nonce) = envelope::encrypt_env_vars(&db, &*state.kms, workspace_id, &vars)
+    envelope::store_env_vars(&state.vault, workspace_id, service_id, &vars)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, %service_id, "env var encryption failed");
-            ApiError::internal("failed to encrypt environment variables")
+            tracing::error!(error = %e, %service_id, "failed to write env vars to vault");
+            ApiError::internal("failed to store environment variables")
         })?;
-
-    db.execute(
-        "UPDATE services SET env_ciphertext = $2, env_nonce = $3 \
-         WHERE id = $1",
-        &[&service_id, &new_ct, &new_nonce],
-    )
-    .await
-    .map_err(|_| ApiError::internal("failed to update env vars"))?;
 
     Ok(Json(contract::EnvVarsResponse { vars }))
 }

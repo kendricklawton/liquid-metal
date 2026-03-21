@@ -126,3 +126,50 @@ pub fn init_tracing(service_name: &str) -> Option<opentelemetry_sdk::trace::SdkT
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn require_env_present() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("TEST_REQUIRE_ENV", "hello"); }
+        assert_eq!(require_env("TEST_REQUIRE_ENV").unwrap(), "hello");
+        unsafe { std::env::remove_var("TEST_REQUIRE_ENV"); }
+    }
+
+    #[test]
+    fn require_env_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("TEST_REQUIRE_ENV_MISSING"); }
+        let err = require_env("TEST_REQUIRE_ENV_MISSING").unwrap_err();
+        assert!(err.to_string().contains("TEST_REQUIRE_ENV_MISSING"));
+    }
+
+    #[test]
+    fn env_or_present() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("TEST_ENV_OR", "custom"); }
+        assert_eq!(env_or("TEST_ENV_OR", "default"), "custom");
+        unsafe { std::env::remove_var("TEST_ENV_OR"); }
+    }
+
+    #[test]
+    fn env_or_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("TEST_ENV_OR_MISSING"); }
+        assert_eq!(env_or("TEST_ENV_OR_MISSING", "fallback"), "fallback");
+    }
+
+    #[test]
+    fn env_or_empty_string() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("TEST_ENV_OR_EMPTY", ""); }
+        assert_eq!(env_or("TEST_ENV_OR_EMPTY", "default"), "");
+        unsafe { std::env::remove_var("TEST_ENV_OR_EMPTY"); }
+    }
+}

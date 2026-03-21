@@ -80,18 +80,19 @@ pub fn insert_cert(cache: &CertCache, domain: &str, cert_pem: &[u8], key_pem: &[
     }
 }
 
-/// Bulk-load active custom-domain certs from Postgres into the cert cache.
+/// Bulk-load active custom-domain certs from the API (which reads from Vault).
 /// Called once at startup. Non-fatal — errors are logged and the cache is left empty.
-pub fn warm_cert_cache(
+pub fn warm_cert_cache_from_api(
     cache: &CertCache,
     pool: &Arc<Pool>,
-    cert_key: &[u8; 32],
+    api_url: &str,
+    internal_secret: &str,
 ) {
     let cache = cache.clone();
     let pool  = pool.clone();
-    let key   = *cert_key;
+    let api   = api_url.to_string();
+    let secret = internal_secret.to_string();
 
-    // Pingora main() is sync; use a blocking thread for the async DB call.
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -107,8 +108,9 @@ pub fn warm_cert_cache(
                 }
             };
 
+            // Get list of verified domains from DB (metadata only, no encrypted columns).
             let rows = match db.query(
-                "SELECT d.domain, dc.cert_pem_enc, dc.key_pem_enc
+                "SELECT d.domain
                  FROM domain_certs dc
                  JOIN domains d ON d.id = dc.domain_id
                  WHERE d.is_verified = true
@@ -123,98 +125,35 @@ pub fn warm_cert_cache(
                 }
             };
 
+            let http = reqwest::Client::new();
             let mut loaded = 0usize;
             for row in &rows {
-                let domain:   String = row.get("domain");
-                let cert_enc: Vec<u8> = row.get("cert_pem_enc");
-                let key_enc:  Vec<u8> = row.get("key_pem_enc");
-
-                let cert_pem = match decrypt_blob(&key, &cert_enc) {
-                    Ok(v) => v,
-                    Err(e) => { tracing::warn!(domain, error = %e, "cert warm-up: decrypt cert failed"); continue; }
-                };
-                let key_pem = match decrypt_blob(&key, &key_enc) {
-                    Ok(v) => v,
-                    Err(e) => { tracing::warn!(domain, error = %e, "cert warm-up: decrypt key failed"); continue; }
-                };
-
-                insert_cert(&cache, &domain, &cert_pem, &key_pem);
-                loaded += 1;
+                let domain: String = row.get("domain");
+                let url = format!("{}/internal/certs/{}", api, domain);
+                match http.get(&url)
+                    .header("X-Internal-Secret", &secret)
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(body) = resp.json::<std::collections::HashMap<String, String>>().await {
+                            if let (Some(cert), Some(key)) = (body.get("cert_pem"), body.get("key_pem")) {
+                                insert_cert(&cache, &domain, cert.as_bytes(), key.as_bytes());
+                                loaded += 1;
+                            }
+                        }
+                    }
+                    Ok(resp) => {
+                        tracing::warn!(domain, status = %resp.status(), "cert warm-up: API error");
+                    }
+                    Err(e) => {
+                        tracing::warn!(domain, error = %e, "cert warm-up: API request failed");
+                    }
+                }
             }
             tracing::info!(loaded, "cert warm-up complete");
         });
     });
-}
-
-/// AES-GCM decrypt using nonce-prepended format `[12-byte nonce || ciphertext]`.
-pub fn decrypt_blob(key: &[u8; 32], blob: &[u8]) -> Result<Vec<u8>> {
-    use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-    if blob.len() < 12 {
-        anyhow::bail!("blob too short");
-    }
-    let (nonce_bytes, ciphertext) = blob.split_at(12);
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let nonce  = Nonce::from_slice(nonce_bytes);
-    cipher.decrypt(nonce, ciphertext).map_err(|e| anyhow::anyhow!("AES-GCM: {e}"))
-}
-
-/// Unwrap the platform cert DEK via GCP KMS. Called once at proxy startup.
-///
-/// Uses the same `GCP_KMS_KEY` + `GCP_KMS_CREDENTIALS` env vars as the API.
-/// The returned key is used for all cert decryption during warm-up and hot-reload.
-/// The plaintext DEK lives in memory only — never logged or persisted.
-pub async fn unwrap_cert_dek(wrapped_b64: &str) -> anyhow::Result<[u8; 32]> {
-    use base64::Engine as _;
-
-    let kms_key = std::env::var("GCP_KMS_KEY")
-        .map_err(|_| anyhow::anyhow!("GCP_KMS_KEY is required for cert DEK unwrap"))?;
-
-    let auth: std::sync::Arc<dyn gcp_auth::TokenProvider> =
-        if let Ok(path) = std::env::var("GCP_KMS_CREDENTIALS") {
-            let sa = gcp_auth::CustomServiceAccount::from_file(&path)
-                .map_err(|e| anyhow::anyhow!("loading GCP_KMS_CREDENTIALS ({path}): {e}"))?;
-            std::sync::Arc::new(sa)
-        } else {
-            gcp_auth::provider().await?
-        };
-
-    let token = auth
-        .token(&["https://www.googleapis.com/auth/cloudkms"])
-        .await
-        .context("obtaining GCP auth token for KMS")?;
-
-    let wrapped = base64::engine::general_purpose::STANDARD
-        .decode(wrapped_b64.trim())
-        .context("CERT_DEK_WRAPPED is not valid base64")?;
-
-    let resp = reqwest::Client::new()
-        .post(format!("https://cloudkms.googleapis.com/v1/{kms_key}:decrypt"))
-        .bearer_auth(token.as_str())
-        .json(&serde_json::json!({
-            "ciphertext": base64::engine::general_purpose::STANDARD.encode(&wrapped)
-        }))
-        .send()
-        .await
-        .context("KMS decrypt HTTP request failed")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("KMS decrypt failed ({status}): {body}");
-    }
-
-    let body: serde_json::Value = resp.json().await.context("parsing KMS decrypt response")?;
-    let plaintext_b64 = body["plaintext"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("KMS response missing 'plaintext' field"))?;
-
-    let plaintext = base64::engine::general_purpose::STANDARD
-        .decode(plaintext_b64)
-        .context("decoding KMS plaintext")?;
-
-    plaintext
-        .try_into()
-        .map_err(|v: Vec<u8>| anyhow::anyhow!("cert DEK is {} bytes, expected 32", v.len()))
 }
 
 /// Pingora TLS accept callbacks — swaps the SSL context based on SNI.

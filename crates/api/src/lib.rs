@@ -37,8 +37,8 @@ pub struct AppState {
     pub oidc_userinfo_url: String,
     pub oidc_revoke_url: Option<String>,
     pub features: common::Features,
-    /// KMS client for envelope encryption. Wraps/unwraps workspace DEKs.
-    pub kms: Arc<dyn envelope::KmsClient>,
+    /// Vault client for secret storage (env vars, TLS certs, internal secrets).
+    pub vault: Arc<common::vault::VaultClient>,
     /// Default resource quota applied to Metal VMs when no per-service override is set.
     /// Built from QUOTA_* env vars at startup.
     pub default_quota: common::events::ResourceQuota,
@@ -53,9 +53,6 @@ pub struct AppState {
     /// Stripe Price IDs for Pro and Team subscriptions.
     pub stripe_price_pro:  Option<String>,
     pub stripe_price_team: Option<String>,
-    /// 32-byte AES-GCM key for encrypting TLS cert + key PEM blobs in `domain_certs`.
-    /// Unwrapped from `CERT_DEK_WRAPPED` via GCP KMS at startup. Plaintext only in memory.
-    pub cert_encryption_key: [u8; 32],
 }
 
 /// Rate limit configuration, built from env vars in `main.rs`.

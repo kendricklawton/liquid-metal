@@ -1,9 +1,7 @@
 #cloud-config
-# ── Bare Metal Node (Liquid tier): Nomad Client + Promtail + node_exporter ───
-# Wasmtime only — no Firecracker, no KVM, no TAP devices.
+# ── Database Node: Postgres 16 + PgBouncer + Promtail + node_exporter ────────
+# Dedicated to the database. No Nomad, no application workloads.
 # 12-Factor: Secrets centralized in /etc/liquid-metal/secrets.env.
-# Application secrets (DATABASE_URL, NATS credentials, etc.) are injected
-# at runtime by Nomad Variables — not baked into this template.
 hostname: ${hostname}
 
 packages:
@@ -11,13 +9,15 @@ packages:
   - unzip
   - ufw
   - chrony
+  - gnupg
+  - lsb-release
 
 runcmd:
   # Install Tailscale
   - curl -fsSL https://tailscale.com/install.sh | sh
   - tailscale up --authkey=${tailscale_auth_key} --hostname=${hostname} --advertise-tags=tag:liquid-metal
 
-  # Firewall — no public ports; all access via Tailscale
+  # Firewall — no public ports; Postgres and PgBouncer listen on Tailscale only
   - ufw default deny incoming
   - ufw default allow outgoing
   - ufw --force enable
@@ -46,19 +46,17 @@ runcmd:
   - systemctl restart sshd
 
   # ── Central Secrets (12-Factor III) ─────────────────────────────────────────
-  # Only infrastructure-level secrets here. Application secrets (DATABASE_URL,
-  # NATS_URL, S3 keys) are injected by Nomad Variables at job runtime.
   - mkdir -p /etc/liquid-metal /opt/liquid-metal
   - chmod 700 /etc/liquid-metal
   - |
     cat > /etc/liquid-metal/secrets.env <<'EOFENV'
-    # ── GCS Backup ───────────────────────────────────────────────────────────
-    GCS_BUCKET_NOMAD=${gcs_bucket_nomad}
-    # ── Topology ─────────────────────────────────────────────────────────────
+    PG_USER=${pg_user}
+    PG_PASSWORD=${pg_password}
+    PG_DBNAME=${pg_dbname}
+    GCS_BUCKET_POSTGRES=${gcs_bucket_postgres}
     HOSTNAME_SELF=${hostname}
     VLOGS_URL=${vlogs_url}
-    # ── Backup Heartbeat (dead man's switch) ────────────────────────────────
-    HEARTBEAT_URL_NOMAD=${heartbeat_url_nomad}
+    HEARTBEAT_URL_POSTGRES=${heartbeat_url_postgres}
     EOFENV
   - chmod 600 /etc/liquid-metal/secrets.env
 
@@ -69,58 +67,79 @@ runcmd:
     EOFKEY
   - chmod 600 /etc/liquid-metal/gcs-sa.json
 
-  # Install Nomad client
-  - curl -fsSL https://releases.hashicorp.com/nomad/1.9.5/nomad_1.9.5_linux_amd64.zip -o /tmp/nomad.zip
-  - unzip /tmp/nomad.zip -d /usr/local/bin/
-  - chmod +x /usr/local/bin/nomad
+  # ── PostgreSQL 16 ──────────────────────────────────────────────────────────
+  - sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+  - curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+  - apt-get update
+  - apt-get install -y postgresql-16 pgbouncer
 
-  # Write Nomad client config
-  - mkdir -p /etc/nomad.d /var/lib/nomad /var/log/nomad
+  # Postgres tuning for 32GB RAM
   - |
-    cat > /etc/nomad.d/client.hcl <<EOF
-    data_dir  = "/var/lib/nomad"
-    log_level = "INFO"
-
-    log_file             = "/var/log/nomad/nomad.log"
-    log_rotate_duration  = "24h"
-    log_rotate_max_files = 7
-
-    client {
-      enabled    = true
-      node_class = "${nomad_node_class}"
-
-      options {
-        "driver.raw_exec.enable" = "1"
-      }
-    }
-
-    # Nomad server join — gateway node via Tailscale
-    client {
-      servers = ["${gateway_hostname}:4647"]
-    }
+    cat >> /etc/postgresql/16/main/conf.d/liquid-metal.conf <<EOF
+    listen_addresses = '*'
+    max_connections = 200
+    shared_buffers = 8GB
+    effective_cache_size = 24GB
+    work_mem = 64MB
+    maintenance_work_mem = 2GB
+    wal_buffers = 64MB
+    checkpoint_completion_target = 0.9
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+    min_wal_size = 1GB
+    max_wal_size = 4GB
+    log_min_duration_statement = 500
     EOF
 
-  # Enable Nomad as systemd service
+  # Allow connections from Tailscale CGNAT range
   - |
-    cat > /etc/systemd/system/nomad.service <<EOF
-    [Unit]
-    Description=Nomad
-    After=network.target
-
-    [Service]
-    ExecStart=/usr/local/bin/nomad agent -config=/etc/nomad.d/
-    Restart=on-failure
-    RestartSec=5
-
-    [Install]
-    WantedBy=multi-user.target
+    cat >> /etc/postgresql/16/main/pg_hba.conf <<EOF
+    # Tailscale connections (all nodes)
+    host all all 100.64.0.0/10 scram-sha-256
     EOF
-  - systemctl daemon-reload
-  - systemctl enable nomad
-  - systemctl start nomad
 
-  # Create artifact cache dir
-  - mkdir -p /var/lib/liquid-metal/artifacts
+  # Create database and user
+  - systemctl restart postgresql
+  - |
+    sudo -u postgres psql <<SQL
+    CREATE USER ${pg_user} WITH PASSWORD '${pg_password}';
+    CREATE DATABASE ${pg_dbname} OWNER ${pg_user};
+    GRANT ALL PRIVILEGES ON DATABASE ${pg_dbname} TO ${pg_user};
+    SQL
+
+  # ── PgBouncer ──────────────────────────────────────────────────────────────
+  - |
+    cat > /etc/pgbouncer/pgbouncer.ini <<EOF
+    [databases]
+    ${pg_dbname} = host=127.0.0.1 port=5432 dbname=${pg_dbname}
+
+    [pgbouncer]
+    listen_addr = *
+    listen_port = 6432
+    auth_type = scram-sha-256
+    auth_file = /etc/pgbouncer/userlist.txt
+    pool_mode = transaction
+    max_client_conn = 400
+    default_pool_size = 20
+    min_pool_size = 5
+    reserve_pool_size = 5
+    reserve_pool_timeout = 3
+    server_lifetime = 3600
+    server_idle_timeout = 600
+    log_connections = 0
+    log_disconnections = 0
+    stats_period = 60
+    admin_users = pgbouncer
+    EOF
+
+  - |
+    cat > /etc/pgbouncer/userlist.txt <<EOF
+    "${pg_user}" "${pg_password}"
+    EOF
+  - chmod 640 /etc/pgbouncer/userlist.txt
+  - chown postgres:postgres /etc/pgbouncer/userlist.txt
+  - systemctl restart pgbouncer
+  - systemctl enable pgbouncer
 
   # ── gsutil (GCS CLI) ───────────────────────────────────────────────────────
   - curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz | tar -xz -C /opt
@@ -129,27 +148,26 @@ runcmd:
   - ln -sf /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
   - gcloud auth activate-service-account --key-file=/etc/liquid-metal/gcs-sa.json
 
-  # ── Backup Cron ────────────────────────────────────────────────────────────
-  # Nomad client state snapshot → GCS daily at 03:00 UTC.
-  # Sources secrets.env at runtime for automatic rotation pickup.
+  # ── Postgres Backup Cron ───────────────────────────────────────────────────
+  # pg_dump runs locally — no network hop. Daily at 03:00 UTC → GCS.
   - mkdir -p /opt/backups/scripts /var/log/backups
   - |
-    cat > /opt/backups/scripts/backup-nomad.sh <<'EOFSCRIPT'
+    cat > /opt/backups/scripts/backup-postgres.sh <<'EOFSCRIPT'
     #!/bin/bash
     set -euo pipefail
     source /etc/liquid-metal/secrets.env
     TIMESTAMP=$(date -u +%Y-%m-%dT%H%M%SZ)
-    TAR_FILE="/tmp/nomad-$HOSTNAME_SELF-$TIMESTAMP.tar.gz"
-    tar -czf "$TAR_FILE" -C /var/lib nomad
-    gsutil cp "$TAR_FILE" "gs://$GCS_BUCKET_NOMAD/$HOSTNAME_SELF/$TIMESTAMP.tar.gz"
-    rm -f "$TAR_FILE"
-    echo "$(date -u) nomad backup complete" >> /var/log/backups/nomad.log
-    [ -n "$HEARTBEAT_URL_NOMAD" ] && curl -fsS --retry 3 "$HEARTBEAT_URL_NOMAD" > /dev/null
+    DUMP_FILE="/tmp/pg-$TIMESTAMP.sql.gz"
+    sudo -u postgres pg_dump -d "$PG_DBNAME" --no-owner --no-acl | gzip > "$DUMP_FILE"
+    gsutil cp "$DUMP_FILE" "gs://$GCS_BUCKET_POSTGRES/$TIMESTAMP.sql.gz"
+    rm -f "$DUMP_FILE"
+    echo "$(date -u) postgres backup complete" >> /var/log/backups/postgres.log
+    [ -n "$HEARTBEAT_URL_POSTGRES" ] && curl -fsS --retry 3 "$HEARTBEAT_URL_POSTGRES" > /dev/null
     EOFSCRIPT
-  - chmod +x /opt/backups/scripts/backup-nomad.sh
+  - chmod +x /opt/backups/scripts/backup-postgres.sh
   - |
     (crontab -l 2>/dev/null || true; cat <<'EOFCRON'
-    0 3 * * * /opt/backups/scripts/backup-nomad.sh 2>&1 | tee -a /var/log/backups/nomad.log
+    0 3 * * * /opt/backups/scripts/backup-postgres.sh 2>&1 | tee -a /var/log/backups/postgres.log
     EOFCRON
     ) | crontab -
 
@@ -184,42 +202,20 @@ runcmd:
 
     clients:
       - url: http://${vlogs_url}:9428/insert/loki/api/v1/push
-        batchsize: 1048576        # 1 MiB max per push request
+        batchsize: 1048576
         batchwait: 3s
         backoff_config:
           min_period: 500ms
           max_period: 30s
           max_retries: 10
 
-    # Cap Promtail's in-memory buffer to prevent OOM under backpressure.
     limits_config:
       readline_rate_enabled: true
-      readline_rate: 5000         # lines/sec across all targets
+      readline_rate: 5000
       readline_burst: 10000
-      readline_rate_drop: true    # drop lines above the limit instead of buffering
+      readline_rate_drop: true
 
     scrape_configs:
-      - job_name: nomad
-        static_configs:
-          - targets:
-              - localhost
-            labels:
-              node: ${hostname}
-              __path__: /var/lib/nomad/alloc/*/alloc/logs/*.std*
-        pipeline_stages:
-          - regex:
-              expression: '/alloc/(?P<alloc_id>[^/]+)/alloc/logs/(?P<task>[^.]+)\.std(?P<stream>out|err)\.'
-          - labels:
-              alloc_id:
-              task:
-              stream:
-          # Per-job rate limit — drops excess log lines instead of buffering
-          # to OOM. 1000 lines/sec is enough for any well-behaved service.
-          - limit:
-              rate: 1000
-              burst: 2000
-              drop: true
-
       - job_name: journal
         journal:
           max_age: 12h
@@ -233,7 +229,7 @@ runcmd:
     cat > /etc/systemd/system/promtail.service <<EOF
     [Unit]
     Description=Promtail
-    After=network.target nomad.service
+    After=network.target
 
     [Service]
     ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/config.yaml

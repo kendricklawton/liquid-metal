@@ -72,8 +72,8 @@ job "api" {
         BIND_ADDR                       = "0.0.0.0:7070"
         RUST_LOG                        = "info"
         OTEL_EXPORTER_OTLP_ENDPOINT     = "${OTEL_ENDPOINT}"
-        # GCP KMS — service account JSON rendered to secrets/gcp-sa.json below
-        GOOGLE_APPLICATION_CREDENTIALS  = "${NOMAD_SECRETS_DIR}/gcp-sa.json"
+        # Vault on gateway — localhost, no network hop
+        VAULT_ADDR                      = "http://127.0.0.1:8200"
       }
 
       # Secrets injected from Nomad Variables (nomad var put secrets/api ...)
@@ -91,25 +91,13 @@ OBJECT_STORAGE_ENDPOINT={{ .object_storage_endpoint }}
 OBJECT_STORAGE_BUCKET={{ .object_storage_bucket }}
 OBJECT_STORAGE_ACCESS_KEY={{ .object_storage_access_key }}
 OBJECT_STORAGE_SECRET_KEY={{ .object_storage_secret_key }}
-GCP_KMS_KEY={{ .gcp_kms_key }}
-CERT_DEK_WRAPPED={{ .cert_dek_wrapped }}
+VAULT_TOKEN={{ .vault_token }}
 OIDC_ISSUER={{ .oidc_issuer }}
 OIDC_CLI_CLIENT_ID={{ .oidc_cli_client_id }}
 {{ end }}
 EOF
         destination = "secrets/env"
         env         = true
-      }
-
-      # GCP service account JSON — rendered from Nomad Variables to a file.
-      # No persistent key files on disk — lives in Nomad's tmpfs-backed secrets dir,
-      # only readable by this task, deleted when the allocation stops.
-      # Store with: nomad var put secrets/api gcp_sa_json='$(cat sa.json)'
-      template {
-        data        = <<EOF
-{{ with nomadVar "secrets/api" }}{{ .gcp_sa_json }}{{ end }}
-EOF
-        destination = "secrets/gcp-sa.json"
       }
 
       resources {

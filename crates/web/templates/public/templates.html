@@ -30,7 +30,7 @@
           <div class="flex items-center gap-3">
             <span class="text-xs font-bold uppercase tracking-widest lang-go">Go</span>
             <span class="text-sm font-bold">HTTP Server</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal</span>
+            <span class="text-[0.625rem] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal</span>
           </div>
           <span class="text-zwl-muted dark:text-zw-muted text-xs" x-text="open ? '&minus;' : '+'"></span>
         </button>
@@ -38,7 +38,7 @@
           <div class="border-t border-zwl-border dark:border-zw-border">
             <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zwl-border dark:divide-zw-border">
               <div class="px-6 py-4">
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">main.go</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">main.go</p>
                 <pre class="text-xs leading-relaxed font-mono"><span class="tok-kw">package</span> <span class="tok-pkg">main</span>
 
 <span class="tok-kw">import</span> (
@@ -59,7 +59,7 @@
 }</pre>
               </div>
               <div class="px-6 py-4">
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
                 <pre class="text-xs leading-relaxed font-mono"><span class="tok-type">[service]</span>
 name = <span class="tok-str">"go-hello"</span>
 engine = <span class="tok-str">"metal"</span>
@@ -68,7 +68,7 @@ port = <span class="tok-yellow">8080</span>
 <span class="tok-type">[build]</span>
 command = <span class="tok-str">"CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o app ."</span>
 output = <span class="tok-str">"app"</span></pre>
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
                 <pre class="text-xs leading-relaxed font-mono">flux init --engine metal --name go-hello
 flux deploy</pre>
               </div>
@@ -83,7 +83,7 @@ flux deploy</pre>
           <div class="flex items-center gap-3">
             <span class="text-xs font-bold uppercase tracking-widest lang-rust">Rust</span>
             <span class="text-sm font-bold">TCP Server (no dependencies)</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal</span>
+            <span class="text-[0.625rem] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Metal</span>
           </div>
           <span class="text-zwl-muted dark:text-zw-muted text-xs" x-text="open ? '&minus;' : '+'"></span>
         </button>
@@ -91,7 +91,7 @@ flux deploy</pre>
           <div class="border-t border-zwl-border dark:border-zw-border">
             <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zwl-border dark:divide-zw-border">
               <div class="px-6 py-4">
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">src/main.rs</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">src/main.rs</p>
                 <pre class="text-xs leading-relaxed font-mono"><span class="tok-kw">use</span> <span class="tok-pkg">std::net</span>::<span class="tok-type">TcpListener</span>;
 <span class="tok-kw">use</span> <span class="tok-pkg">std::io</span>::<span class="tok-type">Write</span>;
 
@@ -110,7 +110,7 @@ flux deploy</pre>
 }</pre>
               </div>
               <div class="px-6 py-4">
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
                 <pre class="text-xs leading-relaxed font-mono"><span class="tok-type">[service]</span>
 name = <span class="tok-str">"rust-hello"</span>
 engine = <span class="tok-str">"metal"</span>
@@ -119,7 +119,7 @@ port = <span class="tok-yellow">8080</span>
 <span class="tok-type">[build]</span>
 command = <span class="tok-str">"cargo build --target x86_64-unknown-linux-musl --release"</span>
 output = <span class="tok-str">"target/x86_64-unknown-linux-musl/release/rust-hello"</span></pre>
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
                 <pre class="text-xs leading-relaxed font-mono">flux init --engine metal --name rust-hello
 flux deploy</pre>
               </div>
@@ -148,7 +148,7 @@ flux deploy</pre>
           <div class="flex items-center gap-3">
             <span class="text-xs font-bold uppercase tracking-widest lang-go">Go</span>
             <span class="text-sm font-bold">WAGI Handler</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid</span>
+            <span class="text-[0.625rem] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid</span>
           </div>
           <span class="text-zwl-muted dark:text-zw-muted text-xs" x-text="open ? '&minus;' : '+'"></span>
         </button>
@@ -156,7 +156,7 @@ flux deploy</pre>
           <div class="border-t border-zwl-border dark:border-zw-border">
             <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zwl-border dark:divide-zw-border">
               <div class="px-6 py-4">
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">main.go</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">main.go</p>
                 <pre class="text-xs leading-relaxed font-mono"><span class="tok-kw">package</span> <span class="tok-pkg">main</span>
 
 <span class="tok-kw">import</span> (
@@ -176,7 +176,7 @@ flux deploy</pre>
 }</pre>
               </div>
               <div class="px-6 py-4">
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
                 <pre class="text-xs leading-relaxed font-mono"><span class="tok-type">[service]</span>
 name = <span class="tok-str">"go-wagi"</span>
 engine = <span class="tok-str">"liquid"</span>
@@ -184,7 +184,7 @@ engine = <span class="tok-str">"liquid"</span>
 <span class="tok-type">[build]</span>
 command = <span class="tok-str">"GOOS=wasip1 GOARCH=wasm go build -o main.wasm ."</span>
 output = <span class="tok-str">"main.wasm"</span></pre>
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
                 <pre class="text-xs leading-relaxed font-mono">flux init --engine liquid --name go-wagi
 flux deploy</pre>
               </div>
@@ -199,7 +199,7 @@ flux deploy</pre>
           <div class="flex items-center gap-3">
             <span class="text-xs font-bold uppercase tracking-widest lang-rust">Rust</span>
             <span class="text-sm font-bold">WAGI Handler</span>
-            <span class="text-[10px] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid</span>
+            <span class="text-[0.625rem] font-mono text-zwl-muted dark:text-zw-muted uppercase tracking-widest">Liquid</span>
           </div>
           <span class="text-zwl-muted dark:text-zw-muted text-xs" x-text="open ? '&minus;' : '+'"></span>
         </button>
@@ -207,7 +207,7 @@ flux deploy</pre>
           <div class="border-t border-zwl-border dark:border-zw-border">
             <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zwl-border dark:divide-zw-border">
               <div class="px-6 py-4">
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">src/main.rs</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">src/main.rs</p>
                 <pre class="text-xs leading-relaxed font-mono"><span class="tok-kw">use</span> <span class="tok-pkg">std::env</span>;
 
 <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() {
@@ -226,7 +226,7 @@ flux deploy</pre>
 }</pre>
               </div>
               <div class="px-6 py-4">
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mb-3">liquid-metal.toml</p>
                 <pre class="text-xs leading-relaxed font-mono"><span class="tok-type">[service]</span>
 name = <span class="tok-str">"rust-wagi"</span>
 engine = <span class="tok-str">"liquid"</span>
@@ -234,7 +234,7 @@ engine = <span class="tok-str">"liquid"</span>
 <span class="tok-type">[build]</span>
 command = <span class="tok-str">"cargo build --target wasm32-wasip1 --release"</span>
 output = <span class="tok-str">"target/wasm32-wasip1/release/rust-wagi.wasm"</span></pre>
-                <p class="text-[10px] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
+                <p class="text-[0.625rem] font-mono font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted mt-6 mb-3">Deploy</p>
                 <pre class="text-xs leading-relaxed font-mono">flux init --engine liquid --name rust-wagi
 flux deploy</pre>
               </div>
@@ -259,7 +259,7 @@ flux deploy</pre>
     <div class="glass-card overflow-hidden">
       <div class="divide-y divide-zwl-border dark:divide-zw-border text-xs font-mono">
         <div class="px-5 py-3 border-b border-zwl-border dark:border-zw-border">
-          <p class="text-[10px] font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">Request &rarr; Env Vars</p>
+          <p class="text-[0.625rem] font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">Request &rarr; Env Vars</p>
         </div>
         <div class="grid grid-cols-3 gap-4 px-5 py-3">
           <code>REQUEST_METHOD</code>
@@ -295,7 +295,7 @@ flux deploy</pre>
     <div class="glass-card overflow-hidden mt-4">
       <div class="divide-y divide-zwl-border dark:divide-zw-border text-xs font-mono">
         <div class="px-5 py-3 border-b border-zwl-border dark:border-zw-border">
-          <p class="text-[10px] font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">Response &rarr; stdout</p>
+          <p class="text-[0.625rem] font-bold uppercase tracking-widest text-zwl-muted dark:text-zw-muted">Response &rarr; stdout</p>
         </div>
         <div class="px-5 py-4">
           <pre class="text-xs leading-relaxed"><span class="text-zwl-muted dark:text-zw-muted"># Write headers, blank line, then body to stdout:</span>

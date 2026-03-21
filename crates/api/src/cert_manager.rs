@@ -31,7 +31,7 @@ use rcgen::{CertificateParams, KeyPair};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::certs::{decrypt_pem, encrypt_pem};
+use crate::envelope;
 use common::events::{CertProvisionedEvent, SUBJECT_CERT_PROVISIONED};
 
 static CERT_MANAGER_INTERVAL_SECS: std::sync::LazyLock<u64> =
@@ -201,23 +201,20 @@ async fn provision_cert(
 
     let key_pem = key_pair.serialize_pem();
 
-    // ── Encrypt and store ────────────────────────────────────────────────────
-    let enc_cert = encrypt_pem(&state.cert_encryption_key, cert_chain_pem.as_bytes())
-        .context("encrypting cert pem")?;
-    let enc_key  = encrypt_pem(&state.cert_encryption_key, key_pem.as_bytes())
-        .context("encrypting key pem")?;
+    // ── Store cert + key in Vault ────────────────────────────────────────────
+    envelope::store_cert(&state.vault, domain, &cert_chain_pem, &key_pem)
+        .await
+        .context("storing cert in vault")?;
 
     // Let's Encrypt issues 90-day certs. We record 89 days to give renewal
     // headroom without having to parse the X.509 not-after field.
     db.execute(
-        "INSERT INTO domain_certs (domain_id, cert_pem_enc, key_pem_enc, expires_at, updated_at)
-         VALUES ($1, $2, $3, NOW() + INTERVAL '89 days', NOW())
+        "INSERT INTO domain_certs (domain_id, expires_at, updated_at)
+         VALUES ($1, NOW() + INTERVAL '89 days', NOW())
          ON CONFLICT (domain_id) DO UPDATE
-           SET cert_pem_enc = EXCLUDED.cert_pem_enc,
-               key_pem_enc  = EXCLUDED.key_pem_enc,
-               expires_at   = EXCLUDED.expires_at,
-               updated_at   = NOW()",
-        &[&domain_id, &enc_cert, &enc_key],
+           SET expires_at = EXCLUDED.expires_at,
+               updated_at = NOW()",
+        &[&domain_id],
     ).await.context("upserting domain_cert")?;
 
     db.execute(
@@ -272,16 +269,11 @@ async fn load_or_create_account(directory_url: &str, contact_email: &str) -> Res
     Ok(account)
 }
 
-/// Decrypt certs from `domain_certs` for use by the proxy's cert cache warm-up.
-/// Returns `(cert_pem, key_pem)` as UTF-8 strings.
-pub fn decrypt_cert_pair(
-    key: &[u8; 32],
-    cert_enc: &[u8],
-    key_enc: &[u8],
-) -> Result<(String, String)> {
-    let cert_bytes = decrypt_pem(key, cert_enc).context("decrypting cert pem")?;
-    let key_bytes  = decrypt_pem(key, key_enc).context("decrypting key pem")?;
-    let cert_pem   = String::from_utf8(cert_bytes).context("cert pem is not valid UTF-8")?;
-    let key_pem    = String::from_utf8(key_bytes).context("key pem is not valid UTF-8")?;
-    Ok((cert_pem, key_pem))
+/// Read cert + key PEMs from Vault for a domain.
+/// Returns `(cert_pem, key_pem)` as UTF-8 strings, or None if not found.
+pub async fn read_cert_pair(
+    vault: &common::vault::VaultClient,
+    domain: &str,
+) -> Result<Option<(String, String)>> {
+    envelope::read_cert(vault, domain).await
 }

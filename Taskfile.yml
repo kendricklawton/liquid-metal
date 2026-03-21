@@ -90,6 +90,41 @@ tasks:
     cmds:
       - cargo run -p daemon
 
+  # ── Testing ──────────────────────────────────────────────────────────────
+  test:
+    desc: "Run all unit tests (no infra needed)"
+    cmds:
+      - cargo test --workspace
+
+  test:common:
+    desc: "Run common crate tests (artifact, events, features, config, vault)"
+    cmds:
+      - cargo test -p common
+
+  test:api:
+    desc: "Run API unit tests only (no Postgres/NATS needed)"
+    cmds:
+      - cargo test -p api --lib
+
+  test:api:integration:
+    desc: "Run API integration tests (requires task up + task migrate)"
+    env:
+      INTERNAL_SECRET: "test-secret"
+    cmds:
+      - cargo test -p api --test api -- --include-ignored
+
+  test:cli:
+    desc: "Run CLI unit tests"
+    cmds:
+      - cargo test -p cli
+
+  test:all:
+    desc: "Run all tests including integration (requires task up + task migrate)"
+    env:
+      INTERNAL_SECRET: "test-secret"
+    cmds:
+      - cargo test --workspace -- --include-ignored
+
   # ── Release ───────────────────────────────────────────────────────────────
   release:patch:
     desc: "Release a patch version bump (0.1.0 → 0.1.1)"

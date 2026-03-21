@@ -1,6 +1,6 @@
 # Liquid Metal — Architecture
 
-> **Status**: Infrastructure planned — migrating to Hivelocity Dallas (DAL1).
+> **Status**: Beta — running on Hivelocity bare metal in Dallas (DAL1).
 
 ---
 
@@ -12,39 +12,57 @@ All infrastructure runs in **Hivelocity Dallas (DAL1)**. Four dedicated bare met
 
 | Node | Hardware | Cost | Role |
 |------|----------|------|------|
-| **gateway** | E-2136 3.3GHz, 6c/12t, 16GB RAM, 480GB SSD, 20TB/1Gbps | $68/mo | Public ingress, API, NATS, observability |
-| **node-liquid** | E-2136 3.3GHz, 6c/12t, 16GB RAM, 480GB SSD, 20TB/1Gbps | $68/mo | Wasmtime/WASI execution |
-| **node-db** | E-2136 3.3GHz, 6c/12t, 16GB RAM, 480GB SSD, 20TB/1Gbps | $68/mo | Postgres + PgBouncer |
+| **gateway** | E3-1230 v6 3.5GHz Kaby Lake, 4c/8t, 32GB RAM, 960GB SSD, 20TB/1Gbps | $68/mo | Public ingress, API, NATS, observability |
 | **node-metal** | EPYC 7452 2.35GHz, 32c/64t, 384GB RAM, 1TB NVMe, 20TB/10Gbps | $215/mo | Firecracker microVMs — tenant Metal workloads |
+| **node-liquid** | E3-1230 v6 3.5GHz Kaby Lake, 4c/8t, 32GB RAM, 960GB SSD, 20TB/1Gbps | $68/mo | Wasmtime/WASI execution |
+| **node-db** | E3-1230 v6 3.5GHz Kaby Lake, 4c/8t, 32GB RAM, 960GB SSD, 20TB/1Gbps | $68/mo | Postgres 16 + PgBouncer |
 
-**Total: $419/mo** — fully self-hosted, one provider, one bill, one portal.
+**Total: ~$419/mo** — fully self-hosted, one provider, one bill, one portal.
+
+### Why These Boxes
+
+- **gateway** — I/O bound, not compute bound. 32GB gives breathing room for NATS JetStream, VictoriaMetrics, VictoriaLogs, and Grafana running side by side. 4 cores is plenty — everything is async/event-driven.
+- **node-metal** — The revenue machine. 64 threads = 60 sellable vCPUs (4 reserved for host). 384GB RAM. 1TB NVMe. Each Firecracker VM gets a dedicated thread pinned via cgroup cpuset — no noisy neighbors, no overcommit.
+- **node-liquid** — Wasmtime is lightweight. Each invocation uses a few MB of memory and a fraction of a millisecond of CPU. This box could handle thousands of concurrent invocations before breaking a sweat. 32GB is future-proofing.
+- **node-db** — Postgres performance is about RAM. 32GB means ~8GB shared_buffers + 24GB OS page cache. The dataset will live in memory for a long time. 4 cores is fine — Postgres is single-threaded per query, PgBouncer keeps connection count low.
 
 ### Service Layer
 
 | Layer                 | Technology                                          | Notes                                                                                                |
 |-----------------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| **Gateway node**      | Hivelocity E-2136 — Dallas DAL1                     | Public IP, HAProxy + Pingora + API + NATS + observability                                            |
-| **Compute (Metal)**   | Hivelocity EPYC 7452 — Dallas DAL1                  | node-metal — Firecracker microVMs, KVM isolation, 30 sellable physical cores                         |
-| **Compute (Liquid)**  | Hivelocity E-2136 — Dallas DAL1                     | node-liquid — Wasmtime/WASI execution                                                                |
-| **Database**          | Hivelocity E-2136 — Dallas DAL1                     | node-db — self-hosted Postgres 16 + PgBouncer (:6432)                                               |
+| **Gateway node**      | Hivelocity E3-1230 v6 — Dallas DAL1                 | Public IP, HAProxy + Pingora + API + Web + NATS + observability                                      |
+| **Compute (Metal)**   | Hivelocity EPYC 7452 — Dallas DAL1                  | node-metal — Firecracker microVMs, KVM isolation, 60 sellable vCPUs (threads)                        |
+| **Compute (Liquid)**  | Hivelocity E3-1230 v6 — Dallas DAL1                 | node-liquid — Wasmtime/WASI execution                                                                |
+| **Database**          | Hivelocity E3-1230 v6 — Dallas DAL1                 | node-db — self-hosted Postgres 16 (8GB shared_buffers) + PgBouncer (:6432)                           |
 | **Proxy**             | Pingora (Rust) on gateway node                      | Slug → upstream routing, :8443 (HAProxy forwards to localhost:8443)                                  |
 | **Load balancer**     | HAProxy on gateway node                             | TLS termination (Let's Encrypt), rate limiting, health-checks, :80/:443                              |
-| **Internal network**  | Hivelocity private VLAN                             | Unmetered internal traffic — DB, NATS, daemon ↔ API all on VLAN                                     |
+| **Internal network**  | Hivelocity private VLAN          Not done / discussed but not implemented:
+CLAUDE.md recreation (you updated it manually but the Infrastructure section still shows old E-2136 specs)
+Changelog page (template exists at changelog.html but no content system)
+OpenStatus integration (decided on it, didn’t set up)
+Vault integration (plan exists at .claude/plans/, not implemented)
+Blue-green deploy (added to TODO.md as future work)
+TODO.md with the 5-year roadmap (discussed, may need updating)
+Workload Identity Federation for GitHub Actions
+gcloud auth application-default login for local dev (just a command to run)
+Web content readability improvements (started with font, more may be needed)
+What do you want to tackle next?                   | Unmetered internal traffic — DB, NATS, daemon ↔ API all on VLAN                                     |
 | **Ops access**        | Tailscale                                           | SSH access to all nodes from operator laptops — no public port 22                                    |
 | **API**               | Axum (Rust), :7070                                  | Single instance on gateway node                                                                      |
 | **Web**               | Axum + Askama + HTMX (Rust), :3000                  | Dashboard — server-rendered HTML, OIDC browser auth                                                  |
 | **Daemon**            | NATS consumer (Rust)                                | Each node owns its engine — Metal runs Firecracker, Liquid runs Wasmtime                             |
 | **CLI**               | `flux` binary (Rust)                                | auth, service (deploy/stop/restart/delete/logs/env/domains/scale/rollback), init, billing, workspace, project, invite |
+| **Secret management** | HashiCorp Vault (Raft storage, GCP KMS auto-unseal) | KV v2 — user env vars, TLS certs, internal secrets. Audit log on every access.                       |
 | **Event bus**         | NATS JetStream                                      | Single server on gateway node, JetStream persistence to disk                                         |
-| **Artifact store**    | Wasabi Object Storage (via Hivelocity portal)       | S3-compatible, $5.99/TB/mo — rootfs images + .wasm binaries                                         |
+| **Artifact store**    | Wasabi Object Storage (S3-compatible via Hivelocity) | $6.99/TB/mo, no egress fees — rootfs images + .wasm binaries                                        |
 | **DNS**               | Cloudflare                                          | Wildcard + apex → gateway node public IP                                                             |
 | **TLS**               | Let's Encrypt (certbot + Cloudflare DNS-01)         | Wildcard cert on HAProxy, auto-renewed via cron                                                      |
 | **eBPF isolation**    | Aya TC classifier per tap{n}                        | Tenant isolation at kernel level, no Cilium daemon                                                   |
 | **Observability**     | VictoriaMetrics + VictoriaLogs + Grafana            | Metrics scraping (:8428), log aggregation (:9428), dashboards (:3001)                                |
-| **Log shipping**      | Promtail on each compute node                       | Tails Nomad allocation logs + systemd journal → VictoriaLogs                                         |
-| **Node metrics**      | node_exporter on each compute node                  | Hardware metrics (:9100) scraped by VictoriaMetrics                                                  |
+| **Log shipping**      | Promtail on every node                              | Tails Nomad allocation logs + systemd journal → VictoriaLogs                                         |
+| **Node metrics**      | node_exporter on every node                         | Hardware metrics (:9100) scraped by VictoriaMetrics                                                  |
 | **Connection pooling**| PgBouncer on node-db                                | Transaction-mode pooler (:6432), all services connect here                                           |
-| **Backups**           | GCS (buckets) + pg_dump + rclone                    | Postgres, VictoriaMetrics, VictoriaLogs, Nomad, Wasabi artifacts → GCP daily                        |
+| **Backups**           | GCS (buckets) + pg_dump + rclone                    | Postgres (from node-db), VictoriaMetrics, VictoriaLogs, Nomad, Wasabi artifacts → GCP daily          |
 | **Infra provisioning**| Terraform (Hivelocity + Cloudflare + Tailscale + Google) | Everything declared as code in `infra/terraform/`                                               |
 | **Process scheduling**| Nomad (HashiCorp)                                   | Schedules api/proxy on gateway, daemons on compute nodes — no K8s                                   |
 | **CI/CD**             | GitHub Actions                                      | ci.yml (check/test), release.yml (cargo-dist), deploy.yml (Nomad job update)                         |
@@ -57,31 +75,58 @@ All infrastructure runs in **Hivelocity Dallas (DAL1)**. Four dedicated bare met
 ```
 Internet
     │
-    ▼ DNS: *.domain + domain → gateway node public IP
-┌────────────────────────────────────────────────┐
-│  gateway — E-2136 $68/mo — Hivelocity DAL1     │
-│  HAProxy :80/:443 (TCP pass-through for 443)   │
-│  Pingora :8443 (TLS termination, SNI routing)  │
-│  API :7070                                     │
-│  NATS :4222 (JetStream)                        │
-│  Nomad server + client (node_class=gateway)    │
-│  VictoriaMetrics :8428                         │
-│  VictoriaLogs :9428                            │
-│  Grafana :3001                                 │
-└──────────────┬─────────────────────────────────┘
-               │ Hivelocity private VLAN (unmetered)
-    ┌──────────┼──────────────┬──────────────┐
-    │          │              │              │
-  node-metal  node-liquid   node-db
-  EPYC 7452   E-2136        E-2136
-  $215/mo     $68/mo        $68/mo
-    │          │              │
-  Daemon      Daemon        Postgres 16
-  Nomad       Nomad         PgBouncer :6432
-  Promtail    Promtail      Promtail
-  node_exp    node_exp      node_exp
-  KVM+br0     Wasmtime
+    ▼ DNS: *.domain + domain → gateway public IP (Cloudflare, not proxied)
+┌────────────────────────────────────────────────────────────┐
+│  gateway — E3-1230 v6, 4c/8t, 32GB — Hivelocity DAL1      │
+│  HAProxy :80/:443 (TCP pass-through for 443)               │
+│  Pingora :8443 (TLS termination, SNI routing)              │
+│  API :7070 · Web :3000                                     │
+│  NATS :4222 (JetStream) · Vault :8200 (KV v2)              │
+│  Nomad server + client (node_class=gateway)                │
+│  VictoriaMetrics :8428 · VictoriaLogs :9428 · Grafana :3001│
+└──────────────────────┬─────────────────────────────────────┘
+                       │ Hivelocity private VLAN (unmetered)
+    ┌──────────────────┼──────────────────┬──────────────────┐
+    │                  │                  │                  │
+  node-metal        node-liquid        node-db
+  EPYC 7452         E3-1230 v6         E3-1230 v6
+  32c/64t, 384GB    4c/8t, 32GB        4c/8t, 32GB
+  $215/mo           $68/mo             $68/mo
+    │                  │                  │
+  Daemon             Daemon            Postgres 16
+  Nomad client       Nomad client      PgBouncer :6432
+  Promtail           Promtail          Promtail
+  node_exporter      node_exporter     node_exporter
+  KVM + br0 + TAP   Wasmtime          pg_dump → GCS
   Firecracker
+  eBPF TC isolation
+```
+
+### How a Request Flows (whiteboard version)
+
+```
+User → DNS (Cloudflare) → gateway public IP
+  → HAProxy :443 (TCP pass-through)
+    → Pingora :8443 (TLS termination, reads SNI hostname)
+      → slug lookup (in-memory cache, backed by Postgres)
+        → Metal:  proxy to 172.16.x.x:{port} on node-metal (Firecracker VM, always running)
+        → Liquid: proxy to 127.0.0.1:{port} on node-liquid (Wasmtime shim, may need cold start)
+```
+
+### How a Deploy Flows (whiteboard version)
+
+```
+Developer → flux deploy (CLI)
+  → builds binary locally (go build / cargo build / zig build)
+  → uploads artifact to Wasabi S3 (pre-signed URL from API)
+  → POST /services to API (:7070)
+    → API writes to Postgres (INSERT services + INSERT outbox, single transaction)
+    → outbox poller picks up event, publishes to NATS JetStream
+      → daemon on node-metal or node-liquid receives ProvisionEvent
+        → Metal:  download binary → inject into rootfs → create TAP → attach eBPF → boot Firecracker VM → health check → publish RouteUpdatedEvent
+        → Liquid: download .wasm → compile with Wasmtime → bind HTTP shim → health check → publish RouteUpdatedEvent
+      → proxy receives RouteUpdatedEvent → caches slug → upstream_addr mapping
+  → service is live at slug.domain
 ```
 
 DNS points at the gateway node's static public IP. HAProxy on `:443` does TCP pass-through to Pingora on `:8443`, which terminates TLS with SNI-based cert selection. All internal traffic (API→NATS, daemon→API, services→Postgres) travels over the Hivelocity private VLAN — unmetered, never touching the public internet. Tailscale is used for operator SSH access only.
@@ -104,10 +149,10 @@ This is a single-region, no-redundancy setup appropriate for beta. Each layer ha
 
 ### NATS JetStream
 
-Single-node NATS server on the NAT VPS with JetStream enabled for durable stream persistence. Listens on `:4222` (Tailscale only — blocked from public by UFW).
+Single-node NATS server on the gateway with JetStream enabled for durable stream persistence. Listens on `:4222` (Tailscale/VLAN only — blocked from public by UFW).
 
 ```
-# /etc/nats/nats.conf on NAT VPS
+# /etc/nats/nats.conf on gateway
 listen: 0.0.0.0:4222
 
 jetstream {
@@ -117,18 +162,18 @@ jetstream {
 }
 ```
 
-Both compute nodes connect to this single NATS server via Tailscale. JetStream persistence ensures events survive a NATS restart.
+Both compute nodes connect to this single NATS server via the private VLAN. JetStream persistence ensures events survive a NATS restart.
 
 ### Network Architecture
 
 ```
 Internet
     │
-    ▼ (*.domain + domain → gateway node public IP)
+    ▼ (*.domain + domain → gateway public IP)
 gateway — Hivelocity DAL1
     HAProxy :80/:443 (TCP pass-through for 443)
     Pingora :8443 (TLS termination, SNI cert selection)
-    API :7070, Nomad server + client (gateway)
+    API :7070, Web :3000, Nomad server + client (gateway)
     NATS :4222
     VictoriaMetrics :8428, VictoriaLogs :9428, Grafana :3001
     │
@@ -144,7 +189,7 @@ gateway — Hivelocity DAL1
     │                      │
     └──────────────────────┘
                │
-    Wasabi Object Storage (S3-compatible, via Hivelocity portal)
+    Wasabi Object Storage (S3-compatible, $6.99/TB, no egress fees)
     ├── rootfs images + .wasm binaries
     ├── backed up to GCS via rclone
 ```
@@ -152,7 +197,7 @@ gateway — Hivelocity DAL1
 **Internal network (Hivelocity private VLAN):**
 - All four nodes share a private VLAN — traffic is unmetered and never leaves the datacenter
 - All inter-service traffic (API→NATS, daemon→NATS, services→PgBouncer→Postgres) uses VLAN IPs
-- Configured via the Hivelocity portal — no manual VLAN tagging needed
+- Provisioned via Terraform (`hivelocity_vlan` resource)
 
 **Ops access (Tailscale):**
 - Tailscale installed on all nodes for operator SSH access from laptops
@@ -171,7 +216,7 @@ gateway — Hivelocity DAL1
 
 ## eBPF Tenant Isolation (Aya)
 
-> Applies to **Metal tier only** (node-a-01). Liquid nodes run Wasmtime in-process — no TAP devices, no bridge, no eBPF needed.
+> Applies to **Metal tier only** (node-metal). Liquid nodes run Wasmtime in-process — no TAP devices, no bridge, no eBPF needed.
 
 ### Why — The Multi-Tenant Bridge Problem
 
@@ -269,17 +314,17 @@ All events live in `crates/common/src/events.rs`. JetStream events are durable (
 
 | Subject                         | Type | Transport       | Publisher       | Consumer          |
 |---------------------------------|------|-----------------|-----------------|-------------------|
-| `platform.provision`            | `ProvisionEvent`       | JetStream       | API outbox poller | Daemon 
-| `platform.deprovision`          | `DeprovisionEvent`     | JetStream       | API               | Daemon 
-| `platform.route_updated`        | `RouteUpdatedEvent`    | Fire-and-forget | Daemon            | Proxy (all instances) 
-| `platform.route_removed`        | `RouteRemovedEvent`    | Fire-and-forget | Daemon            | Proxy (all instances) 
+| `platform.provision`            | `ProvisionEvent`       | JetStream       | API outbox poller | Daemon
+| `platform.deprovision`          | `DeprovisionEvent`     | JetStream       | API               | Daemon
+| `platform.route_updated`        | `RouteUpdatedEvent`    | Fire-and-forget | Daemon            | Proxy (all instances)
+| `platform.route_removed`        | `RouteRemovedEvent`    | Fire-and-forget | Daemon            | Proxy (all instances)
 | `platform.traffic_pulse`        | `TrafficPulseEvent`    | Fire-and-forget | Proxy             | Daemon
-| `platform.usage_metal`          | `MetalUsageEvent`      | Fire-and-forget | Daemon            | API 
-| `platform.usage_liquid`         | `LiquidUsageEvent`     | Fire-and-forget | Daemon            | API 
-| `platform.service_crashed`      | `ServiceCrashedEvent`  | Fire-and-forget | Daemon            | API 
-| `platform.suspend`              | `SuspendEvent`         | JetStream       | API               | Daemon 
-| `platform.deploy_progress.{id}` | `DeployProgressEvent`  | Fire-and-forget | Daemon            | API (SSE stream) 
-| `platform.cert_provisioned`     | `CertProvisionedEvent` | Fire-and-forget | API cert_manager  | Proxy (all instances) 
+| `platform.usage_metal`          | `MetalUsageEvent`      | Fire-and-forget | Daemon            | API
+| `platform.usage_liquid`         | `LiquidUsageEvent`     | Fire-and-forget | Daemon            | API
+| `platform.service_crashed`      | `ServiceCrashedEvent`  | Fire-and-forget | Daemon            | API
+| `platform.suspend`              | `SuspendEvent`         | JetStream       | API               | Daemon
+| `platform.deploy_progress.{id}` | `DeployProgressEvent`  | Fire-and-forget | Daemon            | API (SSE stream)
+| `platform.cert_provisioned`     | `CertProvisionedEvent` | Fire-and-forget | API cert_manager  | Proxy (all instances)
 
 `DeprovisionEvent` carries `slug` so the daemon can publish `RouteRemovedEvent` without a DB lookup. `DeployProgressEvent` carries a `DeployStep` enum (`Queued`, `Downloading`, `Verifying`, `Booting`/`Starting`, `HealthCheck`, `Running`, `Failed`) and a human-readable message. The `FailureKind` enum (`Transient`, `Permanent`) determines whether the daemon retries (max 3 attempts with 15s/30s backoff) or ACKs immediately.
 
@@ -315,8 +360,8 @@ flux deploy
        metal:  cargo build --target x86_64-unknown-linux-musl --release
        liquid: cargo build --target wasm32-wasip1 --release
   3. sha256(artifact) + generate deploy_id (uuid_v7)
-  4. GET /upload-url → API returns pre-signed Object Storage PUT URL
-  5. PUT artifact → Object Storage directly (no API in the upload path)
+  4. GET /upload-url → API returns pre-signed Wasabi S3 PUT URL
+  5. PUT artifact → Wasabi directly (no API in the upload path)
   6. POST /services { slug, engine, artifact_key, deploy_id, sha256 }
        → API: advisory lock + INSERT services + INSERT outbox
        → COMMIT (atomic)
@@ -324,7 +369,7 @@ flux deploy
 
 NATS → daemon (provision)
   ├─ metal:  download base-alpine.ext4 template (cached locally)
-  │           download user binary from Object Storage
+  │           download user binary from Wasabi S3
   │           inject binary + env vars into rootfs (loop mount)
   │           create TAP, attach to bridge, apply eBPF TC filter + tc bandwidth
   │           spawn Firecracker (direct or via jailer) → apply cgroup limits
@@ -334,7 +379,7 @@ NATS → daemon (provision)
   │           UPDATE services SET status='running', upstream_addr, tap_name, fc_pid, vm_id
   │           publish RouteUpdatedEvent → NATS
   │           VM stays running permanently until user deletes the service
-  └─ liquid: download main.wasm from Object Storage
+  └─ liquid: download main.wasm from Wasabi S3
              verify SHA-256 integrity
              compile Wasmtime module (cached to disk — <10ms deserialize on wake)
              save metadata.json (app_name, env_vars) for scale-to-zero recovery
@@ -442,15 +487,15 @@ After stop, the service has no running instance. `flux deploy` is required to cr
 
 ## Observability
 
-All observability services run on the NAT VPS. Data is stored on persistent Vultr Block Storage mounted at `/mnt/observability` (survives VPS rebuilds). All ports are Tailscale-only — blocked from public by UFW.
+All observability services run on the gateway node. Data is stored on the local 960GB SSD at `/mnt/observability`. All ports are Tailscale-only — blocked from public by UFW.
 
 | Service              | Port             | Purpose                                                                                      |
 |----------------------|------------------|----------------------------------------------------------------------------------------------|
-| **VictoriaMetrics**  | :8428            | Time-series database. Scrapes node_exporter on each compute node every 15s. 30-day retention |
+| **VictoriaMetrics**  | :8428            | Time-series database. Scrapes node_exporter on all 4 nodes every 15s. 30-day retention       |
 | **VictoriaLogs**     | :9428            | Log aggregation. Accepts Loki push protocol (`/insert/loki/api/v1/push`). 30-day retention   |
 | **Grafana**          | :3001            | Dashboards and alerting. VictoriaMetrics as Prometheus datasource, VictoriaLogs via plugin    |
-| **Promtail**         | :9080 (per node) | Log shipper on each compute node. Tails Nomad allocation logs + systemd journal              |
-| **node_exporter**    | :9100 (per node) | Hardware metrics from /proc and /sys on each compute node                                    |
+| **Promtail**         | :9080 (per node) | Log shipper on every node. Tails Nomad allocation logs + systemd journal                     |
+| **node_exporter**    | :9100 (per node) | Hardware metrics from /proc and /sys on every node                                           |
 
 ### Provisioned Alerts (Grafana)
 
@@ -460,19 +505,19 @@ All observability services run on the NAT VPS. Data is stored on persistent Vult
 | Disk Space Critical      | Root filesystem below 10% free         | 5m   |
 | High CPU                 | CPU usage above 90% sustained          | 10m  |
 | High Memory              | Memory usage above 90%                 | 5m   |
-| Observability Volume Low | `/mnt/observability` below 15% free    | 5m   |
 
 ## Backups
 
 All cluster data replicates daily to GCP (GCS) for cross-cloud disaster recovery. Each data type has its own bucket with lifecycle policies.
 
-| Data                 | Schedule             | Destination                                    | Retention                                |
-|----------------------|----------------------|------------------------------------------------|------------------------------------------|
-| **Postgres**         | 03:00 UTC            | `{project}-lm-{env}-postgres-backups`          | 30d Standard → Nearline, 90d delete      |
-| **VictoriaMetrics**  | 03:30 UTC            | `{project}-lm-{env}-victoriametrics-backups`   | 30d Standard → Nearline, 90d delete      |
-| **VictoriaLogs**     | 04:00 UTC            | `{project}-lm-{env}-victorialogs-backups`      | 30d Standard → Nearline, 90d delete      |
-| **S3 Artifacts**     | 04:30 UTC            | `{project}-lm-{env}-artifacts-backups`         | 30d Nearline, 90d Coldline, 180d delete  |
-| **Nomad state**      | 03:00 UTC (per node) | `{project}-lm-{env}-nomad-backups`             | 30d Standard → Nearline, 90d delete      |
+| Data                 | Runs on    | Schedule   | Destination                                    | Retention                                |
+|----------------------|------------|------------|------------------------------------------------|------------------------------------------|
+| **Vault**            | gateway    | 02:30 UTC  | `{project}-lm-{env}-vault-backups`             | 30d Standard → Nearline, 90d delete      |
+| **Postgres**         | node-db    | 03:00 UTC  | `{project}-lm-{env}-postgres-backups`          | 30d Standard → Nearline, 90d delete      |
+| **VictoriaMetrics**  | gateway    | 03:30 UTC  | `{project}-lm-{env}-victoriametrics-backups`   | 30d Standard → Nearline, 90d delete      |
+| **VictoriaLogs**     | gateway    | 04:00 UTC  | `{project}-lm-{env}-victorialogs-backups`      | 30d Standard → Nearline, 90d delete      |
+| **S3 Artifacts**     | gateway    | 04:30 UTC  | `{project}-lm-{env}-artifacts-backups`         | 30d Nearline, 90d Coldline, 180d delete  |
+| **Nomad state**      | each node  | 03:00 UTC  | `{project}-lm-{env}-nomad-backups`             | 30d Standard → Nearline, 90d delete      |
 
 A single GCP service account (`lm-{env}-backup`) with `roles/storage.objectAdmin` on all 5 buckets is distributed to all machines via cloud-init.
 
@@ -492,19 +537,19 @@ Two distinct layers — infra provisioning and workload scheduling are separate 
 infra/
 ├── terraform/
 │   ├── main.tf                    # GCS backend + providers (Hivelocity, Cloudflare, Tailscale, Google) + variables
-│   ├── nodes.tf                   # 4× Hivelocity dedicated servers + Tailscale keys + cloud-init calls
-│   ├── vlan.tf                    # Hivelocity private VLAN — attaches all 4 nodes
+│   ├── nodes.tf                   # 4× Hivelocity bare metal devices + VLAN + Tailscale keys + cloud-init
 │   ├── dns.tf                     # Cloudflare wildcard + apex A records → gateway public IP
+│   ├── services.tf                # (empty — Postgres + S3 are self-hosted, not managed)
 │   ├── backups.tf                 # GCS backup buckets + SA
-│   ├── outputs.tf                 # IPs, VLAN IDs, observability URLs, Wasabi credentials
+│   ├── outputs.tf                 # IPs, observability URLs, Wasabi credentials
 │   ├── terraform.tfvars.example   # Example variable values for new environments
 │   └── templates/
 │       ├── cloud-init-gateway.yaml  # gateway: SSH hardening, Nomad server, NATS, HAProxy,
-│       │                            #   VictoriaMetrics, VictoriaLogs, Grafana, backup crons
-│       ├── cloud-init-db.yaml       # node-db: Postgres 16, PgBouncer, backup cron
+│       │                            #   Pingora, VictoriaMetrics, VictoriaLogs, Grafana, backup crons
+│       ├── cloud-init-db.yaml       # node-db: Postgres 16 (32GB tuning), PgBouncer, pg_dump → GCS
 │       ├── cloud-init-liquid.yaml   # node-liquid: SSH hardening, Nomad client, Promtail, node_exporter
 │       └── cloud-init-metal.yaml    # node-metal: SSH hardening, Nomad client, Promtail, node_exporter,
-│                                    #   Firecracker + jailer, KVM check, br0 bridge, NAT rules
+│                                    #   Firecracker + jailer, KVM, br0 bridge, eBPF, NAT rules
 └── nomad/
     ├── api.nomad.hcl              # API — single instance on gateway (node_class=gateway)
     ├── daemon-metal.nomad.hcl     # Daemon — Metal tier only (node_class=metal)
@@ -535,14 +580,14 @@ All `TF_VAR_*` values are sourced from `.env` — no `terraform.tfvars` file nee
 
 ### Nomad — Process Scheduling
 
-Nomad runs on both bare metal nodes (clients) and the NAT VPS (server + client, `bootstrap_expect=1`). It manages the lifecycle of `api`, `daemon`, and `proxy` — health checks, rolling deploys, restarts on crash. It does **not** schedule Firecracker VMs — that remains the daemon's job via NATS. Schema migrations are run via a separate `migrate.nomad.hcl` batch job dispatched before rolling deploys.
+Nomad runs on all nodes except node-db. The gateway runs both server and client (`bootstrap_expect=1`). Compute nodes run Nomad clients. It manages the lifecycle of `api`, `web`, `daemon`, and `proxy` — health checks, rolling deploys, restarts on crash. It does **not** schedule Firecracker VMs — that remains the daemon's job via NATS. Schema migrations are run via a separate `migrate.nomad.hcl` batch job dispatched before rolling deploys.
 
 ```
 infra/nomad/
-├── api.nomad.hcl              # api binary, :7070, single instance on NAT VPS (node_class=gateway)
+├── api.nomad.hcl              # api binary, :7070, single instance on gateway (node_class=gateway)
 ├── daemon-metal.nomad.hcl     # daemon — Metal tier (node_class=metal)
 ├── daemon-liquid.nomad.hcl    # daemon — Liquid tier (node_class=liquid)
-└── proxy.nomad.hcl            # proxy binary, :8443, system job on all gateway nodes (node_class=gateway)
+└── proxy.nomad.hcl            # proxy binary, :8443, system job on gateway (node_class=gateway)
 ```
 
 Nomad node classes map to role:
@@ -564,7 +609,7 @@ client {
 }
 ```
 
-Job specs are constrained to the correct node class. API and proxy run on `gateway` (NAT VPS), daemons run on their respective compute tiers:
+Job specs are constrained to the correct node class. API and proxy run on `gateway`, daemons run on their respective compute tiers:
 
 ```hcl
 constraint {
@@ -587,12 +632,11 @@ constraint {
 ```
 merge to main
   → build api/daemon/proxy release binaries
-  → upload to GitHub Release (or Object Storage)
-  → SSH into NAT VPS via Tailscale
+  → upload to GitHub Release (or Wasabi S3)
+  → SSH into gateway via Tailscale
   → nomad job run api.nomad.hcl   (rolling deploy, zero downtime)
   → nomad job run daemon.nomad.hcl
   → nomad job run proxy.nomad.hcl
 ```
 
 Firecracker provisioning is unaffected — Nomad only restarts the daemon process, not the VMs it manages.
-

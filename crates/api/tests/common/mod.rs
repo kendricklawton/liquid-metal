@@ -11,7 +11,6 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tower::ServiceExt;
-use api::envelope::TestKmsClient;
 
 // ── TestHarness ─────────────────────────────────────────────────────────────
 
@@ -68,7 +67,8 @@ impl TestHarness {
             oidc_userinfo_url: String::new(),
             oidc_revoke_url: None,
             features: common::Features::from_env(),
-            kms: Arc::new(TestKmsClient::new()),
+            vault: Arc::new(common::vault::VaultClient::from_env()
+                .unwrap_or_else(|_| common::vault::VaultClient::new("http://localhost:8200", "dev-root-token"))),
             default_quota: Default::default(),
             http_client: reqwest::Client::new(),
             victorialogs_url: String::new(),
@@ -76,7 +76,6 @@ impl TestHarness {
             stripe_webhook_secret: None,
             stripe_price_pro: None,
             stripe_price_team: None,
-            cert_encryption_key: [0u8; 32],
         });
 
         let rate_limits = RateLimitConfig {

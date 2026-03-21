@@ -2,9 +2,9 @@ terraform {
   required_version = ">= 1.6"
   backend "gcs" {}
   required_providers {
-    vultr = {
-      source  = "vultr/vultr"
-      version = "~> 2.21"
+    hivelocity = {
+      source  = "hivelocity/hivelocity"
+      version = "~> 0.5"
     }
     cloudflare = {
       source  = "cloudflare/cloudflare"
@@ -23,55 +23,75 @@ terraform {
 
 # ── Variables ──────────────────────────────────────────────────────────────────
 
-variable "env" { type = string }    # dev | prod
-variable "region" { type = string } # vultr region slug: ord
+variable "env" { type = string } # dev | prod
 
-variable "vultr_api_key" { sensitive = true }
-variable "ssh_key_id" { type = string }
-variable "bare_metal_plan_metal" {
-  type        = string
-  description = "Vultr bare metal plan for Metal (Firecracker) node. E.g. vbm-6c-32gb for E-2286G."
+# Hivelocity
+variable "hivelocity_api_key" { sensitive = true }
+variable "hivelocity_ssh_key_id" {
+  type        = number
+  description = "SSH key ID in Hivelocity portal."
 }
-variable "bare_metal_plan_liquid" {
-  type        = string
-  description = "Vultr bare metal plan for Liquid (Wasmtime) node."
+variable "hivelocity_location" {
+  type    = string
+  default = "DAL1"
 }
-variable "enable_metal" {
-  type        = bool
-  default     = true
-  description = "Set to false to skip Metal node deployment (test Liquid independently)."
+variable "hivelocity_os_name" {
+  type    = string
+  default = "Ubuntu 24.04 LTS"
 }
-variable "enable_liquid" {
-  type        = bool
-  default     = true
-  description = "Set to false to skip Liquid node deployment (test Metal independently)."
+variable "hivelocity_product_id_gateway" {
+  type        = number
+  description = "Product ID for gateway node (E3-1230 v6, 32GB, 960GB SSD)."
 }
-variable "vps_plan" { type = string }
-variable "vps_gateway_plan" {
-  type        = string
-  default     = ""
-  description = "VPS plan for standby gateway. Defaults to vps_plan if empty."
+variable "hivelocity_product_id_metal" {
+  type        = number
+  description = "Product ID for Metal node (EPYC 7452, 384GB, 1TB NVMe)."
 }
-variable "os_id" { type = number }
+variable "hivelocity_product_id_liquid" {
+  type        = number
+  description = "Product ID for Liquid node (E3-1230 v6, 32GB, 960GB SSD)."
+}
+variable "hivelocity_product_id_db" {
+  type        = number
+  description = "Product ID for database node (E3-1230 v6, 32GB, 960GB SSD)."
+}
 
+# Cloudflare
 variable "cloudflare_api_token" { sensitive = true }
 variable "cloudflare_zone_id" { type = string }
 variable "domain" { type = string }
 
+# Tailscale
 variable "tailscale_api_key" { sensitive = true }
 variable "tailscale_tailnet" { type = string }
 
-variable "grafana_admin_password" { sensitive = true }
+# Wasabi S3 (managed outside Terraform — credentials only)
+variable "wasabi_endpoint" {
+  type    = string
+  default = "s3.us-east-1.wasabisys.com"
+}
+variable "wasabi_access_key" { sensitive = true }
+variable "wasabi_secret_key" { sensitive = true }
+variable "wasabi_bucket" { type = string }
 
+# Self-hosted Postgres
+variable "pg_user" {
+  type    = string
+  default = "liquidmetal"
+}
+variable "pg_password" { sensitive = true }
+variable "pg_dbname" {
+  type    = string
+  default = "liquidmetal"
+}
+
+# Services
+variable "grafana_admin_password" { sensitive = true }
 variable "nats_user" {
   type    = string
   default = "liquidmetal"
 }
-variable "nats_password" { sensitive = true }
-
-# Per-role NATS passwords for subject-level ACLs.
-# Each service authenticates as a separate NATS user with least-privilege
-# publish/subscribe permissions. Generate each: openssl rand -hex 32
+variable "nats_password"        { sensitive = true }
 variable "nats_password_daemon" { sensitive = true }
 variable "nats_password_proxy"  { sensitive = true }
 
@@ -81,27 +101,14 @@ variable "slack_webhook_url" {
   sensitive = true
 }
 
-variable "heartbeat_url_nomad"            {
-  type = string
-  default = ""
-}
-variable "heartbeat_url_postgres"         {
-  type = string
-  default = ""
-}
-variable "heartbeat_url_victoriametrics"  {
-  type = string
-  default = ""
-}
-variable "heartbeat_url_victorialogs"     {
-  type = string
-  default = ""
-}
-variable "heartbeat_url_artifacts"        {
-  type = string
-  default = ""
-}
+# Dead man's switch URLs for backup cron jobs
+variable "heartbeat_url_nomad"           { type = string; default = "" }
+variable "heartbeat_url_postgres"        { type = string; default = "" }
+variable "heartbeat_url_victoriametrics" { type = string; default = "" }
+variable "heartbeat_url_victorialogs"    { type = string; default = "" }
+variable "heartbeat_url_artifacts"       { type = string; default = "" }
 
+# GCP (backup destination)
 variable "gcp_project" { type = string }
 variable "gcp_region" {
   type    = string
@@ -110,10 +117,8 @@ variable "gcp_region" {
 
 # ── Providers ─────────────────────────────────────────────────────────────────
 
-provider "vultr" {
-  api_key     = var.vultr_api_key
-  rate_limit  = 100
-  retry_limit = 3
+provider "hivelocity" {
+  api_key = var.hivelocity_api_key
 }
 
 provider "cloudflare" {
@@ -133,5 +138,5 @@ provider "google" {
 # ── Locals ────────────────────────────────────────────────────────────────────
 
 locals {
-  prefix = "${var.env}-ord" # e.g. dev-ord, prod-ord
+  prefix = "${var.env}-dal" # e.g. dev-dal, prod-dal
 }

@@ -57,7 +57,7 @@ job "proxy" {
       # NOTE: database_url should point at PgBouncer (localhost:6432 — each gateway runs PgBouncer).
       # NATS_USER=proxy (proxy role — publish traffic_pulse, subscribe route updates)
       # nomad var put secrets/proxy nats_user=proxy nats_password=<proxy-password> \
-      #   cert_dek_wrapped=<base64> gcp_kms_key=<resource-name>
+      #   internal_secret=<secret>
       template {
         data        = <<EOF
 {{ with nomadVar "secrets/proxy" }}
@@ -65,27 +65,19 @@ DATABASE_URL={{ .database_url }}
 NATS_URL={{ .nats_url }}
 NATS_USER={{ .nats_user }}
 NATS_PASSWORD={{ .nats_password }}
-CERT_DEK_WRAPPED={{ .cert_dek_wrapped }}
-GCP_KMS_KEY={{ .gcp_kms_key }}
+INTERNAL_SECRET={{ .internal_secret }}
 {{ end }}
 EOF
         destination = "secrets/env"
         env         = true
       }
 
-      # GCP service account JSON for KMS cert DEK unwrap at startup.
-      template {
-        data        = <<EOF
-{{ with nomadVar "secrets/proxy" }}{{ .gcp_sa_json }}{{ end }}
-EOF
-        destination = "secrets/gcp-sa.json"
-      }
-
       env {
         BIND_ADDR = "0.0.0.0:8443"
         RUST_LOG  = "info"
         OTEL_EXPORTER_OTLP_ENDPOINT = "${OTEL_ENDPOINT}"
-        GOOGLE_APPLICATION_CREDENTIALS = "$${NOMAD_SECRETS_DIR}/gcp-sa.json"
+        # Proxy fetches certs from API (which reads from Vault)
+        API_URL   = "http://127.0.0.1:7070"
       }
 
       resources {

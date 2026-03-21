@@ -38,14 +38,28 @@ Fill in the required values:
 | `OIDC_ISSUER`          | Yes      | Your Zitadel instance URL (e.g. `https://xxx.us1.zitadel.cloud`)                  |
 | `OIDC_CLI_CLIENT_ID`   | Yes      | From Zitadel: Projects → Liquid-Metal → Applications → flux-cli                   |
 | `OIDC_WEB_CLIENT_ID`   | Yes      | From Zitadel: Projects → Liquid-Metal → Applications → web-dashboard              |
-| `GCP_KMS_KEY`          | Yes      | Full Cloud KMS cryptoKey resource name (see RUNBOOK First-Time Setup)              |
-| `GCP_KMS_CREDENTIALS`  | Yes      | Path to KMS service account JSON (e.g. `keys/kms-dev.json`)                       |
+| `VAULT_ADDR`           | Yes      | Pre-filled for local Docker Vault (`http://localhost:8200`)                        |
+| `VAULT_TOKEN`          | Yes      | Pre-filled for local dev (`dev-root-token`)                                       |
 | `OBJECT_STORAGE_*`     | Yes      | Pre-filled for local MinIO                                                        |
 | `COOKIE_SECRET`        | No       | Optional for dev — auto-generated with warning                                    |
 
-> First time? See the **First-Time Setup** section in `RUNBOOK.md` for Zitadel OIDC app creation, GCP KMS key ring provisioning, and `CERT_DEK_WRAPPED` generation.
+> First time? See the **First-Time Setup** section in `RUNBOOK.md` for Zitadel OIDC app creation.
 
 Everything else has safe defaults. See `.env.example` for the full list.
+
+---
+
+## GCP Auth (one-time)
+
+For Terraform state and backup bucket access from your local machine:
+
+```bash
+gcloud auth application-default login
+```
+
+Opens a browser, signs in with your Google account, caches a credential locally. Terraform picks it up automatically — no JSON key needed.
+
+> Your Google account needs `roles/storage.admin` on the GCP project for Terraform state access.
 
 ---
 
@@ -261,8 +275,7 @@ task down          # stop Docker containers
 | `flux login` fails                         | Check `OIDC_CLI_CLIENT_ID` + `OIDC_ISSUER` in `.env`. Is the API running?                           |
 | `error: fetch CLI config`                  | CLI can't reach the API — `export API_URL=http://localhost:7070`                                     |
 | `unauthorized_client` on `flux login`      | Zitadel CLI app missing `device_code` grant type                                                     |
-| API: `GCP_KMS_KEY is required`             | See RUNBOOK First-Time Setup                                                                         |
-| API: `CERT_DEK_WRAPPED not set`            | See RUNBOOK First-Time Setup                                                                         |
+| API: `VAULT_ADDR not set`                  | Add `VAULT_ADDR=http://localhost:8200` to `.env` and run `task up`                                   |
 | Daemon: `Permission denied` on PID file    | Run with `sudo -E task dev:daemon`                                                                   |
 | Daemon: `Address already in use`           | Health port collision — Taskfile sets `:9091`, check `HEALTH_PORT`                                   |
 | Daemon: `br0` / artifact warnings          | Run `sudo task metal:setup` first                                                                    |

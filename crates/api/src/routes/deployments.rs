@@ -542,25 +542,13 @@ pub async fn rollback_service(
         }),
     };
 
-    // Decrypt env vars from the encrypted columns (not the legacy plaintext column).
-    let env_row = db
-        .query_one(
-            "SELECT env_ciphertext, env_nonce FROM services WHERE id = $1",
-            &[&service_id],
-        )
+    // Read env vars from Vault.
+    let env_vars = envelope::read_env_vars(&state.vault, wid, service_id)
         .await
-        .map_err(|_| ApiError::internal("env vars lookup failed"))?;
-    let ciphertext: Option<Vec<u8>> = env_row.get("env_ciphertext");
-    let nonce: Option<Vec<u8>> = env_row.get("env_nonce");
-    let env_vars = match (ciphertext, nonce) {
-        (Some(ct), Some(n)) => envelope::decrypt_env_vars(&db, &*state.kms, wid, &ct, &n)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, %service_id, "env var decryption failed");
-                ApiError::internal("failed to decrypt environment variables")
-            })?,
-        _ => std::collections::HashMap::new(),
-    };
+        .map_err(|e| {
+            tracing::error!(error = %e, %service_id, "failed to read env vars from vault");
+            ApiError::internal("failed to read environment variables")
+        })?;
 
     let event = common::ProvisionEvent {
         tenant_id: wid.to_string(),

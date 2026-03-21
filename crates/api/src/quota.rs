@@ -26,3 +26,56 @@ pub fn limits_for(tier: &str) -> TierLimits {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hobby_tier_limits() {
+        let l = limits_for("hobby");
+        assert_eq!(l.max_services, 5);
+        assert_eq!(l.free_invocations, 1_000_000);
+    }
+
+    #[test]
+    fn pro_tier_limits() {
+        let l = limits_for("pro");
+        assert_eq!(l.max_services, 20);
+        assert_eq!(l.free_invocations, 1_000_000);
+    }
+
+    #[test]
+    fn team_tier_limits() {
+        let l = limits_for("team");
+        assert_eq!(l.max_services, 50);
+        assert_eq!(l.free_invocations, 1_000_000);
+    }
+
+    #[test]
+    fn unknown_tier_falls_back_to_hobby() {
+        let l = limits_for("enterprise");
+        assert_eq!(l.max_services, 5);
+    }
+
+    #[test]
+    fn empty_tier_falls_back_to_hobby() {
+        let l = limits_for("");
+        assert_eq!(l.max_services, 5);
+    }
+
+    #[test]
+    fn free_invocations_same_for_all_tiers() {
+        assert_eq!(limits_for("hobby").free_invocations, limits_for("pro").free_invocations);
+        assert_eq!(limits_for("pro").free_invocations, limits_for("team").free_invocations);
+    }
+
+    #[test]
+    fn service_limits_increase_with_tier() {
+        let hobby = limits_for("hobby").max_services;
+        let pro = limits_for("pro").max_services;
+        let team = limits_for("team").max_services;
+        assert!(hobby < pro);
+        assert!(pro < team);
+    }
+}

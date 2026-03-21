@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Status{% endblock %}
+{% block description %}Liquid Metal system status. Real-time monitoring powered by OpenStatus.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+
+  <div class="max-w-2xl mb-20">
+    <p class="lm-label mb-3">// status</p>
+    <h1 class="text-4xl font-semibold tracking-tight mb-6">System status</h1>
+    <p class="text-base text-zwl-muted dark:text-zw-muted leading-relaxed">
+      Real-time monitoring of all Liquid Metal services. Powered by
+      <a href="https://www.openstatus.dev" class="underline hover:text-zwl-fg dark:hover:text-zw-fg">OpenStatus</a>
+      &mdash; monitored externally so you can see outages even when we can't.
+    </p>
+  </div>
+
+  {# ── Embed or link ──────────────────────────────────────────────────── #}
+  <div class="glass-card p-8 mb-12 text-center">
+    <p class="text-sm font-mono text-zwl-muted dark:text-zw-muted mb-6">External status page</p>
+    <a href="https://status.liquidmetal.dev"
+       class="inline-flex items-center px-8 py-3 bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg text-xs font-medium font-mono uppercase tracking-widest hover:opacity-80 transition-opacity">
+      View live status
+    </a>
+    <p class="text-xs text-zwl-muted dark:text-zw-muted mt-4">
+      Monitors API, dashboard, proxy, and compute nodes from 6 regions every 60 seconds.
+    </p>
+  </div>
+
+  {# ── What we monitor ────────────────────────────────────────────────── #}
+  <div class="max-w-2xl mb-16">
+    <p class="lm-label mb-6">// monitored services</p>
+    <div class="space-y-3">
+      <div class="glass-card p-5 flex items-center justify-between">
+        <div>
+          <p class="text-sm font-mono font-medium">API</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">REST API &mdash; /healthz</p>
+        </div>
+      </div>
+      <div class="glass-card p-5 flex items-center justify-between">
+        <div>
+          <p class="text-sm font-mono font-medium">Dashboard</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Web UI &mdash; login page</p>
+        </div>
+      </div>
+      <div class="glass-card p-5 flex items-center justify-between">
+        <div>
+          <p class="text-sm font-mono font-medium">Proxy</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Edge router &mdash; TLS handshake</p>
+        </div>
+      </div>
+      <div class="glass-card p-5 flex items-center justify-between">
+        <div>
+          <p class="text-sm font-mono font-medium">Metal compute</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Firecracker microVMs &mdash; Dallas</p>
+        </div>
+      </div>
+      <div class="glass-card p-5 flex items-center justify-between">
+        <div>
+          <p class="text-sm font-mono font-medium">Liquid compute</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Wasmtime/WASI &mdash; Dallas</p>
+        </div>
+      </div>
+      <div class="glass-card p-5 flex items-center justify-between">
+        <div>
+          <p class="text-sm font-mono font-medium">Database</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted">Postgres &mdash; Dallas</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Incident history ──────────────────────────────────────────────── #}
+  <div class="max-w-2xl">
+    <p class="lm-label mb-6">// recent incidents</p>
+    <p class="text-sm text-zwl-muted dark:text-zw-muted">No incidents reported. Incident history is tracked on our <a href="https://status.liquidmetal.dev" class="underline hover:text-zwl-fg dark:hover:text-zw-fg">OpenStatus page</a>.</p>
+  </div>
+
+</div>
+{% endblock %}

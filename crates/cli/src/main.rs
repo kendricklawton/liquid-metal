@@ -2,6 +2,7 @@ mod client;
 mod commands;
 mod config;
 mod context;
+mod docker;
 mod oidc;
 mod output;
 mod table;

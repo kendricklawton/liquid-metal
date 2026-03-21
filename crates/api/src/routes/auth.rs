@@ -4,7 +4,6 @@ use axum::{Json, extract::State, http::HeaderMap};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::envelope;
 use common::contract::{self, ProvisionRequest, ProvisionResponse, CreateInvitesRequest, CreateInvitesResponse};
 use super::{ApiError, db_conn, verify_internal_secret};
 
@@ -86,7 +85,6 @@ pub async fn provision_user(
     let resp = do_provision(
         &mut db,
         &state.features,
-        &*state.kms,
         &req.email,
         &req.first_name,
         &req.last_name,
@@ -119,7 +117,6 @@ pub async fn cli_provision(
     let Json(mut resp) = do_provision(
         &mut db,
         &state.features,
-        &*state.kms,
         &req.email,
         &req.first_name,
         &req.last_name,
@@ -154,7 +151,6 @@ pub async fn cli_provision(
 async fn do_provision(
     db:          &mut deadpool_postgres::Object,
     features:    &common::Features,
-    kms:         &dyn envelope::KmsClient,
     email:       &str,
     first_name:  &str,
     last_name:   &str,
@@ -279,13 +275,6 @@ async fn do_provision(
         tracing::error!(error = %e, "commit txn");
         ApiError::internal("failed to commit user creation")
     })?;
-
-    // Provision a KMS-wrapped DEK for the new workspace (post-commit so the
-    // workspace row exists). Non-fatal: env var encryption will provision
-    // on-demand if this fails.
-    if let Err(e) = envelope::provision_workspace_key(db, kms, workspace_id).await {
-        tracing::warn!(error = %e, %workspace_id, "failed to provision workspace DEK — will retry on first env var write");
-    }
 
     tracing::info!(email, user_id = %user_id, "user provisioned");
 

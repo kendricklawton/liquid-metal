@@ -94,9 +94,9 @@ runcmd:
       }
     }
 
-    # Nomad server join — NAT VPS Tailscale IP (update after first apply)
+    # Nomad server join — gateway node via Tailscale
     client {
-      servers = ["nat-vps.your-tailnet:4647"]
+      servers = ["${gateway_hostname}:4647"]
     }
     EOF
 

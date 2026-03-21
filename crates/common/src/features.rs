@@ -64,3 +64,93 @@ fn flag(key: &str, default: bool) -> bool {
         Err(_) => default,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Feature flag tests manipulate env vars, which are process-global.
+    // Use a mutex to prevent parallel tests from interfering with each other.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_env(key: &str, val: Option<&str>, f: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            match val {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        f();
+        unsafe { std::env::remove_var(key); }
+    }
+
+    #[test]
+    fn flag_true_values() {
+        for val in &["1", "true", "yes", "on", "TRUE", "True", "YES", "On"] {
+            with_env("TEST_FLAG_TRUE", Some(val), || {
+                assert!(flag("TEST_FLAG_TRUE", false), "expected true for {val:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn flag_false_values() {
+        for val in &["0", "false", "no", "off", "FALSE", "False", "NO", "Off"] {
+            with_env("TEST_FLAG_FALSE", Some(val), || {
+                assert!(!flag("TEST_FLAG_FALSE", true), "expected false for {val:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn flag_unrecognized_uses_default_true() {
+        with_env("TEST_FLAG_UNKNOWN", Some("banana"), || {
+            assert!(flag("TEST_FLAG_UNKNOWN", true));
+        });
+    }
+
+    #[test]
+    fn flag_unrecognized_uses_default_false() {
+        with_env("TEST_FLAG_UNKNOWN2", Some("banana"), || {
+            assert!(!flag("TEST_FLAG_UNKNOWN2", false));
+        });
+    }
+
+    #[test]
+    fn flag_unset_uses_default_true() {
+        with_env("TEST_FLAG_UNSET", None, || {
+            assert!(flag("TEST_FLAG_UNSET", true));
+        });
+    }
+
+    #[test]
+    fn flag_unset_uses_default_false() {
+        with_env("TEST_FLAG_UNSET2", None, || {
+            assert!(!flag("TEST_FLAG_UNSET2", false));
+        });
+    }
+
+    #[test]
+    fn flag_empty_string_uses_default() {
+        with_env("TEST_FLAG_EMPTY", Some(""), || {
+            assert!(flag("TEST_FLAG_EMPTY", true));
+        });
+    }
+
+    #[test]
+    fn features_from_env_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Clear all feature flag env vars to test defaults
+        for key in &["REQUIRE_INVITE", "ENABLE_METAL", "ENABLE_LIQUID", "ENFORCE_QUOTAS", "MAINTENANCE_MODE"] {
+            unsafe { std::env::remove_var(key); }
+        }
+        let f = Features::from_env();
+        assert!(!f.require_invite);
+        assert!(f.enable_metal);
+        assert!(f.enable_liquid);
+        assert!(f.enforce_quotas);
+        assert!(!f.maintenance_mode);
+    }
+}

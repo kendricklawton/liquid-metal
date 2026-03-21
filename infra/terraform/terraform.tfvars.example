@@ -1,35 +1,50 @@
 # ── Environment ────────────────────────────────────────────────────────────────
-env    = "dev"        # dev | prod
-region = "ord"        # Vultr region slug (Chicago)
+env = "dev" # dev | prod
 
-# ── Vultr ──────────────────────────────────────────────────────────────────────
-vultr_api_key   = "your-vultr-api-key"
-ssh_key_id      = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-bare_metal_plan_metal  = "vbm-6c-32gb"  # E-2286G for Metal (Firecracker) node
-bare_metal_plan_liquid = "vbm-4c-32gb"  # E3-1270 for Liquid (Wasmtime) node
-enable_metal           = true           # Set false to skip Metal node (test Liquid only)
-enable_liquid          = true           # Set false to skip Liquid node (test Metal only)
-vps_plan               = "vc2-2c-4gb"   # VPS plan for NAT gateway
-os_id                  = 2136           # Ubuntu 24.04 LTS
+# ── Hivelocity ────────────────────────────────────────────────────────────────
+hivelocity_api_key    = "your-hivelocity-api-key"
+hivelocity_ssh_key_id = 0      # SSH key ID from Hivelocity portal
+hivelocity_location   = "DAL1" # Dallas
+hivelocity_os_name    = "Ubuntu 24.04 LTS"
 
-# ── Cloudflare ─────────────────────────────────────────────────────────────────
+# Product IDs — look these up in the Hivelocity portal under Instant Dedicated.
+hivelocity_product_id_gateway = 0 # E3-1230 v6, 4c/8t, 32GB, 960GB SSD
+hivelocity_product_id_metal   = 0 # EPYC 7452, 32c/64t, 384GB, 1TB NVMe
+hivelocity_product_id_liquid  = 0 # E3-1230 v6, 4c/8t, 32GB, 960GB SSD
+hivelocity_product_id_db      = 0 # E3-1230 v6, 4c/8t, 32GB, 960GB SSD
+
+# ── Cloudflare ────────────────────────────────────────────────────────────────
 cloudflare_api_token = "your-cloudflare-api-token"
 cloudflare_zone_id   = "your-zone-id"
 domain               = "example.com"
 
-# ── Tailscale ──────────────────────────────────────────────────────────────────
+# ── Tailscale ─────────────────────────────────────────────────────────────────
 tailscale_api_key = "tskey-api-xxxxx"
 tailscale_tailnet = "your-tailnet.ts.net"
 
-# ── GCP (backup destination) ──────────────────────────────────────────────────
+# ── Wasabi S3 (object storage for deploy artifacts) ──────────────────────────
+wasabi_endpoint   = "s3.us-east-1.wasabisys.com"
+wasabi_access_key = "your-wasabi-access-key"
+wasabi_secret_key = "your-wasabi-secret-key"
+wasabi_bucket     = "your-bucket-name"
+
+# ── Self-hosted Postgres ─────────────────────────────────────────────────────
+pg_user     = "liquidmetal"
+pg_password = "change-me" # openssl rand -hex 32
+pg_dbname   = "liquidmetal"
+
+# ── GCP (backup destination + WIF) ───────────────────────────────────────────
 gcp_project = "your-gcp-project-id"
 gcp_region  = "us-central1"
 
-# ── Secrets ────────────────────────────────────────────────────────────────────
+# ── GitHub (Workload Identity Federation) ────────────────────────────────────
+github_repo = "yourname/liquid-metal" # owner/repo format
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
 grafana_admin_password = "change-me"
+
 # NATS authentication — per-role passwords for subject-level ACLs.
 # Generate each: openssl rand -hex 32
-# API user is "liquidmetal" (var.nats_user default), daemon is "daemon", proxy is "proxy".
 nats_password        = "change-me"
 nats_password_daemon = "change-me"
 nats_password_proxy  = "change-me"

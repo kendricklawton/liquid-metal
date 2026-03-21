@@ -75,11 +75,7 @@ aws-smithy-runtime-api = "1"
 tonic        = "0.14"
 prost        = "0.14"
 prost-types  = "0.14"
-# Envelope encryption
-aes-gcm      = { version = "0.10", features = ["aes"] }
-# GCP authentication (KMS envelope encryption)
-gcp_auth     = "0.12"
-# Base64 encoding (KMS API payloads)
+# Base64 encoding (Stripe, presigned URLs)
 base64       = "0.22"
 # HMAC (Stripe webhook signature verification)
 hmac         = "0.12"
