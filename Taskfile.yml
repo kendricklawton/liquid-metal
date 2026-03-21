@@ -110,8 +110,13 @@ tasks:
     desc: "Run API integration tests (requires task up + task migrate)"
     env:
       INTERNAL_SECRET: "test-secret"
+      DATABASE_URL: "{{.DATABASE_URL}}"
+      NATS_URL: "{{.NATS_URL | default \"nats://127.0.0.1:4222\"}}"
+      VAULT_ADDR: "{{.VAULT_ADDR | default \"http://localhost:8200\"}}"
+      VAULT_TOKEN: "{{.VAULT_TOKEN | default \"dev-root-token\"}}"
+      ENFORCE_QUOTAS: "false"
     cmds:
-      - cargo test -p api --test api -- --include-ignored
+      - cargo test -p api --test api -- --include-ignored --test-threads=1
 
   test:cli:
     desc: "Run CLI unit tests"

@@ -19,7 +19,7 @@ pub async fn list_workspaces(
 
     let rows = db
         .query(
-            "SELECT w.id, w.name, w.slug, w.tier \
+            "SELECT w.id, w.name, w.slug \
              FROM workspaces w \
              JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1 \
              WHERE w.deleted_at IS NULL \
@@ -36,7 +36,7 @@ pub async fn list_workspaces(
             id: row.get::<_, Uuid>("id").to_string(),
             name: row.get("name"),
             slug: row.get("slug"),
-            tier: row.get("tier"),
+            tier: String::new(),
         })
         .collect();
 

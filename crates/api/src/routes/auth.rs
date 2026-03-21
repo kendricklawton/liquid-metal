@@ -169,7 +169,7 @@ async fn do_provision(
 
     let existing = db
         .query_opt(
-            "SELECT u.id, u.name, u.tier, u.oidc_sub, w.id AS workspace_id, w.slug \
+            "SELECT u.id, u.name, u.oidc_sub, w.id AS workspace_id, w.slug \
              FROM users u \
              LEFT JOIN workspace_members wm ON wm.user_id = u.id AND wm.role = 'owner' \
              LEFT JOIN workspaces w ON w.id = wm.workspace_id \
@@ -187,8 +187,7 @@ async fn do_provision(
             id:           row.get::<_, Uuid>("id").to_string(),
             name:         row.get("name"),
             slug:         row.get::<_, Option<String>>("slug").unwrap_or_default(),
-            tier:         row.get::<_, Option<String>>("tier")
-                              .unwrap_or_else(|| "hobby".to_string()),
+            tier:         String::new(),
             workspace_id: row.get::<_, Option<Uuid>>("workspace_id")
                               .map(|u| u.to_string())
                               .unwrap_or_default(),
@@ -223,26 +222,35 @@ async fn do_provision(
         }
     }
 
-    let user_id      = Uuid::now_v7();
-    let workspace_id = Uuid::now_v7();
-    let full_name    = format!("{} {}", first_name, last_name).trim().to_string();
-    let full_name    = if full_name.is_empty() { email.to_string() } else { full_name };
-    let ws_slug      = workspace_slug(&full_name);
+    let proposed_user_id = Uuid::now_v7();
+    let full_name = format!("{} {}", first_name, last_name).trim().to_string();
+    let full_name = if full_name.is_empty() { email.to_string() } else { full_name };
 
     let txn = db.transaction().await.map_err(|e| {
         tracing::error!(error = %e, "begin txn");
         ApiError::internal("failed to start transaction")
     })?;
 
-    txn.execute(
+    // Upsert user — RETURNING gives us the actual ID whether inserted or existing.
+    let row = txn.query_one(
         "INSERT INTO users (id, email, name, oidc_sub) VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (email) DO UPDATE SET oidc_sub = EXCLUDED.oidc_sub \
-         WHERE EXCLUDED.oidc_sub IS NOT NULL",
-        &[&user_id, &email, &full_name, &oidc_sub],
+         ON CONFLICT (email) DO UPDATE SET \
+           oidc_sub = COALESCE(EXCLUDED.oidc_sub, users.oidc_sub), \
+           name = EXCLUDED.name \
+         RETURNING id",
+        &[&proposed_user_id, &email, &full_name, &oidc_sub],
     ).await.map_err(|e| {
-        tracing::error!(error = ?e, "insert user");
+        tracing::error!(error = ?e, "upsert user");
         ApiError::internal("failed to create user")
     })?;
+    let user_id: Uuid = row.get("id");
+
+    // Use the full user_id (without hyphens) as workspace slug suffix.
+    // UUID v7 shares the first 8 chars (timestamp) between users created
+    // close together, so we need the full ID to guarantee uniqueness.
+    let uid_hex = user_id.to_string().replace('-', "");
+    let ws_slug = format!("{}-{}", workspace_slug(&full_name), uid_hex);
+    let workspace_id = Uuid::now_v7();
 
     txn.execute(
         "INSERT INTO workspaces (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
@@ -251,6 +259,18 @@ async fn do_provision(
         tracing::error!(error = %e, "insert workspace");
         ApiError::internal("failed to create workspace")
     })?;
+
+    // Use the workspace that was actually inserted (may differ if slug existed
+    // from a previous provision of the same user).
+    let ws_row = txn.query_one(
+        "SELECT id, slug FROM workspaces WHERE slug = $1 AND deleted_at IS NULL",
+        &[&ws_slug],
+    ).await.map_err(|e| {
+        tracing::error!(error = %e, "lookup workspace");
+        ApiError::internal("failed to find workspace")
+    })?;
+    let workspace_id: Uuid = ws_row.get("id");
+    let ws_slug: String = ws_row.get("slug");
 
     txn.execute(
         "INSERT INTO workspace_members (workspace_id, user_id, role) \
@@ -282,7 +302,7 @@ async fn do_provision(
         id:           user_id.to_string(),
         name:         full_name,
         slug:         ws_slug,
-        tier:         "hobby".to_string(),
+        tier:         String::new(),
         workspace_id: workspace_id.to_string(),
         oidc_sub:  oidc_sub.map(|s| s.to_string()),
         api_key:  None,

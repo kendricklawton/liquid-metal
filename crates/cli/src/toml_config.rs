@@ -14,6 +14,8 @@ pub struct ServiceConfig {
     #[serde(default)]
     pub project_id: Option<String>,
     pub port: Option<u32>,
+    /// Metal-only: VM tier — "one" (1 vCPU), "two" (2 vCPU), or "four" (4 vCPU).
+    pub tier: Option<String>,
 }
 
 #[derive(Deserialize)]

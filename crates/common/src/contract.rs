@@ -110,6 +110,12 @@ pub struct ServiceResponse {
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Metal-only: VM tier (one/two/four).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metal_tier: Option<String>,
+    /// Metal-only: monthly price in cents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_price_cents: Option<i32>,
 }
 
 /// Single log line returned by GET /services/:id/logs.
@@ -138,9 +144,6 @@ pub struct UploadUrlResponse {
 }
 
 /// POST /deployments request body.
-///
-/// The platform manages all resource allocation (vCPU, memory). Customers
-/// only specify `port` for Metal services (the port their binary listens on).
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct DeployRequest {
     pub name: String,
@@ -152,6 +155,9 @@ pub struct DeployRequest {
     /// Metal-only: the port the user's binary listens on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u32>,
+    /// Metal-only: VM tier — "one" (1 vCPU), "two" (2 vCPU), or "four" (4 vCPU).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 /// Inner service object in the deploy response.
@@ -280,15 +286,7 @@ pub struct TopupRequest {
     pub cancel_url: String,
 }
 
-/// POST /billing/subscribe request body.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct SubscribeRequest {
-    pub tier: String,
-    pub success_url: String,
-    pub cancel_url: String,
-}
-
-/// Response from POST /billing/topup and POST /billing/subscribe.
+/// Response from POST /billing/topup.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CheckoutResponse {
     pub checkout_url: String,
@@ -298,39 +296,21 @@ pub struct CheckoutResponse {
 /// GET /billing/balance response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct BalanceResponse {
-    pub tier: String,
-    pub balance_credits: i64,
-    pub topup_credits: i64,
-    pub total_credits: i64,
-    pub billing_period_start: Option<String>,
-    pub billing_period_end: Option<String>,
-    pub plan: PlanInfo,
-}
-
-/// Plan limits embedded in the balance response.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct PlanInfo {
-    pub price_cents: i32,
-    pub credit_cents: i32,
-    pub max_services: i32,
-    pub free_invocations: i64,
+    /// Current balance in micro-credits (1 µcr = $0.000001).
+    pub balance: i64,
+    /// Free Liquid invocations used this month.
+    pub free_invocations_used: i64,
+    /// Free Liquid invocations limit per month (1M).
+    pub free_invocations_limit: i64,
 }
 
 /// GET /billing/usage response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct UsageResponse {
-    pub period_start: String,
-    pub metal: MetalUsage,
+    /// Total monthly Metal cost across all running services (cents).
+    pub metal_monthly_total_cents: i64,
+    /// Liquid invocation usage this period.
     pub liquid: LiquidUsage,
-    pub total_cost_microcredits: i64,
-}
-
-/// Metal usage breakdown within the usage response.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct MetalUsage {
-    pub invocations: i64,
-    pub duration_ms: i64,
-    pub cost_microcredits: i64,
 }
 
 /// Liquid usage breakdown within the usage response.

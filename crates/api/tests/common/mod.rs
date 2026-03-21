@@ -74,8 +74,6 @@ impl TestHarness {
             victorialogs_url: String::new(),
             stripe: None,
             stripe_webhook_secret: None,
-            stripe_price_pro: None,
-            stripe_price_team: None,
         });
 
         let rate_limits = RateLimitConfig {

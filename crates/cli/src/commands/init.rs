@@ -16,6 +16,8 @@ struct ServiceSection<'a> {
     project_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tier: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -95,12 +97,14 @@ pub async fn run(config: &Config, name_override: Option<String>, engine_override
     };
 
     let is_metal = engine == "metal";
+    let metal_tier = if is_metal { Some(prompt_metal_tier()?) } else { None };
     let cfg = LiquidMetalConfig {
         service: ServiceSection {
             name: &name,
             engine: &engine,
             project_id: &project_id,
             port: if is_metal { Some(8080) } else { None },
+            tier: metal_tier.as_deref(),
         },
         build: BuildSection {
             command: build.command.clone(),
@@ -131,6 +135,24 @@ struct DetectedBuild {
     command: Option<String>,
     output: String,
     dockerfile: Option<String>,
+}
+
+fn prompt_metal_tier() -> Result<String> {
+    println!("Select Metal tier:\n");
+    println!("  1) 1 vCPU  — 2 GB RAM, 10 GB NVMe  — $20/mo");
+    println!("  2) 2 vCPU  — 4 GB RAM, 20 GB NVMe  — $40/mo");
+    println!("  3) 4 vCPU  — 8 GB RAM, 40 GB NVMe  — $80/mo\n");
+    print!("Enter 1, 2, or 3: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    match input.trim() {
+        "1" | "one" => Ok("one".to_string()),
+        "2" | "two" => Ok("two".to_string()),
+        "3" | "four" => Ok("four".to_string()),
+        other => bail!("invalid tier choice: {:?} — expected 1, 2, or 3", other),
+    }
 }
 
 fn prompt_engine() -> Result<String> {

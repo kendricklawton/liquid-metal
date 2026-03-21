@@ -161,21 +161,25 @@ pub async fn deploy_service(
         return Err(ApiError::forbidden("not a member of this workspace"));
     }
 
-    let tier_row = db
-        .query_one("SELECT tier FROM workspaces WHERE id = $1", &[&wid])
-        .await
-        .map_err(|_| ApiError::internal("workspace tier lookup failed"))?;
-    let tier: String = tier_row.get("tier");
-    let limits = crate::quota::limits_for(&tier);
-
     let engine: common::Engine = body.engine.parse().map_err(|_| {
         ApiError::bad_request("invalid_engine", "engine must be 'metal' or 'liquid'")
     })?;
 
+    // Look up Metal tier spec if deploying a Metal service.
+    let metal_tier_spec = if engine == common::Engine::Metal {
+        let tier_id = body.tier.as_deref().ok_or_else(|| {
+            ApiError::bad_request("missing_tier", "metal deploys require a tier (one, two, or four)")
+        })?;
+        Some(common::pricing::metal_tier(tier_id).ok_or_else(|| {
+            ApiError::bad_request("invalid_tier", "tier must be one, two, or four")
+        })?)
+    } else {
+        None
+    };
+
     let engine_spec = match engine {
         common::Engine::Metal => {
-            // Platform-managed: 1 vCPU, 128 MB for all Metal VMs.
-            // Users don't pick resources — serverless model.
+            let spec = metal_tier_spec.unwrap();
             let port = body.port.unwrap_or(0) as u16;
             if port == 0 {
                 return Err(ApiError::bad_request(
@@ -184,8 +188,8 @@ pub async fn deploy_service(
                 ));
             }
             common::EngineSpec::Metal(common::MetalSpec {
-                vcpu: 1,
-                memory_mb: 128,
+                vcpu: spec.vcpu,
+                memory_mb: spec.memory_mb,
                 port,
                 artifact_key: body.artifact_key.clone(),
                 artifact_sha256: if body.sha256.is_empty() {
@@ -251,23 +255,25 @@ pub async fn deploy_service(
             .await
             .map_err(|_| ApiError::internal("failed to acquire workspace lock"))?;
 
-        let svc_count: i64 = check_txn
-            .query_one(
-                "SELECT COUNT(*) FROM services WHERE workspace_id = $1 AND deleted_at IS NULL",
-                &[&wid],
-            )
-            .await
-            .map_err(|_| ApiError::internal("service count query failed"))?
-            .get(0);
+        if state.features.enforce_quotas {
+            let svc_count: i64 = check_txn
+                .query_one(
+                    "SELECT COUNT(*) FROM services WHERE workspace_id = $1 AND deleted_at IS NULL",
+                    &[&wid],
+                )
+                .await
+                .map_err(|_| ApiError::internal("service count query failed"))?
+                .get(0);
 
-        if svc_count >= limits.max_services {
-            return Err(ApiError::unprocessable(
-                "service_limit_exceeded",
-                format!(
-                    "workspace has {} services, {} tier limit is {}",
-                    svc_count, tier, limits.max_services
-                ),
-            ));
+            if svc_count >= crate::quota::MAX_SERVICES_PER_WORKSPACE {
+                return Err(ApiError::unprocessable(
+                    "service_limit_exceeded",
+                    format!(
+                        "workspace has {} services, limit is {}",
+                        svc_count, crate::quota::MAX_SERVICES_PER_WORKSPACE
+                    ),
+                ));
+            }
         }
 
         let active_slug: bool = check_txn
@@ -313,11 +319,20 @@ pub async fn deploy_service(
     .await
     .map_err(|_| ApiError::internal("old service cleanup failed"))?;
 
+    let (metal_tier_id, monthly_price_cents): (Option<&str>, Option<i32>) =
+        if let Some(spec) = metal_tier_spec {
+            (Some(spec.id), Some(spec.price_cents as i32))
+        } else {
+            (None, None)
+        };
+
     txn.execute(
         "INSERT INTO services \
          (id, project_id, workspace_id, name, slug, engine, status, \
-          artifact_key, commit_sha, vcpu, memory_mb, port) \
-         VALUES ($1, $2, $3, $4, $5, $6, 'provisioning', $7, $8, $9, $10, $11)",
+          artifact_key, commit_sha, vcpu, memory_mb, port, \
+          metal_tier, monthly_price_cents, billing_cycle_start) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'provisioning', $7, $8, $9, $10, $11, \
+                 $12, $13, CASE WHEN $6 = 'metal' THEN NOW() ELSE NULL END)",
         &[
             &service_id,
             &pid,
@@ -330,6 +345,8 @@ pub async fn deploy_service(
             &vcpu_i,
             &memory_mb_i,
             &port_i,
+            &metal_tier_id,
+            &monthly_price_cents,
         ],
     )
     .await
@@ -337,6 +354,33 @@ pub async fn deploy_service(
         tracing::error!(error = %e, "service insert failed");
         ApiError::internal("failed to create service")
     })?;
+
+    // Charge first month immediately for Metal services.
+    if let Some(price) = monthly_price_cents {
+        let cost_microcredits = price as i64 * 10_000; // cents to micro-credits
+        txn.execute(
+            "UPDATE workspaces SET balance = balance - $1 WHERE id = $2",
+            &[&cost_microcredits, &wid],
+        ).await.map_err(|e| {
+            tracing::error!(error = %e, "first month charge failed");
+            ApiError::internal("failed to charge first month")
+        })?;
+
+        txn.execute(
+            "INSERT INTO credit_ledger (id, workspace_id, amount, kind, description, balance_after) \
+             VALUES ($1, $2, $3, 'metal_monthly', $4, \
+                     (SELECT balance FROM workspaces WHERE id = $2))",
+            &[
+                &uuid::Uuid::now_v7(),
+                &wid,
+                &(-cost_microcredits),
+                &format!("Metal {} first month", metal_tier_id.unwrap_or("unknown")),
+            ],
+        ).await.map_err(|e| {
+            tracing::error!(error = %e, "ledger insert failed");
+            ApiError::internal("failed to record billing")
+        })?;
+    }
 
     let event = common::ProvisionEvent {
         tenant_id: wid.to_string(),

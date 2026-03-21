@@ -50,9 +50,6 @@ pub struct AppState {
     pub stripe: Option<stripe::StripeClient>,
     /// Stripe webhook signing secret.
     pub stripe_webhook_secret: Option<String>,
-    /// Stripe Price IDs for Pro and Team subscriptions.
-    pub stripe_price_pro:  Option<String>,
-    pub stripe_price_team: Option<String>,
 }
 
 /// Rate limit configuration, built from env vars in `main.rs`.
@@ -105,7 +102,6 @@ pub struct RateLimitConfig {
         billing::get_usage,
         billing::get_ledger,
         billing::create_topup,
-        billing::create_subscription,
         // Webhooks
         billing::stripe_webhook,
     ),
@@ -138,12 +134,9 @@ pub struct RateLimitConfig {
         common::contract::CreateInvitesRequest,
         common::contract::CreateInvitesResponse,
         common::contract::TopupRequest,
-        common::contract::SubscribeRequest,
         common::contract::CheckoutResponse,
         common::contract::BalanceResponse,
-        common::contract::PlanInfo,
         common::contract::UsageResponse,
-        common::contract::MetalUsage,
         common::contract::LiquidUsage,
         common::contract::LedgerResponse,
         common::contract::LedgerEntry,
@@ -253,7 +246,6 @@ pub fn build_router(state: Arc<AppState>, rl: RateLimitConfig) -> Router {
         .route("/billing/usage",     get(billing::get_usage))
         .route("/billing/ledger",    get(billing::get_ledger))
         .route("/billing/topup",     post(billing::create_topup))
-        .route("/billing/subscribe", post(billing::create_subscription))
         .route("/api-keys",          get(routes::list_api_keys).post(routes::create_api_key))
         .route("/api-keys/{id}",     delete(routes::delete_api_key))
         .route_layer(middleware::from_fn(move |req, next| {

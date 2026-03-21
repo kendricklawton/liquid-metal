@@ -52,7 +52,7 @@ async fn provision_rejects_wrong_secret() {
     let body = json!({ "email": "wrong@example.com", "first_name": "A", "last_name": "B" });
     let req = h.post_json("/auth/provision", &body);
     // No valid secret → the route requires X-Internal-Secret
-    h.send_expect(req, StatusCode::FORBIDDEN).await;
+    h.send_expect(req, StatusCode::UNAUTHORIZED).await;
 }
 
 #[tokio::test]
@@ -61,7 +61,7 @@ async fn provision_rejects_missing_secret() {
     let h = harness!();
     let body = json!({ "email": "test@example.com", "first_name": "A", "last_name": "B" });
     // post_json doesn't attach internal secret
-    h.send_expect(h.post_json("/auth/provision", &body), StatusCode::FORBIDDEN).await;
+    h.send_expect(h.post_json("/auth/provision", &body), StatusCode::UNAUTHORIZED).await;
 }
 
 #[tokio::test]
@@ -76,7 +76,7 @@ async fn provision_creates_user_and_is_idempotent() {
     let id = v1["id"].as_str().expect("id should be present");
     assert!(!id.is_empty());
     assert_eq!(v1["name"], "Alice Smith");
-    assert!(v1["slug"].as_str().unwrap().ends_with("-workspace"));
+    assert!(v1["slug"].as_str().unwrap().contains("-workspace-"), "slug should contain '-workspace-' followed by uid suffix");
     assert_eq!(v1["tier"], "hobby");
 
     // Second call: idempotent — same user_id returned
@@ -372,15 +372,15 @@ async fn scale_nonexistent_service_returns_404() {
 
 #[tokio::test]
 #[ignore = "requires DATABASE_URL + NATS_URL"]
-async fn billing_balance_returns_hobby_defaults() {
+async fn billing_balance_returns_zero_for_new_user() {
     let h = harness!();
     let user = h.provision_user().await;
 
     let body = h.send_ok(h.authed_get("/billing/balance", user.api_key())).await;
-    assert_eq!(body["tier"], "hobby");
-    // Hobby tier should have some included credits
-    assert!(body["total_credits"].as_i64().is_some());
-    assert!(body["plan"]["max_services"].as_i64().unwrap() > 0);
+    // New user starts with zero balance (top-up to add credits)
+    assert_eq!(body["balance"].as_i64().unwrap(), 0);
+    assert_eq!(body["free_invocations_used"].as_i64().unwrap(), 0);
+    assert_eq!(body["free_invocations_limit"].as_i64().unwrap(), 1_000_000);
 }
 
 #[tokio::test]
@@ -390,9 +390,8 @@ async fn billing_usage_returns_zero_for_new_user() {
     let user = h.provision_user().await;
 
     let body = h.send_ok(h.authed_get("/billing/usage", user.api_key())).await;
-    assert_eq!(body["metal"]["vcpu_minutes"], 0);
-    assert_eq!(body["liquid"]["invocations"], 0);
-    assert_eq!(body["total_cost_microcredits"], 0);
+    assert_eq!(body["metal_monthly_total_cents"].as_i64().unwrap(), 0);
+    assert_eq!(body["liquid"]["invocations"].as_i64().unwrap(), 0);
 }
 
 #[tokio::test]
@@ -402,7 +401,6 @@ async fn billing_ledger_returns_entries() {
     let user = h.provision_user().await;
 
     let body = h.send_ok(h.authed_get("/billing/ledger?limit=10", user.api_key())).await;
-    // New user may have an initial credit entry from provisioning
     assert!(body["entries"].is_array());
 }
 
@@ -416,6 +414,8 @@ async fn workspace_isolation_services_are_scoped() {
     let h = harness!();
     let user_a = h.provision_user().await;
     let user_b = h.provision_user().await;
+    assert_ne!(user_a.workspace_id, user_b.workspace_id,
+        "users must have distinct workspaces: A={} B={}", user_a.workspace_id, user_b.workspace_id);
 
     // Deploy a service under user A
     let svc_name = format!("iso-{}", &user_a.id[..8]);
@@ -467,6 +467,8 @@ async fn workspace_isolation_stop_rejected_for_other_user() {
     let h = harness!();
     let user_a = h.provision_user().await;
     let user_b = h.provision_user().await;
+    assert_ne!(user_a.workspace_id, user_b.workspace_id,
+        "users must have distinct workspaces: A={} B={}", user_a.workspace_id, user_b.workspace_id);
     let svc_name = format!("xiso-{}", &user_a.id[..8]);
     let service_id = h.deploy_service(&user_a, &svc_name).await;
 
@@ -486,6 +488,8 @@ async fn workspace_isolation_delete_rejected_for_other_user() {
     let h = harness!();
     let user_a = h.provision_user().await;
     let user_b = h.provision_user().await;
+    assert_ne!(user_a.workspace_id, user_b.workspace_id,
+        "users must have distinct workspaces: A={} B={}", user_a.workspace_id, user_b.workspace_id);
     let svc_name = format!("xdel-{}", &user_a.id[..8]);
     let service_id = h.deploy_service(&user_a, &svc_name).await;
 
@@ -505,6 +509,8 @@ async fn workspace_isolation_env_vars_rejected_for_other_user() {
     let h = harness!();
     let user_a = h.provision_user().await;
     let user_b = h.provision_user().await;
+    assert_ne!(user_a.workspace_id, user_b.workspace_id,
+        "users must have distinct workspaces: A={} B={}", user_a.workspace_id, user_b.workspace_id);
     let svc_name = format!("xenv-{}", &user_a.id[..8]);
     let service_id = h.deploy_service(&user_a, &svc_name).await;
 
@@ -537,6 +543,8 @@ async fn workspace_isolation_domains_rejected_for_other_user() {
     let h = harness!();
     let user_a = h.provision_user().await;
     let user_b = h.provision_user().await;
+    assert_ne!(user_a.workspace_id, user_b.workspace_id,
+        "users must have distinct workspaces: A={} B={}", user_a.workspace_id, user_b.workspace_id);
     let svc_name = format!("xdom-{}", &user_a.id[..8]);
     let service_id = h.deploy_service(&user_a, &svc_name).await;
 
@@ -591,18 +599,20 @@ async fn service_lifecycle_stop_restart_delete() {
     )).await;
     let service_id = deploy_resp["service"]["id"].as_str().unwrap();
 
-    // Stop
-    let stop_resp = h.send_ok(
+    // Stop (204 No Content)
+    h.send_expect(
         h.authed_post_empty(&format!("/services/{}/stop", service_id), user.api_key()),
+        StatusCode::NO_CONTENT,
     ).await;
-    assert_eq!(stop_resp["status"].as_str().unwrap_or(""), "stopped");
 
-    // Restart
+    // Restart — API accepts the request and queues a new provision.
+    // Status will be "provisioning" (no daemon in tests to complete it).
     let restart_resp = h.send_ok(
         h.authed_post_empty(&format!("/services/{}/restart", service_id), user.api_key()),
     ).await;
-    // After restart, status should not be "stopped"
-    assert_ne!(restart_resp["status"].as_str().unwrap_or("stopped"), "stopped");
+    let restart_status = restart_resp["service"]["status"].as_str().unwrap_or("");
+    assert_eq!(restart_status, "provisioning",
+        "restart should set status to provisioning, got {restart_status}");
 
     // Delete
     let delete_resp = h.send_ok(
@@ -670,11 +680,11 @@ async fn domain_add_list_remove() {
     let domains = list_resp.as_array().unwrap();
     assert!(domains.iter().any(|d| d["domain"].as_str() == Some(domain.as_str())));
 
-    // Remove domain
-    h.send_ok(h.authed_post_empty(
+    // Remove domain (204 No Content)
+    h.send_expect(h.authed_post_empty(
         &format!("/services/{}/domains/{}/remove", service_id, domain),
         user.api_key(),
-    )).await;
+    ), StatusCode::NO_CONTENT).await;
 
     // Verify removed
     let list_after = h.send_ok(

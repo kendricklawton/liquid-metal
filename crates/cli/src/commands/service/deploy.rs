@@ -87,6 +87,7 @@ pub async fn run(config: &Config, output: OutputMode, skip_elf_check: bool) -> R
                 artifact_key: url_resp.artifact_key.clone(),
                 sha256: build_result.sha256_hex.clone(),
                 port: cfg.service.port,
+                tier: cfg.service.tier.clone(),
             },
         )
         .await?;

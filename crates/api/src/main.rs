@@ -120,9 +120,6 @@ async fn main() -> Result<()> {
     let stripe = std::env::var("STRIPE_SECRET_KEY").ok()
         .map(|key| api::stripe::StripeClient::new(key, http_client.clone()));
     let stripe_webhook_secret = std::env::var("STRIPE_WEBHOOK_SECRET").ok();
-    let stripe_price_pro  = std::env::var("STRIPE_PRICE_ID_PRO").ok();
-    let stripe_price_team = std::env::var("STRIPE_PRICE_ID_TEAM").ok();
-
     if stripe.is_some() {
         tracing::info!("Stripe billing enabled");
     } else {
@@ -168,8 +165,6 @@ async fn main() -> Result<()> {
         vault,
         stripe,
         stripe_webhook_secret,
-        stripe_price_pro,
-        stripe_price_team,
     });
 
     // ── Outbox poller ────────────────────────────────────────────────────────
@@ -179,9 +174,7 @@ async fn main() -> Result<()> {
     tokio::spawn(api::cert_manager::run(state.clone()));
 
     // ── Billing background tasks ───────────────────────────────────────────
-    tokio::spawn(api::billing::usage_subscriber(state.clone()));
-    tokio::spawn(api::billing::billing_aggregator(state.clone()));
-    tokio::spawn(api::billing::monthly_credit_reset(state.clone()));
+    api::billing::spawn_billing_tasks(state.clone());
 
     // ── Stuck provisioning watchdog ──────────────────────────────────────────
     // Marks services stuck in 'provisioning' for longer than the threshold as 'failed'.

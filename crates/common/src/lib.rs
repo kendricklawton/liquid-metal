@@ -4,6 +4,7 @@ pub mod contract;
 pub mod events;
 pub mod features;
 pub mod networking;
+pub mod pricing;
 pub mod vault;
 
 pub use events::{Engine, EngineSpec, LiquidSpec, MetalSpec, ProvisionEvent};
