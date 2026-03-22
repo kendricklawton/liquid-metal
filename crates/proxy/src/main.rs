@@ -18,6 +18,47 @@ fn main() -> Result<()> {
         .install_default()
         .expect("rustls CryptoProvider already installed");
 
+    // ── Prometheus metrics ───────────────────────────────────────────────────
+    let metrics_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+        .install_recorder()
+        .context("installing metrics recorder")?;
+    let metrics_bind = env_or("PROXY_METRICS_BIND_ADDR", "0.0.0.0:9091");
+    {
+        let bind = metrics_bind.clone();
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!(error = %e, "metrics server: failed to create runtime");
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let listener = match tokio::net::TcpListener::bind(&bind).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        tracing::error!(error = %e, %bind, "metrics server: failed to bind");
+                        return;
+                    }
+                };
+                tracing::info!(%bind, "proxy metrics server listening");
+                let app = axum::Router::new().route(
+                    "/metrics",
+                    axum::routing::get(move || {
+                        let h = metrics_handle.clone();
+                        async move { h.render() }
+                    }),
+                );
+                if let Err(e) = axum::serve(listener, app).await {
+                    tracing::error!(error = %e, "proxy metrics server exited");
+                }
+            });
+        });
+    }
+
     let db_url            = require_env("DATABASE_URL")?;
     let nats_url          = env_or("NATS_URL",     "nats://127.0.0.1:4222");
     let api_upstream      = env_or("API_UPSTREAM", "127.0.0.1:3000");
@@ -156,6 +197,6 @@ fn main() -> Result<()> {
     tls_svc.add_tls_with_settings(&tls_bind_addr, None, tls_settings);
     server.add_service(tls_svc);
 
-    tracing::info!(%tls_bind_addr, "liquid-metal-proxy listening");
+    tracing::info!(%tls_bind_addr, %metrics_bind, "liquid-metal-proxy listening");
     server.run_forever();
 }

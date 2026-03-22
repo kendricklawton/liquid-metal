@@ -79,6 +79,8 @@ pub struct RequestCtx {
     /// Set when routing to a Metal service. Used by `logging()` to measure
     /// request duration for GB-sec billing.
     metal_start: Option<Instant>,
+    /// Tracks wall-clock duration for Prometheus histogram.
+    request_start: Option<Instant>,
     /// Held for the request's lifetime — released when `logging()` runs.
     /// Limits per-service concurrency.
     _concurrency_permit: Option<tokio::sync::OwnedSemaphorePermit>,
@@ -105,7 +107,7 @@ pub struct MachineRouter {
 impl ProxyHttp for MachineRouter {
     type CTX = RequestCtx;
     fn new_ctx(&self) -> RequestCtx {
-        RequestCtx { slug: None, metal_start: None, _concurrency_permit: None }
+        RequestCtx { slug: None, metal_start: None, request_start: None, _concurrency_permit: None }
     }
 
     async fn upstream_peer(
@@ -113,6 +115,7 @@ impl ProxyHttp for MachineRouter {
         session: &mut Session,
         ctx: &mut RequestCtx,
     ) -> Result<Box<HttpPeer>> {
+        ctx.request_start = Some(Instant::now());
         let host = session
             .get_header("Host")
             .and_then(|h| h.to_str().ok())
@@ -203,17 +206,20 @@ impl ProxyHttp for MachineRouter {
         ctx._concurrency_permit = self.try_acquire_concurrency(&slug);
         if ctx._concurrency_permit.is_none() {
             warn!(%slug, max = *MAX_CONCURRENT_PER_SERVICE, "service at concurrency limit — returning 503");
+            metrics::counter!("proxy_concurrency_exhausted_total", "slug" => slug.clone()).increment(1);
             return Err(Error::new(pingora::ErrorType::HTTPStatus(503)));
         }
 
         // Fast path: in-memory cache hit — no DB round-trip.
         if let Some(addr) = self.cache.read().unwrap_or_else(|e| e.into_inner()).get(&slug).cloned() {
             debug!(%slug, addr, "routing (cache)");
+            metrics::counter!("proxy_cache_hits_total").increment(1);
             if self.try_count_metal(&slug) {
                 ctx.metal_start = Some(Instant::now());
             }
             return Ok(Self::make_peer(addr));
         }
+        metrics::counter!("proxy_cache_misses_total").increment(1);
 
         // Slow path: DB lookup, then populate cache for subsequent requests.
         let addr = match lookup_route(&self.pool, &slug).await {
@@ -240,12 +246,14 @@ impl ProxyHttp for MachineRouter {
                     match self.wait_for_warm(&slug).await {
                         Some(addr) => {
                             info!(%slug, %addr, "service woke from snapshot");
+                            metrics::counter!("proxy_wake_total", "outcome" => "success").increment(1);
                             self.count_metal_invocation(&slug, &record.service_id, &record.workspace_id);
                             ctx.metal_start = Some(Instant::now());
                             addr
                         }
                         None => {
                             warn!(%slug, "wake timeout — service did not start within {}ms", *WAKE_TIMEOUT_MS);
+                            metrics::counter!("proxy_wake_total", "outcome" => "timeout").increment(1);
                             return Err(Error::new(pingora::ErrorType::HTTPStatus(503)));
                         }
                     }
@@ -269,8 +277,25 @@ impl ProxyHttp for MachineRouter {
     }
 
     /// Called after the full request/response cycle completes.
-    /// Records Metal request duration for GB-sec billing.
-    async fn logging(&self, _session: &mut Session, _e: Option<&Error>, ctx: &mut RequestCtx) {
+    /// Records Metal request duration for GB-sec billing and Prometheus metrics.
+    async fn logging(&self, session: &mut Session, _e: Option<&Error>, ctx: &mut RequestCtx) {
+        let slug_label = ctx.slug.clone().unwrap_or_default();
+
+        // Prometheus: request duration histogram.
+        if let Some(start) = ctx.request_start.take() {
+            let elapsed = start.elapsed().as_secs_f64();
+            metrics::histogram!("proxy_request_duration_seconds", "slug" => slug_label.clone())
+                .record(elapsed);
+        }
+
+        // Prometheus: request counter with status code.
+        let status = session.response_written()
+            .map(|r| r.status.as_u16().to_string())
+            .unwrap_or_else(|| "0".to_string());
+        metrics::counter!("proxy_requests_total", "slug" => slug_label.clone(), "status" => status)
+            .increment(1);
+
+        // Metal billing: accumulate duration for NATS usage events.
         if let (Some(start), Some(slug)) = (ctx.metal_start.take(), ctx.slug.as_ref()) {
             let elapsed_ms = start.elapsed().as_millis() as u64;
             let counters = self.metal_counters.read().unwrap_or_else(|e| e.into_inner());
@@ -294,6 +319,7 @@ impl ProxyHttp for MachineRouter {
         if let Some(slug) = &ctx.slug {
             warn!(slug, error = %e, "upstream connect failed — evicting route cache");
             self.cache.write().unwrap_or_else(|e| e.into_inner()).remove(slug);
+            metrics::counter!("proxy_upstream_errors_total", "slug" => slug.clone()).increment(1);
         }
         e
     }

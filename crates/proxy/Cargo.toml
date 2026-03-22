@@ -27,3 +27,6 @@ reqwest            = { version = "0.12", default-features = false, features = ["
 rustls             = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+metrics                    = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+axum                       = { workspace = true }

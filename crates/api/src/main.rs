@@ -236,12 +236,12 @@ async fn main() -> Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
-            *shutdown_instant_clone.lock().unwrap() = Some(std::time::Instant::now());
+            *shutdown_instant_clone.lock().expect("shutdown mutex poisoned") = Some(std::time::Instant::now());
         })
         .await?;
     let drain_ms = shutdown_instant
         .lock()
-        .unwrap()
+        .expect("shutdown mutex poisoned")
         .map(|t| t.elapsed().as_millis())
         .unwrap_or(0);
     tracing::info!(drain_ms, "api exited cleanly — in-flight requests drained");

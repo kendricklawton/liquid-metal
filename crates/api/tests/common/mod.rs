@@ -17,6 +17,7 @@ use tower::ServiceExt;
 pub struct TestHarness {
     app: Router,
     internal_secret: String,
+    pub pool: deadpool_postgres::Pool,
 }
 
 impl TestHarness {
@@ -82,9 +83,10 @@ impl TestHarness {
             bff: api::rate_limit::UserRateLimit::per_minute(1000),
         };
 
+        let pool_clone = state.db.clone();
         let app = build_router(state.clone(), rate_limits);
 
-        Some(Self { app, internal_secret })
+        Some(Self { app, internal_secret, pool: pool_clone })
     }
 
     // ── Request Builders ────────────────────────────────────────────────────

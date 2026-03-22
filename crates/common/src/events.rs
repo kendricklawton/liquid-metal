@@ -68,6 +68,10 @@ pub const SUBJECT_SERVICE_CRASHED: &str = "platform.service_crashed";
 /// Consumed by the daemon to suspend all running services for that workspace.
 pub const SUBJECT_SUSPEND: &str = "platform.suspend";
 
+/// Published by the API when a suspended workspace's balance is restored (top-up).
+/// Consumed by the daemon to re-provision all suspended services for that workspace.
+pub const SUBJECT_UNSUSPEND: &str = "platform.unsuspend";
+
 /// JetStream durable. Published by the proxy when a request arrives for a cold service
 /// (status='ready', snapshot exists). Consumed by the daemon to restore the VM from snapshot.
 pub const SUBJECT_WAKE: &str = "platform.wake";
@@ -175,6 +179,13 @@ pub struct ServiceCrashedEvent {
 pub struct SuspendEvent {
     pub workspace_id: String,
     pub reason:       String,
+}
+
+/// Published by the API when a suspended workspace regains positive balance
+/// after a top-up. Daemon re-provisions all suspended services for that workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnsuspendEvent {
+    pub workspace_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

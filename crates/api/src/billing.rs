@@ -36,12 +36,12 @@ use futures::StreamExt;
 
 use common::events::{
     LiquidUsageEvent, MetalUsageEvent, SuspendEvent,
-    SUBJECT_SUSPEND, SUBJECT_USAGE_LIQUID, SUBJECT_USAGE_METAL,
+    SUBJECT_PROVISION, SUBJECT_SUSPEND, SUBJECT_USAGE_LIQUID, SUBJECT_USAGE_METAL,
 };
 use common::pricing::{FREE_LIQUID_INVOCATIONS, LIQUID_PRICE_PER_MILLION};
 
 use common::contract;
-use crate::routes;
+use crate::{envelope, routes};
 
 use crate::AppState;
 use crate::routes::{ApiError, db_conn};
@@ -201,7 +201,10 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
         if billable > 0 {
             let cost = billable * LIQUID_PRICE_PER_MILLION / 1_000_000;
             if cost > 0 {
-                deduct_balance(&txn, &wid, cost, "usage_liquid", "Wasm invocations").await?;
+                let balance_after = deduct_balance(&txn, &wid, cost, "usage_liquid", "Wasm invocations").await?;
+                if balance_after <= 0 {
+                    insert_suspend_outbox(&txn, &wid).await?;
+                }
             }
         }
 
@@ -212,9 +215,6 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
     }
 
     txn.commit().await.context("billing aggregator commit")?;
-
-    // Check for zero-balance workspaces and publish SuspendEvents.
-    check_suspensions(state).await?;
 
     Ok(())
 }
@@ -260,8 +260,11 @@ async fn metal_billing_once(state: &AppState) -> Result<()> {
         let cost = monthly_price_cents * MICROCREDITS_PER_CENT;
 
         if cost > 0 {
-            deduct_balance(&txn, &workspace_id, cost, "metal_monthly",
+            let balance_after = deduct_balance(&txn, &workspace_id, cost, "metal_monthly",
                 &format!("Metal monthly (service {})", service_id)).await?;
+            if balance_after <= 0 {
+                insert_suspend_outbox(&txn, &workspace_id).await?;
+            }
         }
 
         // Advance billing_cycle_start by 30 days.
@@ -281,9 +284,6 @@ async fn metal_billing_once(state: &AppState) -> Result<()> {
     }
 
     txn.commit().await.context("metal billing cycle commit")?;
-
-    // Check for zero-balance workspaces after Metal charges.
-    check_suspensions(state).await?;
 
     Ok(())
 }
@@ -336,7 +336,7 @@ async fn deduct_balance(
     cost: i64,
     kind: &str,
     description: &str,
-) -> Result<()> {
+) -> Result<i64> {
     // Deduct and return new balance in one round-trip.
     let row = txn.query_one(
         "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
@@ -354,33 +354,145 @@ async fn deduct_balance(
         &[workspace_id, &(-cost), &kind, &description, &balance_after],
     ).await.context("insert credit ledger")?;
 
+    Ok(balance_after)
+}
+
+/// Insert a SuspendEvent into the outbox table within the same transaction as
+/// the billing charge. The outbox poller publishes to NATS, ensuring the event
+/// is not lost even if NATS is temporarily down.
+async fn insert_suspend_outbox(
+    txn: &deadpool_postgres::Transaction<'_>,
+    workspace_id: &uuid::Uuid,
+) -> Result<()> {
+    // Only enqueue if the workspace still has active services to suspend.
+    let has_active: bool = txn.query_one(
+        "SELECT EXISTS(SELECT 1 FROM services WHERE workspace_id = $1 \
+         AND status IN ('running', 'provisioning') AND deleted_at IS NULL) AS active",
+        &[workspace_id],
+    ).await.context("check active services")?.get("active");
+
+    if !has_active {
+        return Ok(());
+    }
+
+    let event = SuspendEvent {
+        workspace_id: workspace_id.to_string(),
+        reason: "balance depleted".to_string(),
+    };
+    let payload = serde_json::to_value(&event).context("serialize SuspendEvent")?;
+    txn.execute(
+        "INSERT INTO outbox (subject, payload) VALUES ($1, $2)",
+        &[&SUBJECT_SUSPEND, &payload],
+    ).await.context("insert suspend outbox")?;
+
+    tracing::warn!(target: "audit", workspace_id = %workspace_id, action = "suspend_queued", "billing: workspace queued for suspension — balance depleted");
     Ok(())
 }
 
-/// Find workspaces with zero or negative balance and running services, publish SuspendEvent.
-async fn check_suspensions(state: &AppState) -> Result<()> {
-    let db = state.db.get().await.context("db pool")?;
+/// Re-provision all suspended services for a workspace by inserting
+/// ProvisionEvents into the outbox. Uses the existing daemon provision
+/// pipeline — no special daemon-side unsuspend handler needed.
+async fn enqueue_unsuspend(
+    state: &AppState,
+    txn: &deadpool_postgres::Transaction<'_>,
+    workspace_id: uuid::Uuid,
+) -> Result<(), ApiError> {
+    // Query suspended services + latest deployment artifact for each.
+    let rows = txn.query(
+        "SELECT s.id, s.slug, s.name, s.engine, s.port, s.vcpu, s.memory_mb, \
+                s.workspace_id, s.project_id, \
+                d.artifact_key \
+         FROM services s \
+         LEFT JOIN LATERAL ( \
+             SELECT artifact_key \
+             FROM deployments \
+             WHERE service_id = s.id \
+             ORDER BY created_at DESC \
+             LIMIT 1 \
+         ) d ON true \
+         WHERE s.workspace_id = $1 AND s.status = 'suspended' AND s.deleted_at IS NULL",
+        &[&workspace_id],
+    ).await.map_err(|e| ApiError::internal(format!("unsuspend query: {e}")))?;
 
-    let rows = db.query(
-        "SELECT DISTINCT w.id \
-         FROM workspaces w \
-         JOIN services s ON s.workspace_id = w.id \
-         WHERE w.balance <= 0 \
-           AND s.status IN ('running', 'provisioning') \
-           AND s.deleted_at IS NULL \
-           AND w.deleted_at IS NULL",
-        &[],
-    ).await.context("check suspensions")?;
+    if rows.is_empty() {
+        return Ok(());
+    }
 
     for row in &rows {
-        let wid: uuid::Uuid = row.get(0);
-        let event = SuspendEvent {
-            workspace_id: wid.to_string(),
-            reason: "balance depleted".to_string(),
+        let service_id: uuid::Uuid = row.get("id");
+        let slug: String = row.get("slug");
+        let name: String = row.get("name");
+        let engine_str: String = row.get("engine");
+        let port: i32 = row.get("port");
+        let vcpu: i32 = row.get("vcpu");
+        let memory_mb: i32 = row.get("memory_mb");
+        let wid: uuid::Uuid = row.get("workspace_id");
+        let artifact_key: Option<String> = row.get("artifact_key");
+
+        let Some(artifact_key) = artifact_key else {
+            tracing::warn!(%service_id, "unsuspend: no deployment found — skipping");
+            continue;
         };
-        let payload = serde_json::to_vec(&event)?;
-        state.nats_client.publish(SUBJECT_SUSPEND, payload.into()).await?;
-        tracing::warn!(target: "audit", workspace_id = %wid, action = "suspend", "billing: workspace suspended — balance depleted");
+
+        let engine = match engine_str.as_str() {
+            "metal" => common::Engine::Metal,
+            "liquid" => common::Engine::Liquid,
+            other => {
+                tracing::warn!(engine = other, %service_id, "unsuspend: unknown engine — skipping");
+                continue;
+            }
+        };
+
+        let engine_spec = match engine {
+            common::Engine::Metal => common::EngineSpec::Metal(common::MetalSpec {
+                vcpu: vcpu as u32,
+                memory_mb: memory_mb as u32,
+                port: port as u16,
+                artifact_key: artifact_key.clone(),
+                artifact_sha256: None,
+                quota: state.default_quota.clone(),
+            }),
+            common::Engine::Liquid => common::EngineSpec::Liquid(common::LiquidSpec {
+                artifact_key: artifact_key.clone(),
+                artifact_sha256: None,
+            }),
+        };
+
+        // Merge env vars: project → service (same as deploy flow).
+        let pid: uuid::Uuid = row.get("project_id");
+        let mut env_vars = envelope::read_project_env_vars(&state.vault, wid, pid)
+            .await
+            .unwrap_or_default();
+        let service_env = envelope::read_env_vars(&state.vault, wid, service_id)
+            .await
+            .unwrap_or_default();
+        env_vars.extend(service_env);
+
+        let event = common::ProvisionEvent {
+            tenant_id: wid.to_string(),
+            service_id: service_id.to_string(),
+            app_name: name,
+            slug,
+            engine,
+            spec: engine_spec,
+            env_vars,
+        };
+
+        let payload = serde_json::to_value(&event)
+            .map_err(|e| ApiError::internal(format!("serialize provision: {e}")))?;
+
+        // Mark as provisioning + insert outbox event in the same transaction.
+        txn.execute(
+            "UPDATE services SET status = 'provisioning', updated_at = NOW() WHERE id = $1",
+            &[&service_id],
+        ).await.map_err(|e| ApiError::internal(format!("mark provisioning: {e}")))?;
+
+        txn.execute(
+            "INSERT INTO outbox (subject, payload) VALUES ($1, $2)",
+            &[&SUBJECT_PROVISION, &payload],
+        ).await.map_err(|e| ApiError::internal(format!("unsuspend outbox: {e}")))?;
+
+        tracing::info!(target: "audit", action = "unsuspend_provision", %service_id, %workspace_id, "service queued for re-provision after top-up");
     }
 
     Ok(())
@@ -422,6 +534,16 @@ pub async fn stripe_webhook(
     match event.event_type.as_str() {
         "checkout.session.completed" => {
             handle_checkout_completed(&state, &event.data.object).await?;
+        }
+        "checkout.session.expired" => {
+            let session_id = event.data.object.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+            tracing::info!(target: "audit", action = "checkout_expired", session_id, "Stripe checkout session expired");
+        }
+        "charge.refunded" => {
+            handle_charge_refunded(&state, &event.data.object).await?;
+        }
+        "payment_intent.payment_failed" => {
+            handle_payment_failed(&state, &event.data.object).await?;
         }
         other => {
             tracing::debug!(event_type = other, "Stripe webhook: unhandled event type");
@@ -484,28 +606,129 @@ async fn handle_checkout_completed(state: &AppState, object: &serde_json::Value)
     }
 
     // Now safe to credit — we know this session_id is unique.
-    txn.execute(
+    // RETURNING balance + id avoids a separate SELECT round-trip.
+    let row = txn.query_one(
         "UPDATE workspaces SET balance = balance + $1, updated_at = NOW() \
-         WHERE stripe_customer_id = $2 AND deleted_at IS NULL",
+         WHERE stripe_customer_id = $2 AND deleted_at IS NULL \
+         RETURNING id, balance",
         &[&credits, &customer_id],
     ).await.map_err(|e| ApiError::internal(format!("topup: {e}")))?;
-
-    // Patch the ledger row with the real balance_after.
-    let row = txn.query_one(
-        "SELECT balance FROM workspaces WHERE stripe_customer_id = $1",
-        &[&customer_id],
-    ).await.map_err(|e| ApiError::internal(format!("balance query: {e}")))?;
+    let workspace_id: uuid::Uuid = row.get("id");
     let balance_after: i64 = row.get("balance");
 
+    // Patch the ledger row with the real balance_after.
     txn.execute(
         "UPDATE credit_ledger SET balance_after = $1 WHERE stripe_session_id = $2",
         &[&balance_after, &session_id],
     ).await.map_err(|e| ApiError::internal(format!("ledger patch: {e}")))?;
 
+    // If workspace was suspended and now has positive balance, re-provision
+    // all suspended services by inserting ProvisionEvents into the outbox.
+    // The normal daemon provision pipeline handles the rest.
+    if balance_after > 0 {
+        enqueue_unsuspend(state, &txn, workspace_id).await?;
+    }
+
     txn.commit().await.map_err(|e| ApiError::internal(format!("commit: {e}")))?;
 
-    tracing::info!(target: "audit", action = "topup", customer_id, session_id, credits, "top-up credits applied");
+    tracing::info!(target: "audit", action = "topup", customer_id, session_id, credits, %workspace_id, "top-up credits applied");
 
+    Ok(())
+}
+
+async fn handle_charge_refunded(state: &AppState, object: &serde_json::Value) -> Result<(), ApiError> {
+    let amount_refunded = object.get("amount_refunded").and_then(|v| v.as_i64()).unwrap_or(0);
+    if amount_refunded == 0 {
+        return Ok(());
+    }
+
+    let customer_id = object.get("customer").and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::bad_request("invalid_payload", "missing customer in charge.refunded"))?;
+    let charge_id = object.get("id").and_then(|v| v.as_str()).unwrap_or("");
+
+    let credits = amount_refunded * MICROCREDITS_PER_CENT;
+
+    let mut db = db_conn(&state.db).await?;
+    let txn = db.build_transaction().start().await
+        .map_err(|e| ApiError::internal(format!("txn: {e}")))?;
+
+    // Reverse the refund amount from workspace balance.
+    let row = txn.query_one(
+        "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
+         WHERE stripe_customer_id = $2 AND deleted_at IS NULL \
+         RETURNING id, balance",
+        &[&credits, &customer_id],
+    ).await.map_err(|e| ApiError::internal(format!("refund deduct: {e}")))?;
+
+    let workspace_id: uuid::Uuid = row.get("id");
+    let balance_after: i64 = row.get("balance");
+
+    txn.execute(
+        "INSERT INTO credit_ledger (workspace_id, amount, kind, description, reference_id, balance_after) \
+         VALUES ($1, $2, 'refund', 'Stripe refund', $3, $4)",
+        &[&workspace_id, &(-credits), &charge_id, &balance_after],
+    ).await.map_err(|e| ApiError::internal(format!("refund ledger: {e}")))?;
+
+    if balance_after <= 0 {
+        insert_suspend_outbox(&txn, &workspace_id).await
+            .map_err(|e| ApiError::internal(format!("suspend outbox: {e}")))?;
+    }
+
+    txn.commit().await.map_err(|e| ApiError::internal(format!("commit: {e}")))?;
+
+    tracing::info!(target: "audit", action = "refund", customer_id, charge_id, credits, %workspace_id, "Stripe refund applied");
+    Ok(())
+}
+
+async fn handle_payment_failed(state: &AppState, object: &serde_json::Value) -> Result<(), ApiError> {
+    let pi_id = object.get("id").and_then(|v| v.as_str()).unwrap_or("");
+
+    let db = db_conn(&state.db).await?;
+
+    // Check if checkout.session.completed already credited this payment_intent.
+    let row = db.query_opt(
+        "SELECT id, workspace_id, amount FROM credit_ledger \
+         WHERE reference_id = $1 AND kind = 'topup'",
+        &[&pi_id],
+    ).await.map_err(|e| ApiError::internal(format!("ledger lookup: {e}")))?;
+
+    let Some(row) = row else {
+        // No matching credit — checkout.session.completed didn't fire or used a
+        // different payment method that succeeded. Nothing to reverse.
+        tracing::info!(target: "audit", action = "payment_failed_no_match", payment_intent = pi_id, "payment failed — no matching credit to reverse");
+        return Ok(());
+    };
+
+    let workspace_id: uuid::Uuid = row.get("workspace_id");
+    let original_amount: i64 = row.get("amount"); // positive (was a credit)
+
+    // Reverse the credited amount.
+    let mut db = db_conn(&state.db).await?;
+    let txn = db.build_transaction().start().await
+        .map_err(|e| ApiError::internal(format!("txn: {e}")))?;
+
+    let row = txn.query_one(
+        "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
+         WHERE id = $2 \
+         RETURNING balance",
+        &[&original_amount, &workspace_id],
+    ).await.map_err(|e| ApiError::internal(format!("reverse credit: {e}")))?;
+    let balance_after: i64 = row.get("balance");
+
+    txn.execute(
+        "INSERT INTO credit_ledger (workspace_id, amount, kind, description, reference_id, balance_after) \
+         VALUES ($1, $2, 'refund', 'payment failed — credit reversed', $3, $4)",
+        &[&workspace_id, &(-original_amount), &pi_id, &balance_after],
+    ).await.map_err(|e| ApiError::internal(format!("reversal ledger: {e}")))?;
+
+    if balance_after <= 0 {
+        insert_suspend_outbox(&txn, &workspace_id).await
+            .map_err(|e| ApiError::internal(format!("suspend outbox: {e}")))?;
+    }
+
+    txn.commit().await.map_err(|e| ApiError::internal(format!("commit: {e}")))?;
+
+    tracing::warn!(target: "audit", action = "payment_failed_reversed", payment_intent = pi_id, %workspace_id, reversed = original_amount, "payment failed — credit reversed");
     Ok(())
 }
 
@@ -548,35 +771,25 @@ pub async fn get_usage(
     let wid = extract_workspace_id(&state, caller.user_id).await?;
     let db = db_conn(&state.db).await?;
 
-    // Metal: sum of monthly_price_cents for all running Metal services in this workspace.
-    let metal_row = db.query_one(
-        "SELECT COALESCE(SUM(monthly_price_cents), 0) AS total_cents \
-         FROM services \
-         WHERE workspace_id = $1 AND engine = 'metal' \
-           AND status IN ('running', 'provisioning') \
-           AND deleted_at IS NULL",
+    // Single query: metal sum (correlated subquery), liquid sum, free_used.
+    let row = db.query_one(
+        "SELECT \
+             COALESCE(w.free_invocations_used, 0) AS free_used, \
+             COALESCE((SELECT SUM(monthly_price_cents) FROM services \
+                       WHERE workspace_id = $1 AND engine = 'metal' \
+                       AND status IN ('running', 'provisioning') \
+                       AND deleted_at IS NULL), 0) AS metal_total, \
+             COALESCE((SELECT SUM(ue.quantity) FROM usage_events ue \
+                       WHERE ue.workspace_id = $1 AND ue.engine = 'liquid' \
+                       AND ue.created_at >= COALESCE(w.free_invocations_reset_at, w.created_at)), 0)::bigint AS liquid_invocations \
+         FROM workspaces w \
+         WHERE w.id = $1",
         &[&wid],
-    ).await.map_err(|e| ApiError::internal(format!("metal usage: {e}")))?;
+    ).await.map_err(|e| ApiError::internal(format!("usage query: {e}")))?;
 
-    let metal_monthly_total_cents: i64 = metal_row.get("total_cents");
-
-    // Liquid: total invocations this billing period (since last free_invocations_reset_at).
-    let liquid_row = db.query_one(
-        "SELECT COALESCE(SUM(ue.quantity), 0)::bigint AS total_invocations \
-         FROM usage_events ue \
-         JOIN workspaces w ON w.id = ue.workspace_id \
-         WHERE ue.workspace_id = $1 AND ue.engine = 'liquid' \
-           AND ue.created_at >= COALESCE(w.free_invocations_reset_at, w.created_at)",
-        &[&wid],
-    ).await.map_err(|e| ApiError::internal(format!("liquid usage: {e}")))?;
-
-    let liquid_invocations: i64 = liquid_row.get("total_invocations");
-
-    // Cost of billable invocations (those beyond the free allowance).
-    let free_used: i64 = db.query_one(
-        "SELECT COALESCE(free_invocations_used, 0) AS free_used FROM workspaces WHERE id = $1",
-        &[&wid],
-    ).await.map_err(|e| ApiError::internal(format!("free used: {e}")))?.get("free_used");
+    let metal_monthly_total_cents: i64 = row.get("metal_total");
+    let liquid_invocations: i64 = row.get("liquid_invocations");
+    let free_used: i64 = row.get("free_used");
 
     let billable = (liquid_invocations - free_used.min(liquid_invocations)).max(0);
     let liquid_cost = billable * LIQUID_PRICE_PER_MILLION / 1_000_000;

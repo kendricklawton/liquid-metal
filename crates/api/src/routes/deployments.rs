@@ -41,7 +41,7 @@ pub async fn get_upload_url(
 
     let row = db
         .query_opt(
-            "SELECT p.workspace_id, wm.role \
+            "SELECT wm.role \
              FROM projects p \
              JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
              WHERE p.id = $1 AND p.deleted_at IS NULL",
@@ -51,7 +51,6 @@ pub async fn get_upload_url(
         .map_err(|_| ApiError::internal("project lookup failed"))?
         .ok_or_else(|| ApiError::not_found("project not found"))?;
 
-    let wid: Uuid = row.get("workspace_id");
     let role: String = row.get("role");
     require_workspace_role(&role, "admin")?;
 
@@ -174,7 +173,7 @@ pub async fn deploy_service(
 
     let engine_spec = match engine {
         common::Engine::Metal => {
-            let spec = metal_tier_spec.unwrap();
+            let spec = metal_tier_spec.expect("set when engine == Metal");
             let port = body.port.unwrap_or(0) as u16;
             if port == 0 {
                 return Err(ApiError::bad_request(
