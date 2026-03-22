@@ -226,6 +226,8 @@ pub fn build_router(state: Arc<AppState>, rl: RateLimitConfig) -> Router {
         .route("/workspaces",             get(routes::list_workspaces))
         .route("/workspaces/{id}",        delete(routes::delete_workspace))
         .route("/projects",               get(routes::list_projects).post(routes::create_project))
+        .route("/projects/{id}/env",       get(routes::get_project_env_vars).post(routes::set_project_env_vars))
+        .route("/projects/{id}/env/unset", post(routes::unset_project_env_vars))
         .route("/services",               get(routes::list_services))
         .route("/services/{id}/logs",      get(routes::get_service_logs))
         .route("/services/{id}/stop",      post(routes::stop_service))

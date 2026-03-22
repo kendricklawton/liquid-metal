@@ -562,7 +562,7 @@ pub async fn get_usage(
 
     // Liquid: total invocations this billing period (since last free_invocations_reset_at).
     let liquid_row = db.query_one(
-        "SELECT COALESCE(SUM(ue.quantity), 0) AS total_invocations \
+        "SELECT COALESCE(SUM(ue.quantity), 0)::bigint AS total_invocations \
          FROM usage_events ue \
          JOIN workspaces w ON w.id = ue.workspace_id \
          WHERE ue.workspace_id = $1 AND ue.engine = 'liquid' \

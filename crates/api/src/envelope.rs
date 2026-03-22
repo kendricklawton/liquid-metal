@@ -51,6 +51,48 @@ pub async fn delete_env_vars(
     vault.kv_delete(&env_path(&workspace_id, &service_id)).await
 }
 
+// ── Project-level env vars ────────────────────────────────────────────────────
+
+/// Vault path for a project's environment variables.
+fn project_env_path(workspace_id: &Uuid, project_id: &Uuid) -> String {
+    format!("workspaces/{workspace_id}/projects/{project_id}/env")
+}
+
+/// Store project-level environment variables in Vault.
+pub async fn store_project_env_vars(
+    vault: &VaultClient,
+    workspace_id: Uuid,
+    project_id: Uuid,
+    vars: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    vault.kv_put(&project_env_path(&workspace_id, &project_id), vars).await
+}
+
+/// Read project-level environment variables from Vault.
+///
+/// Returns an empty map if no project env vars have been set.
+pub async fn read_project_env_vars(
+    vault: &VaultClient,
+    workspace_id: Uuid,
+    project_id: Uuid,
+) -> anyhow::Result<HashMap<String, String>> {
+    vault
+        .kv_get(&project_env_path(&workspace_id, &project_id))
+        .await
+        .map(|opt| opt.unwrap_or_default())
+}
+
+/// Delete all project-level environment variables from Vault.
+pub async fn delete_project_env_vars(
+    vault: &VaultClient,
+    workspace_id: Uuid,
+    project_id: Uuid,
+) -> anyhow::Result<()> {
+    vault.kv_delete(&project_env_path(&workspace_id, &project_id)).await
+}
+
+// ── TLS certs ────────────────────────────────────────────────────────────────
+
 /// Store a TLS certificate and private key PEM in Vault.
 pub async fn store_cert(
     vault: &VaultClient,
@@ -109,5 +151,23 @@ mod tests {
         let wid2 = Uuid::parse_str("660e8400-e29b-41d4-a716-446655440000").unwrap();
         let sid = Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap();
         assert_ne!(env_path(&wid1, &sid), env_path(&wid2, &sid));
+    }
+
+    #[test]
+    fn project_env_path_format() {
+        let wid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let pid = Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap();
+        let path = project_env_path(&wid, &pid);
+        assert_eq!(
+            path,
+            "workspaces/550e8400-e29b-41d4-a716-446655440000/projects/6ba7b810-9dad-11d1-80b4-00c04fd430c8/env"
+        );
+    }
+
+    #[test]
+    fn project_and_service_paths_differ() {
+        let wid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let id = Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap();
+        assert_ne!(env_path(&wid, &id), project_env_path(&wid, &id));
     }
 }

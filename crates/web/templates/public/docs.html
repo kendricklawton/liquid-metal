@@ -34,6 +34,11 @@
       <h3 class="text-sm font-medium mb-1">Configuration</h3>
       <p class="text-xs text-zwl-muted dark:text-zw-muted">liquid-metal.toml and env vars.</p>
     </a>
+    <a href="#multiservice" class="glass-card block p-6 hover:bg-zwl-border/30 dark:hover:bg-zw-border/30 transition-colors">
+      <p class="text-[0.625rem] font-mono font-medium uppercase tracking-wider text-zwl-muted dark:text-zw-muted mb-2">05 /</p>
+      <h3 class="text-sm font-medium mb-1">Multi-Service</h3>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted">Metal + Liquid in the same project.</p>
+    </a>
   </div>
 
   {# ── QUICKSTART ──────────────────────────────────────────────────────── #}
@@ -437,6 +442,112 @@ output = <span class="tok-str">"target/wasm32-wasip1/release/handler.wasm"</span
           <span class="text-zwl-muted dark:text-zw-muted col-span-2">Path to the built artifact (binary or .wasm)</span>
           <span class="text-zwl-muted dark:text-zw-muted">required</span>
         </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── MULTI-SERVICE ──────────────────────────────────────────────────── #}
+  <div id="multiservice" class="mb-20">
+    <p class="lm-label mb-3">// 05 &mdash; multi-service</p>
+    <h2 class="text-2xl font-semibold tracking-tight mb-3">Metal + Liquid</h2>
+    <p class="text-sm text-zwl-muted dark:text-zw-muted mb-8 max-w-xl">Deploy your API on Metal, your webhooks on Liquid, in the same project. Shared config, automatic service discovery.</p>
+
+    {# ── The pattern ─────────────────────────────────────────────────── #}
+    <div class="glass-card p-6 mb-8">
+      <p class="text-xs font-mono font-medium uppercase tracking-wider text-zwl-muted dark:text-zw-muted mb-4">The pattern</p>
+      <div class="grid sm:grid-cols-2 gap-6">
+        <div>
+          <p class="text-sm font-medium mb-2">Metal &mdash; your API</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted mb-3">Always-on. Connects to Postgres, Redis, anything with a socket. Handles auth, sessions, real-time features.</p>
+          <pre class="terminal-panel text-xs p-4 overflow-x-auto"><code><span class="tok-comment"># my-api/liquid-metal.toml</span>
+<span class="tok-yellow">[service]</span>
+<span class="tok-type">name</span> = <span class="tok-str">"my-api"</span>
+<span class="tok-type">engine</span> = <span class="tok-str">"metal"</span>
+<span class="tok-type">port</span> = <span class="tok-str">8080</span>
+<span class="tok-type">tier</span> = <span class="tok-str">"one"</span>
+
+<span class="tok-yellow">[build]</span>
+<span class="tok-type">command</span> = <span class="tok-str">"cargo build --target x86_64-unknown-linux-musl --release"</span>
+<span class="tok-type">output</span> = <span class="tok-str">"target/x86_64-unknown-linux-musl/release/my-api"</span></code></pre>
+        </div>
+        <div>
+          <p class="text-sm font-medium mb-2">Liquid &mdash; your webhooks</p>
+          <p class="text-xs text-zwl-muted dark:text-zw-muted mb-3">Scales to zero. Wakes in under a millisecond. Handles Stripe webhooks, image processing, data transforms.</p>
+          <pre class="terminal-panel text-xs p-4 overflow-x-auto"><code><span class="tok-comment"># my-webhooks/liquid-metal.toml</span>
+<span class="tok-yellow">[service]</span>
+<span class="tok-type">name</span> = <span class="tok-str">"my-webhooks"</span>
+<span class="tok-type">engine</span> = <span class="tok-str">"liquid"</span>
+
+<span class="tok-yellow">[build]</span>
+<span class="tok-type">command</span> = <span class="tok-str">"cargo build --target wasm32-wasip1 --release"</span>
+<span class="tok-type">output</span> = <span class="tok-str">"target/wasm32-wasip1/release/my-webhooks.wasm"</span></code></pre>
+        </div>
+      </div>
+    </div>
+
+    {# ── Shared env vars ─────────────────────────────────────────────── #}
+    <div class="glass-card p-6 mb-8">
+      <p class="text-xs font-mono font-medium uppercase tracking-wider text-zwl-muted dark:text-zw-muted mb-4">Project-level env vars</p>
+      <p class="text-sm text-zwl-muted dark:text-zw-muted mb-4">Set an env var once at the project level. Every service in the project gets it.</p>
+      <pre class="terminal-panel text-xs p-4 overflow-x-auto"><code><span class="tok-comment"># Set shared config for the whole project</span>
+<span class="tok-type">$</span> flux env set --project my-project \
+    DATABASE_URL=postgres://user:pass@db.internal:5432/mydb \
+    STRIPE_SECRET_KEY=sk_live_...
+
+<span class="tok-comment"># Both my-api (Metal) and my-webhooks (Liquid) receive these vars</span>
+<span class="tok-comment"># Service-level vars override project-level vars on collision</span></code></pre>
+    </div>
+
+    {# ── Service discovery ───────────────────────────────────────────── #}
+    <div class="glass-card p-6 mb-8">
+      <p class="text-xs font-mono font-medium uppercase tracking-wider text-zwl-muted dark:text-zw-muted mb-4">Service discovery</p>
+      <p class="text-sm text-zwl-muted dark:text-zw-muted mb-4">When you deploy a service, every other running service in the same project is injected as an <code class="font-mono text-xs">LM_SERVICE_*</code> environment variable.</p>
+      <pre class="terminal-panel text-xs p-4 overflow-x-auto"><code><span class="tok-comment"># Inside my-api, after deploying my-webhooks:</span>
+<span class="tok-type">LM_SERVICE_MY_WEBHOOKS</span>=https://my-webhooks.liquidmetal.dev
+
+<span class="tok-comment"># Inside my-webhooks, after deploying my-api:</span>
+<span class="tok-type">LM_SERVICE_MY_API</span>=https://my-api.liquidmetal.dev
+
+<span class="tok-comment"># Your code reads it like any other env var:</span>
+let webhook_url = std::env::var("LM_SERVICE_MY_WEBHOOKS")?;
+client.post(&amp;webhook_url).json(&amp;payload).send().await?;</code></pre>
+      <p class="text-xs text-zwl-muted dark:text-zw-muted mt-4">Peer URLs are updated on deploy and restart. Run <code class="font-mono">flux restart &lt;service&gt;</code> to pick up new peers.</p>
+    </div>
+
+    {# ── Workflow ─────────────────────────────────────────────────────── #}
+    <div class="glass-card p-6 mb-8">
+      <p class="text-xs font-mono font-medium uppercase tracking-wider text-zwl-muted dark:text-zw-muted mb-4">Workflow</p>
+      <pre class="terminal-panel text-xs p-4 overflow-x-auto"><code><span class="tok-comment"># 1. Create project</span>
+<span class="tok-type">$</span> cd my-api &amp;&amp; flux init --engine metal
+<span class="tok-comment"># This creates the project "my-api" and writes liquid-metal.toml</span>
+
+<span class="tok-comment"># 2. Deploy your API</span>
+<span class="tok-type">$</span> flux deploy
+<span class="tok-comment"># Live at https://my-api.liquidmetal.dev</span>
+
+<span class="tok-comment"># 3. Deploy your webhook handler (same project)</span>
+<span class="tok-type">$</span> cd ../my-webhooks &amp;&amp; flux init --engine liquid
+<span class="tok-type">$</span> flux deploy
+<span class="tok-comment"># Live at https://my-webhooks.liquidmetal.dev</span>
+
+<span class="tok-comment"># 4. Set shared config</span>
+<span class="tok-type">$</span> flux env set --project my-api DATABASE_URL=postgres://...
+
+<span class="tok-comment"># 5. Restart both to pick up shared vars + peer discovery</span>
+<span class="tok-type">$</span> flux restart my-api
+<span class="tok-type">$</span> flux restart my-webhooks
+
+<span class="tok-comment"># Done. Both services share DATABASE_URL and know each other's URLs.</span></code></pre>
+    </div>
+
+    {# ── Priority ─────────────────────────────────────────────────────── #}
+    <div class="glass-card p-6">
+      <p class="text-xs font-mono font-medium uppercase tracking-wider text-zwl-muted dark:text-zw-muted mb-4">Env var priority</p>
+      <p class="text-sm text-zwl-muted dark:text-zw-muted mb-3">When the same key exists at multiple levels, the most specific wins:</p>
+      <div class="text-sm font-mono text-zwl-muted dark:text-zw-muted space-y-1">
+        <p>1. <span class="text-zwl-fg dark:text-zw-fg">LM_SERVICE_*</span> &mdash; peer discovery (highest)</p>
+        <p>2. <span class="text-zwl-fg dark:text-zw-fg">Service env vars</span> &mdash; <code>flux env set &lt;service&gt; KEY=VALUE</code></p>
+        <p>3. <span class="text-zwl-fg dark:text-zw-fg">Project env vars</span> &mdash; <code>flux env set --project KEY=VALUE</code> (lowest)</p>
       </div>
     </div>
   </div>

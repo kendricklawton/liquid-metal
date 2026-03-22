@@ -77,7 +77,7 @@ async fn provision_creates_user_and_is_idempotent() {
     assert!(!id.is_empty());
     assert_eq!(v1["name"], "Alice Smith");
     assert!(v1["slug"].as_str().unwrap().contains("-workspace-"), "slug should contain '-workspace-' followed by uid suffix");
-    assert_eq!(v1["tier"], "hobby");
+    // No tier in per-service billing model
 
     // Second call: idempotent — same user_id returned
     let v2 = h.send_ok(h.internal_post("/auth/provision", &body)).await;
@@ -152,7 +152,6 @@ async fn list_workspaces_returns_default_workspace() {
 
     let ws = &workspaces[0];
     assert_eq!(ws["id"], user.workspace_id);
-    assert_eq!(ws["tier"], "hobby");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -171,7 +170,7 @@ async fn create_and_list_project() {
     assert!(!project_id.is_empty());
 
     // List — should include our project
-    let body = h.send_ok(h.authed_get("/projects", user.api_key())).await;
+    let body = h.send_ok(h.authed_get(&format!("/projects?workspace_id={}", user.workspace_id), user.api_key())).await;
     let projects = body.as_array().expect("should be array");
     let found = projects.iter().any(|p| p["id"].as_str() == Some(&project_id));
     assert!(found, "created project should appear in list");

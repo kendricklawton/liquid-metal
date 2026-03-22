@@ -382,6 +382,35 @@ pub async fn deploy_service(
         })?;
     }
 
+    // ── Merge environment variables: project → service → peer discovery ─────
+    // Project-level vars are the base. Service-level vars override on collision.
+    // LM_SERVICE_* peer URLs are injected last (highest priority).
+    let mut merged_env = crate::envelope::read_project_env_vars(&state.vault, wid, pid)
+        .await
+        .unwrap_or_default();
+    let service_env = crate::envelope::read_env_vars(&state.vault, wid, service_id)
+        .await
+        .unwrap_or_default();
+    merged_env.extend(service_env);
+
+    // Inject peer service URLs for service discovery within the same project.
+    let domain = common::config::env_or("DOMAIN", "liquidmetal.dev");
+    let peer_rows = txn
+        .query(
+            "SELECT slug FROM services \
+             WHERE project_id = $1 AND deleted_at IS NULL \
+               AND status IN ('running', 'provisioning', 'ready') \
+               AND id != $2",
+            &[&pid, &service_id],
+        )
+        .await
+        .unwrap_or_default();
+    for row in &peer_rows {
+        let peer_slug: String = row.get("slug");
+        let key = format!("LM_SERVICE_{}", peer_slug.replace('-', "_").to_uppercase());
+        merged_env.insert(key, format!("https://{}.{}", peer_slug, domain));
+    }
+
     let event = common::ProvisionEvent {
         tenant_id: wid.to_string(),
         service_id: service_id.to_string(),
@@ -389,7 +418,7 @@ pub async fn deploy_service(
         slug: slug.clone(),
         engine: engine.clone(),
         spec: engine_spec,
-        env_vars: Default::default(),
+        env_vars: merged_env,
     };
 
     let payload = serde_json::to_value(&event).map_err(|e| {

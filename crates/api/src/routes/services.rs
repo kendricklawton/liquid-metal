@@ -286,7 +286,7 @@ pub async fn restart_service(
 
     let row = db
         .query_opt(
-            "SELECT s.id, s.name, s.slug, s.engine, s.workspace_id, \
+            "SELECT s.id, s.name, s.slug, s.engine, s.workspace_id, s.project_id, \
                     s.vcpu, s.memory_mb, s.port, s.artifact_key, s.commit_sha \
              FROM services s \
              JOIN projects p ON p.id = s.project_id \
@@ -326,13 +326,33 @@ pub async fn restart_service(
         }),
     };
 
-    // Read env vars from Vault.
-    let env_vars = envelope::read_env_vars(&state.vault, wid, service_id)
+    // Merge env vars: project → service → peer discovery.
+    let pid: Uuid = row.get("project_id");
+    let mut merged_env = envelope::read_project_env_vars(&state.vault, wid, pid)
         .await
-        .map_err(|e| {
-            tracing::error!(error = %e, %service_id, "failed to read env vars from vault");
-            ApiError::internal("failed to read environment variables")
-        })?;
+        .unwrap_or_default();
+    let service_env = envelope::read_env_vars(&state.vault, wid, service_id)
+        .await
+        .unwrap_or_default();
+    merged_env.extend(service_env);
+
+    // Inject peer service URLs.
+    let domain = common::config::env_or("DOMAIN", "liquidmetal.dev");
+    let peer_rows = db
+        .query(
+            "SELECT slug FROM services \
+             WHERE project_id = $1 AND deleted_at IS NULL \
+               AND status IN ('running', 'provisioning', 'ready') \
+               AND id != $2",
+            &[&pid, &service_id],
+        )
+        .await
+        .unwrap_or_default();
+    for peer in &peer_rows {
+        let peer_slug: String = peer.get("slug");
+        let key = format!("LM_SERVICE_{}", peer_slug.replace('-', "_").to_uppercase());
+        merged_env.insert(key, format!("https://{}.{}", peer_slug, domain));
+    }
 
     let event = common::ProvisionEvent {
         tenant_id:  wid.to_string(),
@@ -341,7 +361,7 @@ pub async fn restart_service(
         slug:       slug.clone(),
         engine:     engine,
         spec,
-        env_vars,
+        env_vars: merged_env,
     };
 
     // Use the outbox pattern: status update + outbox insert in one transaction.
