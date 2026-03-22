@@ -57,6 +57,7 @@ pub fn spawn_billing_tasks(state: Arc<AppState>) {
     tokio::spawn(billing_aggregator(state.clone()));
     tokio::spawn(metal_billing_cycle(state.clone()));
     tokio::spawn(free_invocations_reset(state.clone()));
+    tokio::spawn(invoice_generator(state.clone()));
 }
 
 // ── Usage subscriber ────────────────────────────────────────────────────────
@@ -883,6 +884,246 @@ pub async fn create_topup(
         checkout_url: session.url.unwrap_or_default(),
         session_id: session.id,
     }))
+}
+
+// ── Invoice generation ────────────────────────────────────────────────────
+
+/// Background task that runs daily. For each workspace with a Stripe customer,
+/// generates a Stripe Invoice summarising the previous 30-day period's charges
+/// (Metal monthly + Liquid usage) that were debited from the prepaid balance.
+///
+/// The invoice is purely a receipt — the charges were already settled via the
+/// credit balance. We create → add line items → finalize → mark paid.
+pub async fn invoice_generator(state: Arc<AppState>) {
+    let secs: u64 = common::config::env_or("INVOICE_INTERVAL_SECS", "86400").parse().unwrap_or(86400);
+    tracing::info!(invoice_interval_secs = secs, "invoice generator configured");
+    let mut interval = tokio::time::interval(Duration::from_secs(secs));
+    loop {
+        interval.tick().await;
+        if state.stripe.is_none() {
+            continue; // billing disabled
+        }
+        if let Err(e) = generate_invoices_once(&state).await {
+            tracing::error!(error = %e, "invoice generator failed");
+        }
+    }
+}
+
+async fn generate_invoices_once(state: &AppState) -> Result<()> {
+    let stripe = state.stripe.as_ref().context("stripe not configured")?;
+    let db = state.db.get().await.context("db pool")?;
+
+    // Find workspaces that have a Stripe customer and either:
+    // - Never had an invoice (last_invoice_at IS NULL) and were created > 30 days ago
+    // - Last invoice was > 30 days ago
+    let rows = db.query(
+        "SELECT w.id, w.stripe_customer_id, w.last_invoice_at, w.created_at \
+         FROM workspaces w \
+         WHERE w.stripe_customer_id IS NOT NULL \
+           AND w.deleted_at IS NULL \
+           AND ( \
+               (w.last_invoice_at IS NULL AND w.created_at + INTERVAL '30 days' <= NOW()) \
+               OR \
+               (w.last_invoice_at + INTERVAL '30 days' <= NOW()) \
+           )",
+        &[],
+    ).await.context("find invoiceable workspaces")?;
+
+    for row in &rows {
+        let wid: uuid::Uuid = row.get("id");
+        let customer_id: String = row.get("stripe_customer_id");
+        let last_invoice_at: Option<chrono::DateTime<chrono::Utc>> = row.get("last_invoice_at");
+        let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+
+        let period_start = last_invoice_at.unwrap_or(created_at);
+        let period_end = period_start + chrono::Duration::days(30);
+
+        // Don't generate invoice if the period hasn't fully elapsed yet.
+        if period_end > chrono::Utc::now() {
+            continue;
+        }
+
+        match generate_workspace_invoice(state, stripe, &db, wid, &customer_id, period_start, period_end).await {
+            Ok(()) => {
+                tracing::info!(%wid, "invoice generated");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, %wid, "failed to generate invoice");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn generate_workspace_invoice(
+    state: &AppState,
+    stripe: &crate::stripe::StripeClient,
+    db: &deadpool_postgres::Object,
+    workspace_id: uuid::Uuid,
+    customer_id: &str,
+    period_start: chrono::DateTime<chrono::Utc>,
+    period_end: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
+    // Sum Metal charges in this period from the credit ledger.
+    let metal_row = db.query_one(
+        "SELECT COALESCE(SUM(ABS(amount)), 0) AS total \
+         FROM credit_ledger \
+         WHERE workspace_id = $1 AND kind = 'metal_monthly' \
+           AND created_at >= $2 AND created_at < $3",
+        &[&workspace_id, &period_start, &period_end],
+    ).await.context("sum metal charges")?;
+    let metal_microcredits: i64 = metal_row.get("total");
+
+    // Sum Liquid charges in this period.
+    let liquid_row = db.query_one(
+        "SELECT COALESCE(SUM(ABS(amount)), 0) AS total \
+         FROM credit_ledger \
+         WHERE workspace_id = $1 AND kind = 'usage_liquid' \
+           AND created_at >= $2 AND created_at < $3",
+        &[&workspace_id, &period_start, &period_end],
+    ).await.context("sum liquid charges")?;
+    let liquid_microcredits: i64 = liquid_row.get("total");
+
+    let total_microcredits = metal_microcredits + liquid_microcredits;
+
+    // Skip if there were no charges in this period.
+    if total_microcredits == 0 {
+        // Still advance the pointer so we don't re-check this period.
+        db.execute(
+            "UPDATE workspaces SET last_invoice_at = $1, updated_at = NOW() WHERE id = $2",
+            &[&period_end, &workspace_id],
+        ).await.context("advance last_invoice_at (no charges)")?;
+        return Ok(());
+    }
+
+    // Convert micro-credits to cents: 10,000 µcr = 1 cent.
+    let metal_cents = metal_microcredits / MICROCREDITS_PER_CENT;
+    let liquid_cents = liquid_microcredits / MICROCREDITS_PER_CENT;
+    let total_cents = metal_cents + liquid_cents;
+
+    let start_str = period_start.format("%Y-%m-%d").to_string();
+    let end_str = period_end.format("%Y-%m-%d").to_string();
+    let description = format!("Liquid Metal usage: {} — {}", start_str, end_str);
+    let wid_str = workspace_id.to_string();
+
+    // Create draft invoice on Stripe.
+    let invoice = stripe.create_invoice(
+        customer_id,
+        &description,
+        0, // days_until_due = 0 (already paid from balance)
+        &[
+            ("metadata[workspace_id]", &wid_str),
+            ("metadata[period_start]", &start_str),
+            ("metadata[period_end]", &end_str),
+        ],
+    ).await.context("create stripe invoice")?;
+
+    // Add line items.
+    if metal_cents > 0 {
+        stripe.add_invoice_item(
+            customer_id,
+            &invoice.id,
+            &format!("Metal VM charges ({} — {})", start_str, end_str),
+            metal_cents,
+        ).await.context("add metal invoice item")?;
+    }
+
+    if liquid_cents > 0 {
+        stripe.add_invoice_item(
+            customer_id,
+            &invoice.id,
+            &format!("Wasm invocation charges ({} — {})", start_str, end_str),
+            liquid_cents,
+        ).await.context("add liquid invoice item")?;
+    }
+
+    // Finalize (generates PDF, assigns number).
+    stripe.finalize_invoice(&invoice.id)
+        .await
+        .context("finalize stripe invoice")?;
+
+    // Mark as paid (out-of-band — already settled via balance).
+    let paid = stripe.mark_invoice_paid(&invoice.id)
+        .await
+        .context("mark stripe invoice paid")?;
+
+    // Store locally for fast API queries.
+    db.execute(
+        "INSERT INTO invoices (workspace_id, stripe_invoice_id, stripe_number, status, \
+                               amount_cents, hosted_url, pdf_url, period_start, period_end) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        &[
+            &workspace_id,
+            &paid.id,
+            &paid.number,
+            &paid.status.as_deref().unwrap_or("paid"),
+            &total_cents,
+            &paid.hosted_invoice_url,
+            &paid.invoice_pdf,
+            &period_start,
+            &period_end,
+        ],
+    ).await.context("insert local invoice record")?;
+
+    // Advance the invoice pointer.
+    db.execute(
+        "UPDATE workspaces SET last_invoice_at = $1, updated_at = NOW() WHERE id = $2",
+        &[&period_end, &workspace_id],
+    ).await.context("advance last_invoice_at")?;
+
+    tracing::info!(
+        target: "audit",
+        action = "invoice_generated",
+        %workspace_id,
+        stripe_invoice_id = paid.id,
+        stripe_number = ?paid.number,
+        total_cents,
+        period = %description,
+    );
+
+    Ok(())
+}
+
+// ── Invoice API endpoints ────────────────────────────────────────────────
+
+#[utoipa::path(get, path = "/billing/invoices", responses(
+    (status = 200, description = "Invoice history", body = contract::InvoiceListResponse),
+), tag = "Billing", security(("api_key" = [])))]
+/// GET /billing/invoices — list invoices for the caller's workspace.
+pub async fn list_invoices(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<routes::Caller>,
+) -> Result<Json<contract::InvoiceListResponse>, ApiError> {
+    routes::require_scope(&caller, "read")?;
+    let wid = extract_workspace_id(&state, caller.user_id).await?;
+    let db = db_conn(&state.db).await?;
+
+    let rows = db.query(
+        "SELECT id, stripe_number, status, amount_cents, hosted_url, pdf_url, \
+                to_char(period_start AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS period_start, \
+                to_char(period_end AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS period_end, \
+                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
+         FROM invoices \
+         WHERE workspace_id = $1 \
+         ORDER BY created_at DESC \
+         LIMIT 50",
+        &[&wid],
+    ).await.map_err(|e| ApiError::internal(format!("invoices query: {e}")))?;
+
+    let invoices = rows.iter().map(|r| contract::InvoiceEntry {
+        id: r.get::<_, uuid::Uuid>("id").to_string(),
+        number: r.get("stripe_number"),
+        status: r.get("status"),
+        amount_cents: r.get("amount_cents"),
+        hosted_url: r.get("hosted_url"),
+        pdf_url: r.get("pdf_url"),
+        period_start: r.get("period_start"),
+        period_end: r.get("period_end"),
+        created_at: r.get("created_at"),
+    }).collect();
+
+    Ok(Json(contract::InvoiceListResponse { invoices }))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

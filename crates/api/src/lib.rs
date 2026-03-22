@@ -103,6 +103,7 @@ pub struct RateLimitConfig {
         billing::get_usage,
         billing::get_ledger,
         billing::create_topup,
+        billing::list_invoices,
         // Webhooks
         billing::stripe_webhook,
     ),
@@ -141,6 +142,8 @@ pub struct RateLimitConfig {
         common::contract::LiquidUsage,
         common::contract::LedgerResponse,
         common::contract::LedgerEntry,
+        common::contract::InvoiceListResponse,
+        common::contract::InvoiceEntry,
     )),
     security(),
     modifiers(&SecurityAddon),
@@ -251,6 +254,7 @@ pub fn build_router(state: Arc<AppState>, rl: RateLimitConfig) -> Router {
         .route("/billing/usage",     get(billing::get_usage))
         .route("/billing/ledger",    get(billing::get_ledger))
         .route("/billing/topup",     post(billing::create_topup))
+        .route("/billing/invoices",  get(billing::list_invoices))
         .route("/api-keys",          get(routes::list_api_keys).post(routes::create_api_key))
         .route("/api-keys/{id}",     delete(routes::delete_api_key))
         .route_layer(middleware::from_fn(move |req, next| {

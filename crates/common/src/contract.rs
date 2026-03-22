@@ -340,6 +340,37 @@ pub struct LedgerEntry {
     pub created_at: String,
 }
 
+// ── Invoices ─────────────────────────────────────────────────────────────────
+
+/// GET /billing/invoices response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct InvoiceListResponse {
+    pub invoices: Vec<InvoiceEntry>,
+}
+
+/// Single invoice summary.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct InvoiceEntry {
+    /// Local invoice ID (UUID).
+    pub id: String,
+    /// Stripe invoice number (e.g. "LM-0001").
+    pub number: Option<String>,
+    /// Stripe invoice status: draft, open, paid, void.
+    pub status: String,
+    /// Total amount in cents.
+    pub amount_cents: i64,
+    /// Stripe-hosted invoice URL (view/pay).
+    pub hosted_url: Option<String>,
+    /// Direct PDF download URL.
+    pub pdf_url: Option<String>,
+    /// Billing period start (ISO 8601 UTC).
+    pub period_start: String,
+    /// Billing period end (ISO 8601 UTC).
+    pub period_end: String,
+    /// When the invoice was created (ISO 8601 UTC).
+    pub created_at: String,
+}
+
 // ── API Keys ─────────────────────────────────────────────────────────────────
 
 /// POST /api-keys request body.
@@ -400,4 +431,83 @@ pub struct HealthResponse {
     pub status: String,
     pub db: String,
     pub nats: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invoice_entry_round_trip() {
+        let entry = InvoiceEntry {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            number: Some("LM-0001".to_string()),
+            status: "paid".to_string(),
+            amount_cents: 4200,
+            hosted_url: Some("https://invoice.stripe.com/i/test".to_string()),
+            pdf_url: Some("https://pay.stripe.com/invoice/test/pdf".to_string()),
+            period_start: "2026-01-01T00:00:00Z".to_string(),
+            period_end: "2026-01-31T00:00:00Z".to_string(),
+            created_at: "2026-01-31T12:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: InvoiceEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, entry.id);
+        assert_eq!(parsed.number, entry.number);
+        assert_eq!(parsed.status, entry.status);
+        assert_eq!(parsed.amount_cents, entry.amount_cents);
+        assert_eq!(parsed.hosted_url, entry.hosted_url);
+        assert_eq!(parsed.pdf_url, entry.pdf_url);
+    }
+
+    #[test]
+    fn invoice_entry_optional_fields_null() {
+        let json = r#"{
+            "id": "test-id",
+            "number": null,
+            "status": "draft",
+            "amount_cents": 0,
+            "hosted_url": null,
+            "pdf_url": null,
+            "period_start": "2026-01-01T00:00:00Z",
+            "period_end": "2026-01-31T00:00:00Z",
+            "created_at": "2026-01-31T00:00:00Z"
+        }"#;
+        let entry: InvoiceEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.number.is_none());
+        assert!(entry.hosted_url.is_none());
+        assert!(entry.pdf_url.is_none());
+    }
+
+    #[test]
+    fn invoice_list_response_round_trip() {
+        let resp = InvoiceListResponse {
+            invoices: vec![
+                InvoiceEntry {
+                    id: "a".to_string(),
+                    number: Some("LM-0001".to_string()),
+                    status: "paid".to_string(),
+                    amount_cents: 100,
+                    hosted_url: None,
+                    pdf_url: None,
+                    period_start: "2026-01-01T00:00:00Z".to_string(),
+                    period_end: "2026-01-31T00:00:00Z".to_string(),
+                    created_at: "2026-01-31T00:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: InvoiceListResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.invoices.len(), 1);
+        assert_eq!(parsed.invoices[0].number.as_deref(), Some("LM-0001"));
+    }
+
+    #[test]
+    fn invoice_list_response_empty() {
+        let json = r#"{"invoices": []}"#;
+        let resp: InvoiceListResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.invoices.is_empty());
+    }
 }

@@ -1024,3 +1024,198 @@ async fn env_vars_set_list_unset() {
     assert!(env_after["vars"].get("SECRET").is_none() || env_after["vars"]["SECRET"].is_null(),
         "SECRET should be removed");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Invoices
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL + NATS_URL"]
+async fn billing_invoices_returns_empty_for_new_user() {
+    let h = harness!();
+    let user = h.provision_user().await;
+
+    let body = h.send_ok(h.authed_get("/billing/invoices", user.api_key())).await;
+    assert!(body["invoices"].is_array());
+    assert_eq!(body["invoices"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL + NATS_URL"]
+async fn billing_invoices_returns_seeded_invoice() {
+    let h = harness!();
+    let user = h.provision_user().await;
+    let db = h.pool.get().await.unwrap();
+    let wid: uuid::Uuid = user.workspace_id.parse().unwrap();
+
+    // Seed an invoice directly in the DB (simulates what invoice_generator creates).
+    let invoice_id = uuid::Uuid::now_v7();
+    db.execute(
+        "INSERT INTO invoices (id, workspace_id, stripe_invoice_id, stripe_number, status, \
+                               amount_cents, hosted_url, pdf_url, period_start, period_end) \
+         VALUES ($1, $2, 'in_test_123', 'LM-0001', 'paid', 2000, \
+                 'https://invoice.stripe.com/i/test', 'https://pay.stripe.com/invoice/test/pdf', \
+                 NOW() - INTERVAL '30 days', NOW())",
+        &[&invoice_id, &wid],
+    ).await.unwrap();
+
+    let body = h.send_ok(h.authed_get("/billing/invoices", user.api_key())).await;
+    let invoices = body["invoices"].as_array().unwrap();
+    assert_eq!(invoices.len(), 1);
+    assert_eq!(invoices[0]["number"].as_str().unwrap(), "LM-0001");
+    assert_eq!(invoices[0]["status"].as_str().unwrap(), "paid");
+    assert_eq!(invoices[0]["amount_cents"].as_i64().unwrap(), 2000);
+    assert!(invoices[0]["hosted_url"].as_str().is_some());
+    assert!(invoices[0]["pdf_url"].as_str().is_some());
+    assert!(invoices[0]["period_start"].as_str().is_some());
+    assert!(invoices[0]["period_end"].as_str().is_some());
+    assert!(invoices[0]["created_at"].as_str().is_some());
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL + NATS_URL"]
+async fn billing_invoices_respects_workspace_isolation() {
+    // User A's invoices should not appear for User B.
+    let h = harness!();
+    let user_a = h.provision_user().await;
+    let user_b = h.provision_user().await;
+    let db = h.pool.get().await.unwrap();
+    let wid_a: uuid::Uuid = user_a.workspace_id.parse().unwrap();
+
+    // Seed invoice for user A only.
+    db.execute(
+        "INSERT INTO invoices (workspace_id, stripe_invoice_id, stripe_number, status, \
+                               amount_cents, period_start, period_end) \
+         VALUES ($1, $2, 'LM-ISOL', 'paid', 5000, NOW() - INTERVAL '30 days', NOW())",
+        &[&wid_a, &format!("in_isol_{}", uuid::Uuid::now_v7())],
+    ).await.unwrap();
+
+    // User A sees the invoice.
+    let body_a = h.send_ok(h.authed_get("/billing/invoices", user_a.api_key())).await;
+    assert_eq!(body_a["invoices"].as_array().unwrap().len(), 1);
+
+    // User B sees nothing.
+    let body_b = h.send_ok(h.authed_get("/billing/invoices", user_b.api_key())).await;
+    assert_eq!(body_b["invoices"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL + NATS_URL"]
+async fn billing_invoices_ordered_newest_first() {
+    let h = harness!();
+    let user = h.provision_user().await;
+    let db = h.pool.get().await.unwrap();
+    let wid: uuid::Uuid = user.workspace_id.parse().unwrap();
+
+    // Insert two invoices with different created_at.
+    db.execute(
+        "INSERT INTO invoices (workspace_id, stripe_invoice_id, stripe_number, status, \
+                               amount_cents, period_start, period_end, created_at) \
+         VALUES ($1, 'in_old', 'LM-OLD', 'paid', 1000, \
+                 '2026-01-01'::timestamptz, '2026-01-31'::timestamptz, '2026-01-31'::timestamptz)",
+        &[&wid],
+    ).await.unwrap();
+    db.execute(
+        "INSERT INTO invoices (workspace_id, stripe_invoice_id, stripe_number, status, \
+                               amount_cents, period_start, period_end, created_at) \
+         VALUES ($1, 'in_new', 'LM-NEW', 'paid', 2000, \
+                 '2026-02-01'::timestamptz, '2026-02-28'::timestamptz, '2026-02-28'::timestamptz)",
+        &[&wid],
+    ).await.unwrap();
+
+    let body = h.send_ok(h.authed_get("/billing/invoices", user.api_key())).await;
+    let invoices = body["invoices"].as_array().unwrap();
+    assert!(invoices.len() >= 2);
+    // Newest first
+    assert_eq!(invoices[0]["number"].as_str().unwrap(), "LM-NEW");
+    assert_eq!(invoices[1]["number"].as_str().unwrap(), "LM-OLD");
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL + NATS_URL"]
+async fn billing_invoices_stripe_unique_constraint() {
+    // The stripe_invoice_id column has a UNIQUE constraint — duplicate inserts should fail.
+    let h = harness!();
+    let user = h.provision_user().await;
+    let db = h.pool.get().await.unwrap();
+    let wid: uuid::Uuid = user.workspace_id.parse().unwrap();
+
+    let stripe_id = format!("in_dup_{}", uuid::Uuid::now_v7());
+    db.execute(
+        "INSERT INTO invoices (workspace_id, stripe_invoice_id, stripe_number, status, \
+                               amount_cents, period_start, period_end) \
+         VALUES ($1, $2, 'LM-DUP1', 'paid', 1000, NOW() - INTERVAL '30 days', NOW())",
+        &[&wid, &stripe_id],
+    ).await.unwrap();
+
+    // Second insert with same stripe_invoice_id should fail.
+    let result = db.execute(
+        "INSERT INTO invoices (workspace_id, stripe_invoice_id, stripe_number, status, \
+                               amount_cents, period_start, period_end) \
+         VALUES ($1, $2, 'LM-DUP2', 'paid', 2000, NOW() - INTERVAL '30 days', NOW())",
+        &[&wid, &stripe_id],
+    ).await;
+    assert!(result.is_err(), "duplicate stripe_invoice_id should be rejected");
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL + NATS_URL"]
+async fn billing_invoice_status_check_constraint() {
+    // The status column has a CHECK constraint — only valid statuses should be accepted.
+    let h = harness!();
+    let user = h.provision_user().await;
+    let db = h.pool.get().await.unwrap();
+    let wid: uuid::Uuid = user.workspace_id.parse().unwrap();
+
+    // Valid statuses should work.
+    for status in &["draft", "open", "paid", "void", "uncollectible"] {
+        let stripe_id = format!("in_status_{}_{}", status, uuid::Uuid::now_v7());
+        let result = db.execute(
+            "INSERT INTO invoices (workspace_id, stripe_invoice_id, status, \
+                                   amount_cents, period_start, period_end) \
+             VALUES ($1, $2, $3, 0, NOW() - INTERVAL '30 days', NOW())",
+            &[&wid, &stripe_id, status],
+        ).await;
+        assert!(result.is_ok(), "status '{}' should be accepted: {:?}", status, result.err());
+    }
+
+    // Invalid status should fail.
+    let result = db.execute(
+        "INSERT INTO invoices (workspace_id, stripe_invoice_id, status, \
+                               amount_cents, period_start, period_end) \
+         VALUES ($1, 'in_bad_status', 'bogus', 0, NOW() - INTERVAL '30 days', NOW())",
+        &[&wid],
+    ).await;
+    assert!(result.is_err(), "invalid status should be rejected");
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL + NATS_URL"]
+async fn billing_workspace_last_invoice_at_column_exists() {
+    // Validates V44 migration added the last_invoice_at column.
+    let h = harness!();
+    let user = h.provision_user().await;
+    let db = h.pool.get().await.unwrap();
+    let wid: uuid::Uuid = user.workspace_id.parse().unwrap();
+
+    // New workspace should have NULL last_invoice_at.
+    let row = db.query_one(
+        "SELECT last_invoice_at FROM workspaces WHERE id = $1",
+        &[&wid],
+    ).await.unwrap();
+    let val: Option<chrono::DateTime<chrono::Utc>> = row.get("last_invoice_at");
+    assert!(val.is_none(), "new workspace should have NULL last_invoice_at");
+
+    // Update should work.
+    db.execute(
+        "UPDATE workspaces SET last_invoice_at = NOW() WHERE id = $1",
+        &[&wid],
+    ).await.unwrap();
+
+    let row = db.query_one(
+        "SELECT last_invoice_at FROM workspaces WHERE id = $1",
+        &[&wid],
+    ).await.unwrap();
+    let val: Option<chrono::DateTime<chrono::Utc>> = row.get("last_invoice_at");
+    assert!(val.is_some(), "last_invoice_at should be updated");
+}
