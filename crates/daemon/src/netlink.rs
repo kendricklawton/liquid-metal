@@ -38,20 +38,22 @@ pub fn create_tap(name: &str) -> Result<()> {
 
 pub async fn attach_to_bridge(tap_name: &str, bridge: &str) -> Result<()> {
     let (conn, handle, _) = new_connection().context("rtnetlink open")?;
-    tokio::spawn(conn);
+    let conn_handle = tokio::spawn(conn);
     let tap_idx = link_index(&handle, tap_name).await?;
     handle.link().set(tap_idx).up().execute().await.context("TAP up")?;
     let br_idx = link_index(&handle, bridge).await?;
     handle.link().set(tap_idx).controller(br_idx).execute().await.context("TAP → bridge")?;
+    conn_handle.abort();
     tracing::info!(tap_name, bridge, "TAP attached");
     Ok(())
 }
 
 pub async fn delete_tap(tap_name: &str) -> Result<()> {
     let (conn, handle, _) = new_connection().context("rtnetlink open")?;
-    tokio::spawn(conn);
+    let conn_handle = tokio::spawn(conn);
     let idx = link_index(&handle, tap_name).await?;
     handle.link().del(idx).execute().await.context("deleting TAP")?;
+    conn_handle.abort();
     tracing::info!(tap_name, "TAP deleted");
     Ok(())
 }

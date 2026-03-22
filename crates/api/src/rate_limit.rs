@@ -40,6 +40,33 @@ impl UserRateLimit {
     }
 }
 
+/// Periodically evict expired rate limit buckets to prevent unbounded memory
+/// growth from diverse client IPs/users. Calls `retain_recent()` (drops buckets
+/// indistinguishable from a fresh start) and `shrink_to_fit()` (releases DashMap
+/// capacity). Default interval: 5 minutes.
+pub fn spawn_gc(auth: RateLimit, protected: RateLimit, bff: UserRateLimit) {
+    let secs: u64 = common::config::env_or("RATE_LIMIT_GC_INTERVAL_SECS", "300")
+        .parse()
+        .unwrap_or(300);
+    if secs == 0 {
+        tracing::info!("rate limiter GC disabled");
+        return;
+    }
+    tracing::info!(interval_secs = secs, "rate limiter GC configured");
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(secs));
+        loop {
+            interval.tick().await;
+            auth.0.retain_recent();
+            auth.0.shrink_to_fit();
+            protected.0.retain_recent();
+            protected.0.shrink_to_fit();
+            bff.0.retain_recent();
+            bff.0.shrink_to_fit();
+        }
+    });
+}
+
 /// Reusable 429 response builder.
 fn too_many_requests(retry_secs: String, context: &str) -> Response {
     tracing::warn!(retry_after_secs = %retry_secs, context, "rate limited");
@@ -201,5 +228,27 @@ mod tests {
     #[should_panic(expected = "RPM must be > 0")]
     fn user_rate_limit_zero_rpm_panics() {
         UserRateLimit::per_minute(0);
+    }
+
+    #[test]
+    fn retain_recent_does_not_panic() {
+        // Verify retain_recent + shrink_to_fit work on populated limiters.
+        let ip_rl = RateLimit::per_minute(10);
+        let user_rl = UserRateLimit::per_minute(10);
+
+        // Populate some buckets.
+        for i in 0..100u8 {
+            let ip: std::net::IpAddr = format!("10.0.0.{i}").parse().unwrap();
+            let _ = ip_rl.0.check_key(&ip);
+        }
+        for i in 0..50 {
+            let _ = user_rl.0.check_key(&format!("user-{i}"));
+        }
+
+        // GC should not panic.
+        ip_rl.0.retain_recent();
+        ip_rl.0.shrink_to_fit();
+        user_rl.0.retain_recent();
+        user_rl.0.shrink_to_fit();
     }
 }

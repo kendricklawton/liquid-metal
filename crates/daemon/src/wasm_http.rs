@@ -200,7 +200,9 @@ async fn compile_or_cache(engine: &Arc<Engine>, wasm_path: &str, app_name: &str)
 }
 
 /// Compile `wasm_path`, bind a local TCP listener, and start serving requests.
-/// Returns the port number written to the `services` table as `upstream_addr`.
+/// Returns `(port, accept_task_handle)`. The port is written to the `services`
+/// table as `upstream_addr`. The `JoinHandle` should be stored in `LiquidHandle`
+/// so the accept loop can be aborted when the service is deprovisioned.
 ///
 /// `invocations` is an externally-owned counter incremented on every request.
 /// The usage reporter reads and resets it periodically to publish billing events.
@@ -209,7 +211,7 @@ pub async fn serve(
     app_name: String,
     invocations: Arc<AtomicU64>,
     env_vars: std::collections::HashMap<String, String>,
-) -> Result<u16> {
+) -> Result<(u16, tokio::task::JoinHandle<()>)> {
     let mut cfg = Config::new();
     cfg.consume_fuel(true);
     cfg.max_wasm_stack(*WASM_STACK_BYTES);
@@ -249,7 +251,7 @@ pub async fn serve(
         env_vars,
     });
 
-    tokio::spawn(async move {
+    let accept_task = tokio::spawn(async move {
         loop {
             let (stream, peer) = match listener.accept().await {
                 Ok(x) => x,
@@ -273,7 +275,7 @@ pub async fn serve(
         }
     });
 
-    Ok(port)
+    Ok((port, accept_task))
 }
 
 /// Handle a single HTTP request: extract context, run Wasm, return response.

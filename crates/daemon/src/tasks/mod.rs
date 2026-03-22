@@ -3,6 +3,7 @@ pub mod idle;
 pub mod lag_monitor;
 pub mod orphan_sweep;
 pub mod pulse;
+pub mod registry_sweep;
 pub mod suspend;
 pub mod usage;
 

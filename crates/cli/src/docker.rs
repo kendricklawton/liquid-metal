@@ -26,9 +26,10 @@ impl Drop for DockerCleanup {
 }
 
 /// Build a binary via Dockerfile and extract it from the image.
+/// Returns the path to the extracted binary on disk (temp file).
 ///
 /// Docker is used as a build tool only — no containers at runtime.
-pub fn build_via_dockerfile(slug: &str, dockerfile: &str, output: &str) -> Result<Vec<u8>> {
+pub fn build_via_dockerfile(slug: &str, dockerfile: &str, output: &str) -> Result<String> {
     // Check Docker is available
     let version_check = Command::new("docker")
         .args(["version", "--format", "{{.Server.Version}}"])
@@ -50,7 +51,7 @@ pub fn build_via_dockerfile(slug: &str, dockerfile: &str, output: &str) -> Resul
 
     // Set up cleanup guard — runs on drop regardless of success/failure
     let temp_path = std::env::temp_dir().join(format!("lm-extract-{slug}-{}", std::process::id()));
-    let _cleanup = DockerCleanup {
+    let mut _cleanup = DockerCleanup {
         container_name: container_name.clone(),
         image_tag: image_tag.clone(),
         temp_path: Some(temp_path.clone()),
@@ -90,14 +91,17 @@ pub fn build_via_dockerfile(slug: &str, dockerfile: &str, output: &str) -> Resul
         );
     }
 
-    // Read the extracted binary
-    let bytes = fs::read(&temp_path)?;
-    if bytes.is_empty() {
+    // Verify the extracted binary exists and isn't empty.
+    let meta = fs::metadata(&temp_path)?;
+    if meta.len() == 0 {
         bail!("Extracted binary is empty (0 bytes) — check your Dockerfile build");
     }
 
-    println!("=> Cleaning up Docker artifacts...");
-    // _cleanup Drop handles the actual cleanup
+    // Don't delete the temp file — the caller streams it to S3.
+    // Docker image + container are still cleaned up by _cleanup Drop.
+    _cleanup.temp_path = None;
 
-    Ok(bytes)
+    println!("=> Cleaning up Docker artifacts...");
+
+    Ok(temp_path.to_string_lossy().into_owned())
 }

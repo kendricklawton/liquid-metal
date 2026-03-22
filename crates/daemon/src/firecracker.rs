@@ -87,7 +87,10 @@ async fn put(sock_path: &str, path: &str, body: &str) -> Result<()> {
     let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
         .context("HTTP handshake")?;
-    tokio::spawn(async move { conn.await.ok(); });
+    // Drive the HTTP connection concurrently. The task normally completes
+    // once the response is fully consumed. Abort at the end of this function
+    // as a safety net if Firecracker hangs after responding.
+    let conn_handle = tokio::spawn(async move { conn.await.ok(); });
 
     let resp = sender
         .send_request(
@@ -103,7 +106,9 @@ async fn put(sock_path: &str, path: &str, body: &str) -> Result<()> {
 
     if !resp.status().is_success() {
         let bytes = resp.into_body().collect().await?.to_bytes();
+        conn_handle.abort();
         anyhow::bail!("Firecracker PUT {} → {}", path, String::from_utf8_lossy(&bytes));
     }
+    conn_handle.abort();
     Ok(())
 }

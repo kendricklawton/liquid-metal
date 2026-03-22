@@ -41,6 +41,11 @@ static TC_FILTER_BPF: &[u8] =
 //
 // We keep the Ebpf struct alive for each TAP — dropping it detaches all
 // programs and maps associated with that load. Keyed by tap name ("tap0", etc).
+//
+// Bounded by MAX_TAP_INDEX (the TAP index pool) — cannot exceed the number
+// of active Metal VMs. detach() reliably removes entries on deprovision,
+// crash_watcher cleanup, and daemon restart (map starts empty, reattach_all
+// repopulates only from DB).
 fn active() -> &'static Mutex<HashMap<String, Ebpf>> {
     static ACTIVE: OnceLock<Mutex<HashMap<String, Ebpf>>> = OnceLock::new();
     ACTIVE.get_or_init(|| Mutex::new(HashMap::new()))

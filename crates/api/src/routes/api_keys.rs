@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
-use axum::{Json, Extension, extract::{Path, State}};
+use axum::{
+    Extension, Json,
+    extract::{Path, State},
+};
 use uuid::Uuid;
 
+use super::{ApiError, db_conn, hash_token, require_scope};
 use crate::AppState;
 use common::contract;
-use super::{ApiError, db_conn, hash_token, require_scope};
 
 const VALID_SCOPES: &[&str] = &["read", "write", "admin"];
 
@@ -69,7 +72,10 @@ pub async fn create_api_key(
     require_scope(&caller, "admin")?;
 
     if body.name.is_empty() || body.name.len() > 64 {
-        return Err(ApiError::bad_request("invalid_name", "name must be 1-64 characters"));
+        return Err(ApiError::bad_request(
+            "invalid_name",
+            "name must be 1-64 characters",
+        ));
     }
 
     let scopes: Vec<String> = if body.scopes.is_empty() {
@@ -90,9 +96,9 @@ pub async fn create_api_key(
     let token_hash = hash_token(&token);
     let token_prefix = format!("{}...", &token[..12]);
 
-    let expires_at = body.expires_in_days.map(|days| {
-        chrono::Utc::now() + chrono::Duration::days(days as i64)
-    });
+    let expires_at = body
+        .expires_in_days
+        .map(|days| chrono::Utc::now() + chrono::Duration::days(days as i64));
 
     let db = db_conn(&state.db).await?;
     let row = db
@@ -100,7 +106,14 @@ pub async fn create_api_key(
             "INSERT INTO api_keys (user_id, name, token_hash, token_prefix, scopes, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6) \
              RETURNING id",
-            &[&caller.user_id, &body.name, &token_hash, &token_prefix, &scopes, &expires_at],
+            &[
+                &caller.user_id,
+                &body.name,
+                &token_hash,
+                &token_prefix,
+                &scopes,
+                &expires_at,
+            ],
         )
         .await
         .map_err(|_| ApiError::internal("failed to create API key"))?;
@@ -109,13 +122,16 @@ pub async fn create_api_key(
 
     tracing::info!(target: "audit", action = "create_api_key", user_id = %caller.user_id, ip = ?caller.ip, key_id = %key_id, scopes = ?scopes);
 
-    Ok((axum::http::StatusCode::CREATED, Json(contract::CreateApiKeyResponse {
-        id: key_id.to_string(),
-        name: body.name,
-        token,
-        scopes,
-        expires_at: expires_at.map(|t| t.to_rfc3339()),
-    })))
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(contract::CreateApiKeyResponse {
+            id: key_id.to_string(),
+            name: body.name,
+            token,
+            scopes,
+            expires_at: expires_at.map(|t| t.to_rfc3339()),
+        }),
+    ))
 }
 
 #[utoipa::path(delete, path = "/api-keys/{id}", params(
@@ -131,7 +147,8 @@ pub async fn delete_api_key(
 ) -> Result<Json<contract::DeleteApiKeyResponse>, ApiError> {
     require_scope(&caller, "admin")?;
 
-    let key_id: Uuid = id.parse()
+    let key_id: Uuid = id
+        .parse()
         .map_err(|_| ApiError::bad_request("invalid_id", "API key ID must be a valid UUID"))?;
 
     let db = db_conn(&state.db).await?;

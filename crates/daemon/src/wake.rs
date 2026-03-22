@@ -31,9 +31,10 @@ pub async fn wake_from_snapshot(
     .await
     .context("downloading snapshot")?;
 
-    // Allocate TAP + network identity
+    // Allocate TAP + network identity. Guard auto-releases index on early return.
     let tap_idx = provision::allocate_tap_index().await?;
     let tap = networking::tap_name(tap_idx);
+    let mut tap_guard = provision::TapGuard::new(tap.clone());
     let ip = networking::guest_ip(tap_idx).context("TAP index pool exhausted")?;
     let vm_id = Uuid::now_v7();
 
@@ -54,8 +55,8 @@ pub async fn wake_from_snapshot(
     // Create TAP, attach to bridge, apply isolation
     netlink::create_tap(&tap).context("create TAP for wake")?;
 
-    let cleanup_on_err = || async {
-        provision::release_tap_index(&tap).await;
+    // tap_guard handles index release; this closure only deletes the kernel TAP device.
+    let cleanup_tap_device = || async {
         let _ = netlink::delete_tap(&tap).await;
     };
 
@@ -121,6 +122,8 @@ pub async fn wake_from_snapshot(
                 chroot_base: cfg.chroot_base.clone(),
             },
         );
+        // Registered — deprovision/crash_watcher now owns TAP index cleanup.
+        tap_guard.defuse();
 
         // Update DB
         let db = ctx.pool.get().await.context("db pool")?;
@@ -154,7 +157,8 @@ pub async fn wake_from_snapshot(
     }
     .await
     {
-        cleanup_on_err().await;
+        cleanup_tap_device().await;
+        // tap_guard drops here and releases the index automatically.
         return Err(e);
     }
 
@@ -228,7 +232,7 @@ pub async fn wake_liquid(
     let invocations = Arc::new(AtomicU64::new(0));
 
     // Re-start the HTTP shim — uses the compiled cache on disk (<10ms)
-    let port = crate::wasm_http::serve(
+    let (port, accept_task) = crate::wasm_http::serve(
         wasm_path.to_string_lossy().into_owned(),
         app_name,
         invocations.clone(),
@@ -239,12 +243,13 @@ pub async fn wake_liquid(
 
     let upstream_addr = format!("127.0.0.1:{port}");
 
-    // Register for billing
+    // Register for billing. accept_task aborted on drop (deprovision/idle/suspend).
     ctx.liquid_registry.lock().await.insert(
         event.service_id.clone(),
         deprovision::LiquidHandle {
             workspace_id: tenant_id,
             invocations,
+            accept_task: Some(accept_task),
         },
     );
 

@@ -16,6 +16,7 @@ Run any Linux binary in a hardware-isolated VM. KVM-backed, dedicated rootfs, TA
 - **Cold start**: ~100–250ms
 - **Networking**: TAP device → br0 bridge → Pingora proxy
 - **Storage**: Dedicated ext4 rootfs per service
+- **Egress filtering**: eBPF TC classifiers prevent direct inter-VM traffic — all routing goes through Pingora
 
 ```toml
 # liquid-metal.toml
@@ -56,12 +57,47 @@ All Rust — platform services and CLI.
 
 | Crate | Role |
 |---|---|
-| `crates/common` | Shared types — `Engine`, `ProvisionEvent`, artifact integrity, networking primitives |
-| `crates/api` | Axum REST/JSON — `:7070`, writes Postgres, publishes to NATS |
+| `crates/common` | Shared types — `Engine`, `ProvisionEvent`, contracts, pricing, feature flags, config |
+| `crates/api` | Axum REST/JSON — `:7070`, writes Postgres, publishes to NATS, Stripe billing |
 | `crates/web` | Axum + Askama + HTMX + Alpine.js dashboard — `:3000` |
 | `crates/cli` | `flux` CLI — clap + reqwest, calls API over HTTP |
-| `crates/proxy` | Pingora edge router — `slug → upstream_addr` via DB lookup |
+| `crates/proxy` | Pingora edge router — `slug → upstream_addr` via DB lookup, custom domain TLS |
 | `crates/daemon` | NATS consumer — Firecracker VMs (Metal) + Wasmtime (Liquid) |
+| `crates/ebpf-programs` | TC egress classifiers (Aya) — tenant network isolation for Metal VMs |
+
+---
+
+## Key Features
+
+### Auth
+
+- **CLI**: OIDC device flow via Zitadel → scoped `lm_*` API key (SHA-256 hashed, supports expiration and scopes)
+- **Web**: OIDC authorization code + PKCE → AES-GCM encrypted session cookie
+- **Internal**: `X-Internal-Secret` + `X-On-Behalf-Of` for web BFF → API calls
+
+### Billing
+
+- **Metal**: Fixed monthly pricing per VM tier ($20/$40/$80 for 1/2/4 vCPU)
+- **Liquid**: $0.30 per 1M invocations, 1M free per workspace per month
+- **Credits**: Prepaid balance (micro-credits), top-up via Stripe Checkout
+- **Invoices**: Auto-generated monthly via Stripe Invoices API (PDF + hosted page)
+- **Suspension**: Services paused when balance hits zero, auto-restored on top-up
+
+### Custom Domains & TLS
+
+- Add custom domains to any service via `flux domains add`
+- Automatic TLS via Let's Encrypt (ACME HTTP-01 challenge)
+- Pingora proxy handles SNI-based routing
+
+### Rate Limiting
+
+- Auth routes: 10 req/min per IP
+- API routes: 60 req/min per API key
+- BFF routes: 120 req/min per user
+
+### Feature Flags
+
+Environment-variable-driven flags evaluated at request time: `REQUIRE_INVITE`, `ENABLE_METAL`, `ENABLE_LIQUID`, `ENFORCE_QUOTAS`, `MAINTENANCE_MODE`.
 
 ---
 
@@ -85,7 +121,8 @@ task up            # Postgres + NATS + MinIO (docker compose)
 task dev:api       # Rust API on :7070
 task dev:web       # Web dashboard on :3000
 task dev:proxy     # Pingora on :8080
-task dev:daemon    # NATS consumer (Firecracker skipped on macOS)
+sudo -E task dev:daemon  # NATS consumer (requires root for KVM/TAP/cgroups)
+                         # Wasm-only: DAEMON_PID_FILE=/tmp/lm.pid NODE_ENGINE=liquid task dev:daemon
 
 # Install the CLI
 task install:cli   # cargo install → flux lands in ~/.cargo/bin
@@ -104,12 +141,30 @@ task security:setup  # jailer user, cgroup v2 controllers, eBPF policy
 
 ---
 
+## Architecture
+
+```
+User → flux CLI → API (:7070) → Postgres + NATS
+                                       ↓
+                              Daemon (NATS consumer)
+                              ├── Metal: Firecracker VM
+                              └── Liquid: Wasmtime
+                                       ↓
+                              Proxy (Pingora) ← User traffic
+```
+
+- **Data flow invariant**: All mutations go API → Postgres → NATS (outbox) → Daemon. The API is the only Postgres writer. The daemon is the only thing that touches Firecracker or Wasmtime.
+- **Outbox pattern**: Events written to an `outbox` table in the same Postgres transaction as the mutation, then published to NATS by a background poller. At-least-once delivery without distributed transactions.
+- **UUID v7**: All primary keys are time-ordered UUIDs.
+
+---
+
 ## What We Don't Use
 
 - No Kubernetes, K3s, or any container orchestrator
 - No AWS, Azure, Vercel, or Heroku for compute (GCP used only for KMS, Terraform state, and disaster recovery backups)
+- No Docker in production — Nomad `raw_exec` runs binaries directly
 - No ORMs (raw SQL via `tokio-postgres`)
-- No container registry (Vultr Object Storage is the registry)
 - No gRPC / protobuf (plain REST/JSON between all services)
 - No Prometheus (VictoriaMetrics for metrics, VictoriaLogs for logs)
 

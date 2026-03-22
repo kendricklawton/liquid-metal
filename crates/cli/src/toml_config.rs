@@ -41,7 +41,6 @@ impl BuildConfig {
 pub struct BuildResult {
     pub artifact_path: String,
     pub sha256_hex: String,
-    pub file_bytes: Vec<u8>,
 }
 
 /// Load and parse liquid-metal.toml from the current directory.
@@ -83,8 +82,15 @@ pub fn run_build(cfg: &LiquidMetalConfig) -> Result<BuildResult> {
         }
 
         let slug = common::slugify(&cfg.service.name);
-        let file_bytes = crate::docker::build_via_dockerfile(&slug, &dockerfile_path, output)?;
-        let sha256_hex = common::artifact::sha256_hex(&file_bytes);
+        let extracted_path = crate::docker::build_via_dockerfile(&slug, &dockerfile_path, output)?;
+
+        let sha256_hex = {
+            use sha2::{Digest, Sha256};
+            let mut file = std::fs::File::open(&extracted_path)?;
+            let mut hasher = Sha256::new();
+            std::io::copy(&mut file, &mut hasher)?;
+            format!("{:x}", hasher.finalize())
+        };
 
         println!(
             "=> Artifact: {} (SHA256: {}...)",
@@ -93,9 +99,8 @@ pub fn run_build(cfg: &LiquidMetalConfig) -> Result<BuildResult> {
         );
 
         return Ok(BuildResult {
-            artifact_path: output.to_string(),
+            artifact_path: extracted_path,
             sha256_hex,
-            file_bytes,
         });
     }
 
@@ -132,13 +137,17 @@ pub fn run_build(cfg: &LiquidMetalConfig) -> Result<BuildResult> {
         );
     }
 
-    let file_bytes = if std::path::Path::new(&artifact_path).exists() {
-        std::fs::read(&artifact_path)?
-    } else {
+    if !std::path::Path::new(&artifact_path).exists() {
         bail!("build succeeded but artifact not found at: {}", artifact_path);
-    };
+    }
 
-    let sha256_hex = common::artifact::sha256_hex(&file_bytes);
+    let sha256_hex = {
+        use sha2::{Digest, Sha256};
+        let mut file = std::fs::File::open(&artifact_path)?;
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher)?;
+        format!("{:x}", hasher.finalize())
+    };
 
     println!(
         "=> Artifact: {} (SHA256: {}...)",
@@ -149,7 +158,6 @@ pub fn run_build(cfg: &LiquidMetalConfig) -> Result<BuildResult> {
     Ok(BuildResult {
         artifact_path,
         sha256_hex,
-        file_bytes,
     })
 }
 

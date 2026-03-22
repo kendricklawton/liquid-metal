@@ -17,13 +17,22 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Compute the SHA-256 hex digest of a file on disk.
-/// Used by the API build runner after a server-side build completes.
-pub(crate) async fn sha256_file(path: &str) -> Result<String> {
-    let bytes = tokio::fs::read(path)
+/// Compute the SHA-256 hex digest of a file on disk by streaming in 64KB chunks.
+/// Avoids loading the entire file into memory — safe for multi-hundred-MB binaries.
+pub async fn sha256_file(path: &str) -> Result<String> {
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path)
         .await
-        .with_context(|| format!("reading artifact for hashing: {path}"))?;
-    Ok(sha256_hex(&bytes))
+        .with_context(|| format!("opening artifact for hashing: {path}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).await
+            .with_context(|| format!("reading artifact for hashing: {path}"))?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Verify that `path` hashes to `expected_hex` (lowercase SHA-256).
@@ -167,8 +176,8 @@ pub fn check_elf_compat_for_metal(bytes: &[u8]) -> Result<()> {
     }
 }
 
-/// File-based variant for daemon-side checking after S3 download.
-#[allow(dead_code)]
+/// File-based variant — reads only the first 64KB from disk.
+/// Used by the CLI (pre-upload check) and daemon (post-download check).
 pub async fn check_elf_compat_file(path: &str) -> Result<()> {
     // Read only the first 64 KiB — enough for all ELF headers + PT_INTERP.
     // Avoids loading a multi-GB rootfs into memory.

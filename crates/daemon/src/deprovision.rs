@@ -44,6 +44,18 @@ pub fn new_registry() -> VmRegistry {
 pub struct LiquidHandle {
     pub workspace_id: String,
     pub invocations:  Arc<AtomicU64>,
+    /// Handle to the HTTP accept loop spawned by `wasm_http::serve()`.
+    /// Aborted when the service is deprovisioned or scaled to zero,
+    /// preventing the accept loop from leaking as an orphaned task.
+    pub accept_task:  Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for LiquidHandle {
+    fn drop(&mut self) {
+        if let Some(handle) = self.accept_task.take() {
+            handle.abort();
+        }
+    }
 }
 
 /// Global Liquid registry — service_id → LiquidHandle.

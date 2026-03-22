@@ -223,6 +223,13 @@ async fn main() -> Result<()> {
 
     tracing::info!(auth_rpm, api_rpm, bff_rpm, "rate limits configured");
 
+    // Periodically evict stale rate limit buckets to prevent unbounded DashMap growth.
+    api::rate_limit::spawn_gc(
+        rate_limits.auth.clone(),
+        rate_limits.protected.clone(),
+        rate_limits.bff.clone(),
+    );
+
     let app = build_router(state, rate_limits);
 
     let version = env!("CARGO_PKG_VERSION");

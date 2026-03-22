@@ -83,6 +83,8 @@ hmac         = "0.12"
 governor     = { version = "0.8", features = ["std"] }
 # Constant-time comparison
 subtle       = "2.6"
+# IO utilities (streaming file upload in CLI)
+tokio-util   = { version = "0.7", features = ["io"] }
 # OpenAPI documentation
 utoipa       = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }

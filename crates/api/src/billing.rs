@@ -35,13 +35,13 @@ use axum::http::{HeaderMap, StatusCode};
 use futures::StreamExt;
 
 use common::events::{
-    LiquidUsageEvent, MetalUsageEvent, SuspendEvent,
-    SUBJECT_PROVISION, SUBJECT_SUSPEND, SUBJECT_USAGE_LIQUID, SUBJECT_USAGE_METAL,
+    LiquidUsageEvent, MetalUsageEvent, SUBJECT_PROVISION, SUBJECT_SUSPEND, SUBJECT_USAGE_LIQUID,
+    SUBJECT_USAGE_METAL, SuspendEvent,
 };
 use common::pricing::{FREE_LIQUID_INVOCATIONS, LIQUID_PRICE_PER_MILLION};
 
-use common::contract;
 use crate::{envelope, routes};
+use common::contract;
 
 use crate::AppState;
 use crate::routes::{ApiError, db_conn};
@@ -79,8 +79,14 @@ pub async fn usage_subscriber(state: Arc<AppState>) {
 async fn usage_subscribe_loop(state: &AppState) -> Result<()> {
     // Queue group ensures only one API instance processes each usage event,
     // preventing duplicate inserts when scaling to multiple instances.
-    let mut metal_sub  = state.nats_client.queue_subscribe(SUBJECT_USAGE_METAL, "api-billing".into()).await?;
-    let mut liquid_sub = state.nats_client.queue_subscribe(SUBJECT_USAGE_LIQUID, "api-billing".into()).await?;
+    let mut metal_sub = state
+        .nats_client
+        .queue_subscribe(SUBJECT_USAGE_METAL, "api-billing".into())
+        .await?;
+    let mut liquid_sub = state
+        .nats_client
+        .queue_subscribe(SUBJECT_USAGE_LIQUID, "api-billing".into())
+        .await?;
 
     tracing::info!("billing: usage subscriber connected");
 
@@ -120,8 +126,15 @@ async fn insert_metal_usage(state: &AppState, ev: &MetalUsageEvent) -> Result<()
     db.execute(
         "INSERT INTO usage_events (workspace_id, service_id, engine, quantity, duration_ms) \
          VALUES ($1, $2, 'metal', $3, $4)",
-        &[&wid, &sid, &(ev.invocations as i64), &(ev.duration_ms as i64)],
-    ).await.context("insert metal usage")?;
+        &[
+            &wid,
+            &sid,
+            &(ev.invocations as i64),
+            &(ev.duration_ms as i64),
+        ],
+    )
+    .await
+    .context("insert metal usage")?;
     Ok(())
 }
 
@@ -133,7 +146,9 @@ async fn insert_liquid_usage(state: &AppState, ev: &LiquidUsageEvent) -> Result<
         "INSERT INTO usage_events (workspace_id, service_id, engine, quantity) \
          VALUES ($1, $2, 'liquid', $3)",
         &[&wid, &sid, &(ev.invocations as i64)],
-    ).await.context("insert liquid usage")?;
+    )
+    .await
+    .context("insert liquid usage")?;
     Ok(())
 }
 
@@ -142,8 +157,13 @@ async fn insert_liquid_usage(state: &AppState, ev: &LiquidUsageEvent) -> Result<
 /// Aggregates unbilled Liquid usage_events into credit deductions.
 /// Applies free invocation allowance, then bills excess at $0.30/1M.
 pub async fn billing_aggregator(state: Arc<AppState>) {
-    let secs: u64 = common::config::env_or("BILLING_INTERVAL_SECS", "60").parse().unwrap_or(60);
-    tracing::info!(billing_interval_secs = secs, "billing aggregator configured");
+    let secs: u64 = common::config::env_or("BILLING_INTERVAL_SECS", "60")
+        .parse()
+        .unwrap_or(60);
+    tracing::info!(
+        billing_interval_secs = secs,
+        "billing aggregator configured"
+    );
     let mut interval = tokio::time::interval(Duration::from_secs(secs));
     loop {
         interval.tick().await;
@@ -159,8 +179,9 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
 
     // Aggregate unbilled Liquid usage per workspace.
     // FOR UPDATE SKIP LOCKED prevents double-billing when multiple API instances run.
-    let liquid_rows = txn.query(
-        "WITH locked AS ( \
+    let liquid_rows = txn
+        .query(
+            "WITH locked AS ( \
              SELECT id, workspace_id, quantity \
              FROM usage_events \
              WHERE billed = false AND engine = 'liquid' \
@@ -173,14 +194,18 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
          FROM locked l \
          LEFT JOIN workspaces w ON w.id = l.workspace_id \
          GROUP BY l.workspace_id, w.free_invocations_used",
-        &[],
-    ).await.context("aggregate liquid usage")?;
+            &[],
+        )
+        .await
+        .context("aggregate liquid usage")?;
 
     for row in &liquid_rows {
-        let wid:          uuid::Uuid     = row.get("workspace_id");
-        let invocations:  i64            = row.get("total_invocations");
-        let ids:          Vec<uuid::Uuid> = row.get("ids");
-        let free_used:    i64            = row.get::<_, Option<i64>>("free_invocations_used").unwrap_or(0);
+        let wid: uuid::Uuid = row.get("workspace_id");
+        let invocations: i64 = row.get("total_invocations");
+        let ids: Vec<uuid::Uuid> = row.get("ids");
+        let free_used: i64 = row
+            .get::<_, Option<i64>>("free_invocations_used")
+            .unwrap_or(0);
 
         // Calculate how many of these invocations are covered by the free allowance.
         let free_remaining = (FREE_LIQUID_INVOCATIONS - free_used).max(0);
@@ -194,7 +219,9 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
                     updated_at = NOW() \
                  WHERE id = $2",
                 &[&free_consumed, &wid],
-            ).await.context("update free_invocations_used")?;
+            )
+            .await
+            .context("update free_invocations_used")?;
         }
 
         // Bill the excess at $0.30/1M = 300,000 µcr per 1M invocations.
@@ -202,7 +229,8 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
         if billable > 0 {
             let cost = billable * LIQUID_PRICE_PER_MILLION / 1_000_000;
             if cost > 0 {
-                let balance_after = deduct_balance(&txn, &wid, cost, "usage_liquid", "Wasm invocations").await?;
+                let balance_after =
+                    deduct_balance(&txn, &wid, cost, "usage_liquid", "Wasm invocations").await?;
                 if balance_after <= 0 {
                     insert_suspend_outbox(&txn, &wid).await?;
                 }
@@ -212,7 +240,9 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
         txn.execute(
             "UPDATE usage_events SET billed = true WHERE id = ANY($1)",
             &[&ids],
-        ).await.context("mark liquid billed")?;
+        )
+        .await
+        .context("mark liquid billed")?;
     }
 
     txn.commit().await.context("billing aggregator commit")?;
@@ -225,8 +255,13 @@ async fn aggregate_once(state: &AppState) -> Result<()> {
 /// Background task that runs hourly. Finds Metal services whose 30-day billing
 /// cycle has elapsed and charges the fixed monthly price to the workspace balance.
 pub async fn metal_billing_cycle(state: Arc<AppState>) {
-    let secs: u64 = common::config::env_or("METAL_BILLING_INTERVAL_SECS", "3600").parse().unwrap_or(3600);
-    tracing::info!(metal_billing_interval_secs = secs, "metal billing cycle configured");
+    let secs: u64 = common::config::env_or("METAL_BILLING_INTERVAL_SECS", "3600")
+        .parse()
+        .unwrap_or(3600);
+    tracing::info!(
+        metal_billing_interval_secs = secs,
+        "metal billing cycle configured"
+    );
     let mut interval = tokio::time::interval(Duration::from_secs(secs));
     loop {
         interval.tick().await;
@@ -253,19 +288,24 @@ async fn metal_billing_once(state: &AppState) -> Result<()> {
     ).await.context("find metal services due for billing")?;
 
     for row in &rows {
-        let service_id:        uuid::Uuid = row.get("service_id");
-        let workspace_id:      uuid::Uuid = row.get("workspace_id");
-        let monthly_price_cents: i64      = row.get("monthly_price_cents");
+        let service_id: uuid::Uuid = row.get("service_id");
+        let workspace_id: uuid::Uuid = row.get("workspace_id");
+        let monthly_price_cents: i64 = row.get("monthly_price_cents");
 
         // Convert cents to micro-credits.
         let cost = monthly_price_cents * MICROCREDITS_PER_CENT;
 
         if cost > 0 {
-            let balance_after = deduct_balance(&txn, &workspace_id, cost, "metal_monthly",
-                &format!("Metal monthly (service {})", service_id)).await?;
-            if balance_after <= 0 {
-                insert_suspend_outbox(&txn, &workspace_id).await?;
-            }
+            let balance_after = deduct_balance(
+                &txn,
+                &workspace_id,
+                cost,
+                "metal_monthly",
+                &format!("Metal monthly (service {})", service_id),
+            )
+            .await?;
+            insert_suspend_outbox(&txn, &workspace_id).await?;
+            if balance_after <= 0 {}
         }
 
         // Advance billing_cycle_start by 30 days.
@@ -274,7 +314,9 @@ async fn metal_billing_once(state: &AppState) -> Result<()> {
                 updated_at = NOW() \
              WHERE id = $1",
             &[&service_id],
-        ).await.context("advance billing_cycle_start")?;
+        )
+        .await
+        .context("advance billing_cycle_start")?;
 
         tracing::info!(
             service_id = %service_id,
@@ -294,8 +336,13 @@ async fn metal_billing_once(state: &AppState) -> Result<()> {
 /// Background task that runs hourly. Resets the free Liquid invocation counter
 /// for workspaces whose monthly reset window has elapsed.
 pub async fn free_invocations_reset(state: Arc<AppState>) {
-    let secs: u64 = common::config::env_or("FREE_INV_RESET_INTERVAL_SECS", "3600").parse().unwrap_or(3600);
-    tracing::info!(free_inv_reset_interval_secs = secs, "free invocations reset configured");
+    let secs: u64 = common::config::env_or("FREE_INV_RESET_INTERVAL_SECS", "3600")
+        .parse()
+        .unwrap_or(3600);
+    tracing::info!(
+        free_inv_reset_interval_secs = secs,
+        "free invocations reset configured"
+    );
     let mut interval = tokio::time::interval(Duration::from_secs(secs));
     loop {
         interval.tick().await;
@@ -308,15 +355,18 @@ pub async fn free_invocations_reset(state: Arc<AppState>) {
 async fn free_invocations_reset_once(state: &AppState) -> Result<()> {
     let db = state.db.get().await.context("db pool")?;
 
-    let n = db.execute(
-        "UPDATE workspaces \
+    let n = db
+        .execute(
+            "UPDATE workspaces \
          SET free_invocations_used = 0, \
              free_invocations_reset_at = free_invocations_reset_at + INTERVAL '1 month', \
              updated_at = NOW() \
          WHERE free_invocations_reset_at + INTERVAL '1 month' <= NOW() \
            AND deleted_at IS NULL",
-        &[],
-    ).await.context("reset free invocations")?;
+            &[],
+        )
+        .await
+        .context("reset free invocations")?;
 
     if n > 0 {
         tracing::info!(workspaces_reset = n, "billing: free invocations reset");
@@ -339,12 +389,15 @@ async fn deduct_balance(
     description: &str,
 ) -> Result<i64> {
     // Deduct and return new balance in one round-trip.
-    let row = txn.query_one(
-        "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
+    let row = txn
+        .query_one(
+            "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
          WHERE id = $2 \
          RETURNING balance",
-        &[&cost, workspace_id],
-    ).await.context("deduct workspace balance")?;
+            &[&cost, workspace_id],
+        )
+        .await
+        .context("deduct workspace balance")?;
 
     let balance_after: i64 = row.get("balance");
 
@@ -353,7 +406,9 @@ async fn deduct_balance(
         "INSERT INTO credit_ledger (workspace_id, amount, kind, description, balance_after) \
          VALUES ($1, $2, $3, $4, $5)",
         &[workspace_id, &(-cost), &kind, &description, &balance_after],
-    ).await.context("insert credit ledger")?;
+    )
+    .await
+    .context("insert credit ledger")?;
 
     Ok(balance_after)
 }
@@ -364,13 +419,17 @@ async fn deduct_balance(
 async fn insert_suspend_outbox(
     txn: &deadpool_postgres::Transaction<'_>,
     workspace_id: &uuid::Uuid,
-) -> Result<()> {
     // Only enqueue if the workspace still has active services to suspend.
-    let has_active: bool = txn.query_one(
-        "SELECT EXISTS(SELECT 1 FROM services WHERE workspace_id = $1 \
+) -> Result<()> {
+    let has_active: bool = txn
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM services WHERE workspace_id = $1 \
          AND status IN ('running', 'provisioning') AND deleted_at IS NULL) AS active",
-        &[workspace_id],
-    ).await.context("check active services")?.get("active");
+            &[workspace_id],
+        )
+        .await
+        .context("check active services")?
+        .get("active");
 
     if !has_active {
         return Ok(());
@@ -384,7 +443,9 @@ async fn insert_suspend_outbox(
     txn.execute(
         "INSERT INTO outbox (subject, payload) VALUES ($1, $2)",
         &[&SUBJECT_SUSPEND, &payload],
-    ).await.context("insert suspend outbox")?;
+    )
+    .await
+    .context("insert suspend outbox")?;
 
     tracing::warn!(target: "audit", workspace_id = %workspace_id, action = "suspend_queued", "billing: workspace queued for suspension — balance depleted");
     Ok(())
@@ -399,8 +460,9 @@ async fn enqueue_unsuspend(
     workspace_id: uuid::Uuid,
 ) -> Result<(), ApiError> {
     // Query suspended services + latest deployment artifact for each.
-    let rows = txn.query(
-        "SELECT s.id, s.slug, s.name, s.engine, s.port, s.vcpu, s.memory_mb, \
+    let rows = txn
+        .query(
+            "SELECT s.id, s.slug, s.name, s.engine, s.port, s.vcpu, s.memory_mb, \
                 s.workspace_id, s.project_id, \
                 d.artifact_key \
          FROM services s \
@@ -412,8 +474,10 @@ async fn enqueue_unsuspend(
              LIMIT 1 \
          ) d ON true \
          WHERE s.workspace_id = $1 AND s.status = 'suspended' AND s.deleted_at IS NULL",
-        &[&workspace_id],
-    ).await.map_err(|e| ApiError::internal(format!("unsuspend query: {e}")))?;
+            &[&workspace_id],
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("unsuspend query: {e}")))?;
 
     if rows.is_empty() {
         return Ok(());
@@ -486,12 +550,16 @@ async fn enqueue_unsuspend(
         txn.execute(
             "UPDATE services SET status = 'provisioning', updated_at = NOW() WHERE id = $1",
             &[&service_id],
-        ).await.map_err(|e| ApiError::internal(format!("mark provisioning: {e}")))?;
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("mark provisioning: {e}")))?;
 
         txn.execute(
             "INSERT INTO outbox (subject, payload) VALUES ($1, $2)",
             &[&SUBJECT_PROVISION, &payload],
-        ).await.map_err(|e| ApiError::internal(format!("unsuspend outbox: {e}")))?;
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("unsuspend outbox: {e}")))?;
 
         tracing::info!(target: "audit", action = "unsuspend_provision", %service_id, %workspace_id, "service queued for re-provision after top-up");
     }
@@ -511,20 +579,25 @@ pub async fn stripe_webhook(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<StatusCode, ApiError> {
-    let stripe = state.stripe.as_ref().ok_or_else(|| {
-        ApiError::unavailable("billing not configured")
-    })?;
+    let stripe = state
+        .stripe
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("billing not configured"))?;
 
     let sig = headers
         .get("stripe-signature")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| ApiError::bad_request("missing_signature", "missing Stripe-Signature header"))?;
+        .ok_or_else(|| {
+            ApiError::bad_request("missing_signature", "missing Stripe-Signature header")
+        })?;
 
-    let webhook_secret = state.stripe_webhook_secret.as_deref().ok_or_else(|| {
-        ApiError::unavailable("webhook secret not configured")
-    })?;
+    let webhook_secret = state
+        .stripe_webhook_secret
+        .as_deref()
+        .ok_or_else(|| ApiError::unavailable("webhook secret not configured"))?;
 
-    let event = stripe.verify_webhook(&body, sig, webhook_secret)
+    let event = stripe
+        .verify_webhook(&body, sig, webhook_secret)
         .map_err(|e| {
             tracing::warn!(error = %e, "Stripe webhook signature verification failed");
             ApiError::forbidden("invalid webhook signature")
@@ -537,7 +610,12 @@ pub async fn stripe_webhook(
             handle_checkout_completed(&state, &event.data.object).await?;
         }
         "checkout.session.expired" => {
-            let session_id = event.data.object.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let session_id = event
+                .data
+                .object
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             tracing::info!(target: "audit", action = "checkout_expired", session_id, "Stripe checkout session expired");
         }
         "charge.refunded" => {
@@ -554,7 +632,10 @@ pub async fn stripe_webhook(
     Ok(StatusCode::OK)
 }
 
-async fn handle_checkout_completed(state: &AppState, object: &serde_json::Value) -> Result<(), ApiError> {
+async fn handle_checkout_completed(
+    state: &AppState,
+    object: &serde_json::Value,
+) -> Result<(), ApiError> {
     let mode = object.get("mode").and_then(|v| v.as_str()).unwrap_or("");
     if mode != "payment" {
         return Ok(());
@@ -569,18 +650,31 @@ async fn handle_checkout_completed(state: &AppState, object: &serde_json::Value)
         return Ok(());
     }
 
-    let session_id = object.get("id").and_then(|v| v.as_str())
+    let session_id = object
+        .get("id")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::bad_request("invalid_payload", "missing session id"))?;
-    let customer_id = object.get("customer").and_then(|v| v.as_str())
+    let customer_id = object
+        .get("customer")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::bad_request("invalid_payload", "missing customer"))?;
-    let amount_total = object.get("amount_total").and_then(|v| v.as_i64()).unwrap_or(0);
-    let payment_intent = object.get("payment_intent").and_then(|v| v.as_str()).unwrap_or("");
+    let amount_total = object
+        .get("amount_total")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let payment_intent = object
+        .get("payment_intent")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     // Convert cents to micro-credits.
     let credits = amount_total * MICROCREDITS_PER_CENT;
 
     let mut db = db_conn(&state.db).await?;
-    let txn = db.build_transaction().start().await
+    let txn = db
+        .build_transaction()
+        .start()
+        .await
         .map_err(|e| ApiError::internal(format!("txn: {e}")))?;
 
     // Idempotent guard — attempt the ledger insert FIRST. stripe_session_id has
@@ -608,12 +702,15 @@ async fn handle_checkout_completed(state: &AppState, object: &serde_json::Value)
 
     // Now safe to credit — we know this session_id is unique.
     // RETURNING balance + id avoids a separate SELECT round-trip.
-    let row = txn.query_one(
-        "UPDATE workspaces SET balance = balance + $1, updated_at = NOW() \
+    let row = txn
+        .query_one(
+            "UPDATE workspaces SET balance = balance + $1, updated_at = NOW() \
          WHERE stripe_customer_id = $2 AND deleted_at IS NULL \
          RETURNING id, balance",
-        &[&credits, &customer_id],
-    ).await.map_err(|e| ApiError::internal(format!("topup: {e}")))?;
+            &[&credits, &customer_id],
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("topup: {e}")))?;
     let workspace_id: uuid::Uuid = row.get("id");
     let balance_after: i64 = row.get("balance");
 
@@ -621,7 +718,9 @@ async fn handle_checkout_completed(state: &AppState, object: &serde_json::Value)
     txn.execute(
         "UPDATE credit_ledger SET balance_after = $1 WHERE stripe_session_id = $2",
         &[&balance_after, &session_id],
-    ).await.map_err(|e| ApiError::internal(format!("ledger patch: {e}")))?;
+    )
+    .await
+    .map_err(|e| ApiError::internal(format!("ledger patch: {e}")))?;
 
     // If workspace was suspended and now has positive balance, re-provision
     // all suspended services by inserting ProvisionEvents into the outbox.
@@ -630,36 +729,54 @@ async fn handle_checkout_completed(state: &AppState, object: &serde_json::Value)
         enqueue_unsuspend(state, &txn, workspace_id).await?;
     }
 
-    txn.commit().await.map_err(|e| ApiError::internal(format!("commit: {e}")))?;
+    txn.commit()
+        .await
+        .map_err(|e| ApiError::internal(format!("commit: {e}")))?;
 
     tracing::info!(target: "audit", action = "topup", customer_id, session_id, credits, %workspace_id, "top-up credits applied");
 
     Ok(())
 }
 
-async fn handle_charge_refunded(state: &AppState, object: &serde_json::Value) -> Result<(), ApiError> {
-    let amount_refunded = object.get("amount_refunded").and_then(|v| v.as_i64()).unwrap_or(0);
+async fn handle_charge_refunded(
+    state: &AppState,
+    object: &serde_json::Value,
+) -> Result<(), ApiError> {
+    let amount_refunded = object
+        .get("amount_refunded")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     if amount_refunded == 0 {
         return Ok(());
     }
 
-    let customer_id = object.get("customer").and_then(|v| v.as_str())
-        .ok_or_else(|| ApiError::bad_request("invalid_payload", "missing customer in charge.refunded"))?;
+    let customer_id = object
+        .get("customer")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            ApiError::bad_request("invalid_payload", "missing customer in charge.refunded")
+        })?;
     let charge_id = object.get("id").and_then(|v| v.as_str()).unwrap_or("");
 
     let credits = amount_refunded * MICROCREDITS_PER_CENT;
 
     let mut db = db_conn(&state.db).await?;
-    let txn = db.build_transaction().start().await
+    let txn = db
+        .build_transaction()
+        .start()
+        .await
         .map_err(|e| ApiError::internal(format!("txn: {e}")))?;
 
     // Reverse the refund amount from workspace balance.
-    let row = txn.query_one(
-        "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
+    let row = txn
+        .query_one(
+            "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
          WHERE stripe_customer_id = $2 AND deleted_at IS NULL \
          RETURNING id, balance",
-        &[&credits, &customer_id],
-    ).await.map_err(|e| ApiError::internal(format!("refund deduct: {e}")))?;
+            &[&credits, &customer_id],
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("refund deduct: {e}")))?;
 
     let workspace_id: uuid::Uuid = row.get("id");
     let balance_after: i64 = row.get("balance");
@@ -671,27 +788,36 @@ async fn handle_charge_refunded(state: &AppState, object: &serde_json::Value) ->
     ).await.map_err(|e| ApiError::internal(format!("refund ledger: {e}")))?;
 
     if balance_after <= 0 {
-        insert_suspend_outbox(&txn, &workspace_id).await
+        insert_suspend_outbox(&txn, &workspace_id)
+            .await
             .map_err(|e| ApiError::internal(format!("suspend outbox: {e}")))?;
     }
 
-    txn.commit().await.map_err(|e| ApiError::internal(format!("commit: {e}")))?;
+    txn.commit()
+        .await
+        .map_err(|e| ApiError::internal(format!("commit: {e}")))?;
 
     tracing::info!(target: "audit", action = "refund", customer_id, charge_id, credits, %workspace_id, "Stripe refund applied");
     Ok(())
 }
 
-async fn handle_payment_failed(state: &AppState, object: &serde_json::Value) -> Result<(), ApiError> {
+async fn handle_payment_failed(
+    state: &AppState,
+    object: &serde_json::Value,
+) -> Result<(), ApiError> {
     let pi_id = object.get("id").and_then(|v| v.as_str()).unwrap_or("");
 
     let db = db_conn(&state.db).await?;
 
     // Check if checkout.session.completed already credited this payment_intent.
-    let row = db.query_opt(
-        "SELECT id, workspace_id, amount FROM credit_ledger \
+    let row = db
+        .query_opt(
+            "SELECT id, workspace_id, amount FROM credit_ledger \
          WHERE reference_id = $1 AND kind = 'topup'",
-        &[&pi_id],
-    ).await.map_err(|e| ApiError::internal(format!("ledger lookup: {e}")))?;
+            &[&pi_id],
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("ledger lookup: {e}")))?;
 
     let Some(row) = row else {
         // No matching credit — checkout.session.completed didn't fire or used a
@@ -705,15 +831,21 @@ async fn handle_payment_failed(state: &AppState, object: &serde_json::Value) -> 
 
     // Reverse the credited amount.
     let mut db = db_conn(&state.db).await?;
-    let txn = db.build_transaction().start().await
+    let txn = db
+        .build_transaction()
+        .start()
+        .await
         .map_err(|e| ApiError::internal(format!("txn: {e}")))?;
 
-    let row = txn.query_one(
-        "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
+    let row = txn
+        .query_one(
+            "UPDATE workspaces SET balance = balance - $1, updated_at = NOW() \
          WHERE id = $2 \
          RETURNING balance",
-        &[&original_amount, &workspace_id],
-    ).await.map_err(|e| ApiError::internal(format!("reverse credit: {e}")))?;
+            &[&original_amount, &workspace_id],
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("reverse credit: {e}")))?;
     let balance_after: i64 = row.get("balance");
 
     txn.execute(
@@ -723,11 +855,14 @@ async fn handle_payment_failed(state: &AppState, object: &serde_json::Value) -> 
     ).await.map_err(|e| ApiError::internal(format!("reversal ledger: {e}")))?;
 
     if balance_after <= 0 {
-        insert_suspend_outbox(&txn, &workspace_id).await
+        insert_suspend_outbox(&txn, &workspace_id)
+            .await
             .map_err(|e| ApiError::internal(format!("suspend outbox: {e}")))?;
     }
 
-    txn.commit().await.map_err(|e| ApiError::internal(format!("commit: {e}")))?;
+    txn.commit()
+        .await
+        .map_err(|e| ApiError::internal(format!("commit: {e}")))?;
 
     tracing::warn!(target: "audit", action = "payment_failed_reversed", payment_intent = pi_id, %workspace_id, reversed = original_amount, "payment failed — credit reversed");
     Ok(())
@@ -747,11 +882,14 @@ pub async fn get_balance(
     let wid = extract_workspace_id(&state, caller.user_id).await?;
     let db = db_conn(&state.db).await?;
 
-    let row = db.query_one(
-        "SELECT balance, COALESCE(free_invocations_used, 0) AS free_invocations_used \
+    let row = db
+        .query_one(
+            "SELECT balance, COALESCE(free_invocations_used, 0) AS free_invocations_used \
          FROM workspaces WHERE id = $1",
-        &[&wid],
-    ).await.map_err(|e| ApiError::internal(format!("balance query: {e}")))?;
+            &[&wid],
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("balance query: {e}")))?;
 
     Ok(Json(contract::BalanceResponse {
         balance: row.get("balance"),
@@ -826,15 +964,18 @@ pub async fn get_ledger(
         &[&wid],
     ).await.map_err(|e| ApiError::internal(format!("ledger query: {e}")))?;
 
-    let entries = rows.iter().map(|r| contract::LedgerEntry {
-        id: r.get::<_, uuid::Uuid>("id").to_string(),
-        amount: r.get("amount"),
-        kind: r.get("kind"),
-        description: r.get("description"),
-        reference_id: r.get("reference_id"),
-        balance_after: r.get("balance_after"),
-        created_at: r.get("created_at"),
-    }).collect();
+    let entries = rows
+        .iter()
+        .map(|r| contract::LedgerEntry {
+            id: r.get::<_, uuid::Uuid>("id").to_string(),
+            amount: r.get("amount"),
+            kind: r.get("kind"),
+            description: r.get("description"),
+            reference_id: r.get("reference_id"),
+            balance_after: r.get("balance_after"),
+            created_at: r.get("created_at"),
+        })
+        .collect();
 
     Ok(Json(contract::LedgerResponse { entries }))
 }
@@ -850,9 +991,10 @@ pub async fn create_topup(
     Json(body): Json<contract::TopupRequest>,
 ) -> Result<Json<contract::CheckoutResponse>, ApiError> {
     routes::require_scope(&caller, "admin")?;
-    let stripe = state.stripe.as_ref().ok_or_else(|| {
-        ApiError::unavailable("billing not configured")
-    })?;
+    let stripe = state
+        .stripe
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("billing not configured"))?;
 
     let wid = extract_workspace_id(&state, caller.user_id).await?;
     let db = db_conn(&state.db).await?;
@@ -860,15 +1002,21 @@ pub async fn create_topup(
     let customer_id = get_or_create_stripe_customer(&state, &db, &wid).await?;
 
     if body.amount_cents < 100 {
-        return Err(ApiError::bad_request("invalid_amount", "minimum top-up is $1.00"));
+        return Err(ApiError::bad_request(
+            "invalid_amount",
+            "minimum top-up is $1.00",
+        ));
     }
 
-    let session = stripe.create_topup_session(
-        &customer_id,
-        body.amount_cents,
-        &body.success_url,
-        &body.cancel_url,
-    ).await.map_err(|e| ApiError::bad_gateway(format!("Stripe: {e}")))?;
+    let session = stripe
+        .create_topup_session(
+            &customer_id,
+            body.amount_cents,
+            &body.success_url,
+            &body.cancel_url,
+        )
+        .await
+        .map_err(|e| ApiError::bad_gateway(format!("Stripe: {e}")))?;
 
     tracing::info!(
         target: "audit",
@@ -895,7 +1043,9 @@ pub async fn create_topup(
 /// The invoice is purely a receipt — the charges were already settled via the
 /// credit balance. We create → add line items → finalize → mark paid.
 pub async fn invoice_generator(state: Arc<AppState>) {
-    let secs: u64 = common::config::env_or("INVOICE_INTERVAL_SECS", "86400").parse().unwrap_or(86400);
+    let secs: u64 = common::config::env_or("INVOICE_INTERVAL_SECS", "86400")
+        .parse()
+        .unwrap_or(86400);
     tracing::info!(invoice_interval_secs = secs, "invoice generator configured");
     let mut interval = tokio::time::interval(Duration::from_secs(secs));
     loop {
@@ -916,8 +1066,9 @@ async fn generate_invoices_once(state: &AppState) -> Result<()> {
     // Find workspaces that have a Stripe customer and either:
     // - Never had an invoice (last_invoice_at IS NULL) and were created > 30 days ago
     // - Last invoice was > 30 days ago
-    let rows = db.query(
-        "SELECT w.id, w.stripe_customer_id, w.last_invoice_at, w.created_at \
+    let rows = db
+        .query(
+            "SELECT w.id, w.stripe_customer_id, w.last_invoice_at, w.created_at \
          FROM workspaces w \
          WHERE w.stripe_customer_id IS NOT NULL \
            AND w.deleted_at IS NULL \
@@ -926,8 +1077,10 @@ async fn generate_invoices_once(state: &AppState) -> Result<()> {
                OR \
                (w.last_invoice_at + INTERVAL '30 days' <= NOW()) \
            )",
-        &[],
-    ).await.context("find invoiceable workspaces")?;
+            &[],
+        )
+        .await
+        .context("find invoiceable workspaces")?;
 
     for row in &rows {
         let wid: uuid::Uuid = row.get("id");
@@ -943,7 +1096,9 @@ async fn generate_invoices_once(state: &AppState) -> Result<()> {
             continue;
         }
 
-        match generate_workspace_invoice(state, stripe, &db, wid, &customer_id, period_start, period_end).await {
+        match generate_workspace_invoice(stripe, &db, wid, &customer_id, period_start, period_end)
+            .await
+        {
             Ok(()) => {
                 tracing::info!(%wid, "invoice generated");
             }
@@ -957,7 +1112,6 @@ async fn generate_invoices_once(state: &AppState) -> Result<()> {
 }
 
 async fn generate_workspace_invoice(
-    state: &AppState,
     stripe: &crate::stripe::StripeClient,
     db: &deadpool_postgres::Object,
     workspace_id: uuid::Uuid,
@@ -966,23 +1120,29 @@ async fn generate_workspace_invoice(
     period_end: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     // Sum Metal charges in this period from the credit ledger.
-    let metal_row = db.query_one(
-        "SELECT COALESCE(SUM(ABS(amount)), 0) AS total \
+    let metal_row = db
+        .query_one(
+            "SELECT COALESCE(SUM(ABS(amount)), 0) AS total \
          FROM credit_ledger \
          WHERE workspace_id = $1 AND kind = 'metal_monthly' \
            AND created_at >= $2 AND created_at < $3",
-        &[&workspace_id, &period_start, &period_end],
-    ).await.context("sum metal charges")?;
+            &[&workspace_id, &period_start, &period_end],
+        )
+        .await
+        .context("sum metal charges")?;
     let metal_microcredits: i64 = metal_row.get("total");
 
     // Sum Liquid charges in this period.
-    let liquid_row = db.query_one(
-        "SELECT COALESCE(SUM(ABS(amount)), 0) AS total \
+    let liquid_row = db
+        .query_one(
+            "SELECT COALESCE(SUM(ABS(amount)), 0) AS total \
          FROM credit_ledger \
          WHERE workspace_id = $1 AND kind = 'usage_liquid' \
            AND created_at >= $2 AND created_at < $3",
-        &[&workspace_id, &period_start, &period_end],
-    ).await.context("sum liquid charges")?;
+            &[&workspace_id, &period_start, &period_end],
+        )
+        .await
+        .context("sum liquid charges")?;
     let liquid_microcredits: i64 = liquid_row.get("total");
 
     let total_microcredits = metal_microcredits + liquid_microcredits;
@@ -993,7 +1153,9 @@ async fn generate_workspace_invoice(
         db.execute(
             "UPDATE workspaces SET last_invoice_at = $1, updated_at = NOW() WHERE id = $2",
             &[&period_end, &workspace_id],
-        ).await.context("advance last_invoice_at (no charges)")?;
+        )
+        .await
+        .context("advance last_invoice_at (no charges)")?;
         return Ok(());
     }
 
@@ -1008,43 +1170,54 @@ async fn generate_workspace_invoice(
     let wid_str = workspace_id.to_string();
 
     // Create draft invoice on Stripe.
-    let invoice = stripe.create_invoice(
-        customer_id,
-        &description,
-        0, // days_until_due = 0 (already paid from balance)
-        &[
-            ("metadata[workspace_id]", &wid_str),
-            ("metadata[period_start]", &start_str),
-            ("metadata[period_end]", &end_str),
-        ],
-    ).await.context("create stripe invoice")?;
+    let invoice = stripe
+        .create_invoice(
+            customer_id,
+            &description,
+            0, // days_until_due = 0 (already paid from balance)
+            &[
+                ("metadata[workspace_id]", &wid_str),
+                ("metadata[period_start]", &start_str),
+                ("metadata[period_end]", &end_str),
+            ],
+        )
+        .await
+        .context("create stripe invoice")?;
 
     // Add line items.
     if metal_cents > 0 {
-        stripe.add_invoice_item(
-            customer_id,
-            &invoice.id,
-            &format!("Metal VM charges ({} — {})", start_str, end_str),
-            metal_cents,
-        ).await.context("add metal invoice item")?;
+        stripe
+            .add_invoice_item(
+                customer_id,
+                &invoice.id,
+                &format!("Metal VM charges ({} — {})", start_str, end_str),
+                metal_cents,
+            )
+            .await
+            .context("add metal invoice item")?;
     }
 
     if liquid_cents > 0 {
-        stripe.add_invoice_item(
-            customer_id,
-            &invoice.id,
-            &format!("Wasm invocation charges ({} — {})", start_str, end_str),
-            liquid_cents,
-        ).await.context("add liquid invoice item")?;
+        stripe
+            .add_invoice_item(
+                customer_id,
+                &invoice.id,
+                &format!("Wasm invocation charges ({} — {})", start_str, end_str),
+                liquid_cents,
+            )
+            .await
+            .context("add liquid invoice item")?;
     }
 
     // Finalize (generates PDF, assigns number).
-    stripe.finalize_invoice(&invoice.id)
+    stripe
+        .finalize_invoice(&invoice.id)
         .await
         .context("finalize stripe invoice")?;
 
     // Mark as paid (out-of-band — already settled via balance).
-    let paid = stripe.mark_invoice_paid(&invoice.id)
+    let paid = stripe
+        .mark_invoice_paid(&invoice.id)
         .await
         .context("mark stripe invoice paid")?;
 
@@ -1064,13 +1237,17 @@ async fn generate_workspace_invoice(
             &period_start,
             &period_end,
         ],
-    ).await.context("insert local invoice record")?;
+    )
+    .await
+    .context("insert local invoice record")?;
 
     // Advance the invoice pointer.
     db.execute(
         "UPDATE workspaces SET last_invoice_at = $1, updated_at = NOW() WHERE id = $2",
         &[&period_end, &workspace_id],
-    ).await.context("advance last_invoice_at")?;
+    )
+    .await
+    .context("advance last_invoice_at")?;
 
     tracing::info!(
         target: "audit",
@@ -1111,17 +1288,20 @@ pub async fn list_invoices(
         &[&wid],
     ).await.map_err(|e| ApiError::internal(format!("invoices query: {e}")))?;
 
-    let invoices = rows.iter().map(|r| contract::InvoiceEntry {
-        id: r.get::<_, uuid::Uuid>("id").to_string(),
-        number: r.get("stripe_number"),
-        status: r.get("status"),
-        amount_cents: r.get("amount_cents"),
-        hosted_url: r.get("hosted_url"),
-        pdf_url: r.get("pdf_url"),
-        period_start: r.get("period_start"),
-        period_end: r.get("period_end"),
-        created_at: r.get("created_at"),
-    }).collect();
+    let invoices = rows
+        .iter()
+        .map(|r| contract::InvoiceEntry {
+            id: r.get::<_, uuid::Uuid>("id").to_string(),
+            number: r.get("stripe_number"),
+            status: r.get("status"),
+            amount_cents: r.get("amount_cents"),
+            hosted_url: r.get("hosted_url"),
+            pdf_url: r.get("pdf_url"),
+            period_start: r.get("period_start"),
+            period_end: r.get("period_end"),
+            created_at: r.get("created_at"),
+        })
+        .collect();
 
     Ok(Json(contract::InvoiceListResponse { invoices }))
 }
@@ -1133,35 +1313,42 @@ async fn get_or_create_stripe_customer(
     db: &deadpool_postgres::Object,
     workspace_id: &uuid::Uuid,
 ) -> Result<String, ApiError> {
-    let row = db.query_one(
-        "SELECT w.stripe_customer_id, w.name, u.email \
+    let row = db
+        .query_one(
+            "SELECT w.stripe_customer_id, w.name, u.email \
          FROM workspaces w \
          JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.role = 'owner' \
          JOIN users u ON u.id = wm.user_id \
          WHERE w.id = $1",
-        &[workspace_id],
-    ).await.map_err(|e| ApiError::internal(format!("workspace query: {e}")))?;
+            &[workspace_id],
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("workspace query: {e}")))?;
 
     let existing: Option<String> = row.get("stripe_customer_id");
     if let Some(cid) = existing {
         return Ok(cid);
     }
 
-    let stripe = state.stripe.as_ref().ok_or_else(|| {
-        ApiError::unavailable("billing not configured")
-    })?;
+    let stripe = state
+        .stripe
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("billing not configured"))?;
 
-    let name: String  = row.get("name");
+    let name: String = row.get("name");
     let email: String = row.get("email");
 
-    let customer = stripe.create_customer(&name, &email, &workspace_id.to_string())
+    let customer = stripe
+        .create_customer(&name, &email, &workspace_id.to_string())
         .await
         .map_err(|e| ApiError::bad_gateway(format!("Stripe create customer: {e}")))?;
 
     db.execute(
         "UPDATE workspaces SET stripe_customer_id = $1, updated_at = NOW() WHERE id = $2",
         &[&customer.id, workspace_id],
-    ).await.map_err(|e| ApiError::internal(format!("update stripe_customer_id: {e}")))?;
+    )
+    .await
+    .map_err(|e| ApiError::internal(format!("update stripe_customer_id: {e}")))?;
 
     Ok(customer.id)
 }
@@ -1169,16 +1356,22 @@ async fn get_or_create_stripe_customer(
 /// Look up the primary (owner) workspace for a given user.
 /// Deterministic: picks the oldest owned workspace, matching the pattern
 /// used by `get_or_create_stripe_customer`.
-async fn extract_workspace_id(state: &AppState, user_id: uuid::Uuid) -> Result<uuid::Uuid, ApiError> {
+async fn extract_workspace_id(
+    state: &AppState,
+    user_id: uuid::Uuid,
+) -> Result<uuid::Uuid, ApiError> {
     let db = db_conn(&state.db).await?;
 
-    let row = db.query_opt(
-        "SELECT wm.workspace_id FROM workspace_members wm \
+    let row = db
+        .query_opt(
+            "SELECT wm.workspace_id FROM workspace_members wm \
          WHERE wm.user_id = $1 AND wm.role = 'owner' \
          ORDER BY wm.created_at ASC \
          LIMIT 1",
-        &[&user_id],
-    ).await.map_err(|e| ApiError::internal(format!("workspace lookup: {e}")))?;
+            &[&user_id],
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("workspace lookup: {e}")))?;
 
     row.map(|r| r.get("workspace_id"))
         .ok_or_else(|| ApiError::not_found("workspace not found for this user"))

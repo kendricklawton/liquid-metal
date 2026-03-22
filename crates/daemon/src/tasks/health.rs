@@ -56,7 +56,11 @@ pub fn spawn(
                         )
                     }
                 });
-                let _ = http1::Builder::new().serve_connection(io, handler).await;
+                // Timeout prevents slow/stuck clients from holding a task indefinitely.
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    http1::Builder::new().serve_connection(io, handler),
+                ).await;
             });
         }
     });

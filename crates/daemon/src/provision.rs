@@ -157,6 +157,43 @@ pub async fn release_tap_index(tap_name: &str) {
     }
 }
 
+/// RAII guard that releases a TAP index back to the pool on drop.
+///
+/// Call `.defuse()` after the TAP is successfully registered in the VM registry
+/// (at which point deprovision/crash_watcher owns cleanup). If the guard is
+/// dropped without being defused — e.g. because an intermediate step returned
+/// an error via `?` — the index is automatically released, preventing leaks.
+pub struct TapGuard {
+    tap_name: Option<String>,
+}
+
+impl TapGuard {
+    pub fn new(tap_name: String) -> Self {
+        Self { tap_name: Some(tap_name) }
+    }
+
+    /// Disarm the guard — the TAP index will NOT be released on drop.
+    /// Call this once the TAP is registered in the VM registry.
+    pub fn defuse(&mut self) {
+        self.tap_name = None;
+    }
+}
+
+impl Drop for TapGuard {
+    fn drop(&mut self) {
+        if let Some(ref name) = self.tap_name {
+            let name = name.clone();
+            // release_tap_index is async but Drop is sync. The lock acquisition
+            // inside release_tap_index is non-blocking in practice (no contention),
+            // so spawning a short-lived task is safe here.
+            tokio::task::spawn(async move {
+                release_tap_index(&name).await;
+                tracing::debug!(tap = %name, "TapGuard: released leaked TAP index on drop");
+            });
+        }
+    }
+}
+
 /// On daemon startup, enumerate TAP devices attached to the bridge and delete
 /// any that are not tracked in the DB. These are orphans left by a previous
 /// daemon crash between TAP creation and the `services.tap_name` DB write.
@@ -657,6 +694,10 @@ async fn provision_metal(
     let vm_id   = Uuid::now_v7();
     let tap_idx = allocate_tap_index().await?;
     let tap     = common::networking::tap_name(tap_idx);
+    // Guard auto-releases the TAP index if we return early (e.g. template
+    // download fails, rootfs build fails, create_tap fails). Defused after
+    // the handle is registered in the VM registry.
+    let mut tap_guard = TapGuard::new(tap.clone());
     let ip      = common::networking::guest_ip(tap_idx)
         .context("TAP index pool exhausted")?;
     let upstream_addr = format!("{}:{}", ip, spec.port);
@@ -703,7 +744,8 @@ async fn provision_metal(
 
         if let Err(ref e) = result {
             tracing::warn!(tap = tap, error = %e, "metal provision failed after TAP creation — cleaning up");
-            release_tap_index(&tap).await;
+            // tap_guard will release the index on drop; we still need to
+            // delete the kernel TAP device explicitly.
             if let Err(del_err) = netlink::delete_tap(&tap).await {
                 tracing::warn!(tap = tap, error = %del_err, "failed to delete leaked TAP device");
             }
@@ -725,8 +767,8 @@ async fn provision_metal(
             );
             publish_progress(&ctx.nats, &event.service_id, DeployStep::Failed, &format!("Startup probe failed: {e}")).await;
             // Kill the VM and clean up — don't leave a ghost running.
+            // tap_guard will release the index on drop.
             unsafe { libc::kill(fc_pid as libc::pid_t, libc::SIGKILL); }
-            release_tap_index(&tap).await;
             deprovision::metal(
                 &event.service_id,
                 deprovision::VmHandle {
@@ -755,6 +797,8 @@ async fn provision_metal(
                 chroot_base: ctx.cfg.chroot_base.clone(),
             },
         );
+        // Registered — deprovision/crash_watcher now owns TAP index cleanup.
+        tap_guard.defuse();
 
         tracing::info!(
             vm_id = %vm_id, %upstream_addr, service_id = event.service_id,
@@ -824,27 +868,39 @@ async fn provision_metal_after_tap(
         (pid, sock, rootfs_path.to_string(), ctx.cfg.kernel_path.clone())
     };
 
-    cgroup::apply(&event.service_id, fc_pid, &ctx.cfg.rootfs_dev, &spec.quota, spec.memory_mb)
+    // If any step after FC spawn fails, kill the process to prevent zombies.
+    // The caller's error handler only cleans up TAP — it doesn't know the pid.
+    let post_spawn = async {
+        cgroup::apply(&event.service_id, fc_pid, &ctx.cfg.rootfs_dev, &spec.quota, spec.memory_mb)
+            .await
+            .context("cgroup limits")?;
+
+        // No CPU pinning — the Linux CFS scheduler shares cores across all VMs.
+        // This allows overselling: 20 VMs can timeshare 6 cores because most are
+        // idle most of the time. Performance degrades gracefully under contention.
+
+        firecracker::start_vm(&firecracker::VmConfig {
+            sock_path:   &sock_path,
+            vcpu:        spec.vcpu,
+            memory_mb:   spec.memory_mb,
+            kernel_path: &kernel_guest,
+            rootfs_path: &rootfs_guest,
+            tap_name:    tap,
+            guest_mac:   mac,
+            guest_ip,
+            gateway:     common::networking::GATEWAY,
+        })
         .await
-        .context("cgroup limits")?;
+        .context("start VM")?;
 
-    // No CPU pinning — the Linux CFS scheduler shares cores across all VMs.
-    // This allows overselling: 20 VMs can timeshare 6 cores because most are
-    // idle most of the time. Performance degrades gracefully under contention.
+        Ok::<_, anyhow::Error>(())
+    };
 
-    firecracker::start_vm(&firecracker::VmConfig {
-        sock_path:   &sock_path,
-        vcpu:        spec.vcpu,
-        memory_mb:   spec.memory_mb,
-        kernel_path: &kernel_guest,
-        rootfs_path: &rootfs_guest,
-        tap_name:    tap,
-        guest_mac:   mac,
-        guest_ip,
-        gateway:     common::networking::GATEWAY,
-    })
-    .await
-    .context("start VM")?;
+    if let Err(e) = post_spawn.await {
+        tracing::warn!(fc_pid, error = %e, "killing FC process — post-spawn step failed");
+        unsafe { libc::kill(fc_pid as libc::pid_t, libc::SIGKILL); }
+        return Err(e);
+    }
 
     Ok(fc_pid)
 }
@@ -898,7 +954,7 @@ async fn provision_liquid(
     publish_progress(&ctx.nats, &event.service_id, DeployStep::Starting, "Starting Wasmtime runtime").await;
     // Compile the module once and start a per-request HTTP shim on a free port.
     // Pingora routes to 127.0.0.1:{port} as upstream_addr.
-    let port = wasm_http::serve(wasm_path, event.app_name.clone(), invocations.clone(), event.env_vars.clone())
+    let (port, accept_task) = wasm_http::serve(wasm_path, event.app_name.clone(), invocations.clone(), event.env_vars.clone())
         .await
         .context("starting wasm HTTP shim")?;
 
@@ -913,11 +969,13 @@ async fn provision_liquid(
         .context("wasm HTTP readiness probe failed")?;
 
     // Register for billing usage reporting.
+    // accept_task is stored so it can be aborted when the service is deprovisioned.
     ctx.liquid_registry.lock().await.insert(
         event.service_id.clone(),
         deprovision::LiquidHandle {
             workspace_id: event.tenant_id.clone(),
             invocations,
+            accept_task: Some(accept_task),
         },
     );
 
@@ -949,11 +1007,12 @@ async fn startup_probe(upstream_addr: &str, serial_log: Option<&str>) -> Result<
             let stream = TcpStream::connect(upstream_addr).await?;
             let io = TokioIo::new(stream);
             let (mut sender, conn) = http1::handshake(io).await?;
-            tokio::spawn(conn);
+            let conn_handle = tokio::spawn(conn);
             let req = Request::get("/")
                 .header("host", upstream_addr)
                 .body(http_body_util::Empty::<hyper::body::Bytes>::new())?;
             sender.send_request(req).await?;
+            conn_handle.abort();
             Ok(())
         }
         .await;

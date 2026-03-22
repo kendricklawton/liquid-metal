@@ -1,6 +1,7 @@
 use anyhow::bail;
 use anyhow::Result;
 use futures::StreamExt as _;
+use reqwest::Body;
 
 use common::contract::{DeployRequest, DeployResponse, UploadUrlRequest, UploadUrlResponse};
 
@@ -31,9 +32,10 @@ pub async fn run(config: &Config, output: OutputMode, skip_elf_check: bool) -> R
     // ── Build ────────────────────────────────────────────────────────────────
     let build_result = toml_config::run_build(&cfg)?;
 
-    // ELF compatibility check for Metal deploys — catch glibc binaries before upload
+    // ELF compatibility check for Metal deploys — catch glibc binaries before upload.
+    // Reads only the first 64KB (ELF headers), not the entire file.
     if engine == "metal" && !skip_elf_check {
-        common::artifact::check_elf_compat_for_metal(&build_result.file_bytes)?;
+        common::artifact::check_elf_compat_file(&build_result.artifact_path).await?;
     }
 
     let deploy_id = uuid::Uuid::now_v7().to_string();
@@ -60,14 +62,18 @@ pub async fn run(config: &Config, output: OutputMode, skip_elf_check: bool) -> R
         )
         .await?;
 
-    let artifact_size = build_result.file_bytes.len();
+    let artifact_meta = tokio::fs::metadata(&build_result.artifact_path).await?;
+    let artifact_size = artifact_meta.len() as usize;
     progress(&format!("=> Uploading artifact ({})...", crate::output::human_bytes(artifact_size)));
+    let file = tokio::fs::File::open(&build_result.artifact_path).await?;
+    let stream = tokio_util::io::ReaderStream::new(file);
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()?;
     let upload_resp = http
         .put(&url_resp.upload_url)
-        .body(build_result.file_bytes)
+        .header("content-length", artifact_size.to_string())
+        .body(Body::wrap_stream(stream))
         .send()
         .await?;
     if !upload_resp.status().is_success() {
@@ -107,9 +113,14 @@ pub async fn run(config: &Config, output: OutputMode, skip_elf_check: bool) -> R
     let mut buf = String::new();
 
     println!();
+    const SSE_BUF_LIMIT: usize = 10 * 1024 * 1024; // 10 MB
+
     while let Some(chunk) = byte_stream.next().await {
         let chunk = chunk?;
         buf.push_str(&String::from_utf8_lossy(&chunk));
+        if buf.len() > SSE_BUF_LIMIT {
+            bail!("deploy event stream exceeded {}MB — connection may be corrupt", SSE_BUF_LIMIT / 1024 / 1024);
+        }
         // SSE events are delimited by \n\n
         while let Some(pos) = buf.find("\n\n") {
             let raw = buf[..pos].to_string();

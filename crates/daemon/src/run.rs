@@ -110,6 +110,7 @@ pub async fn run() -> Result<()> {
     tasks::ebpf_audit::spawn(pool.clone(), registry.clone(), cfg.node_id.clone());
 
     tasks::usage::spawn(liquid_registry.clone(), ctx.nats.clone());
+    tasks::registry_sweep::spawn(pool.clone(), cfg.node_id.clone(), liquid_registry.clone());
 
     tasks::suspend::spawn(
         pool.clone(),

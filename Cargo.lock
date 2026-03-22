@@ -1321,7 +1321,9 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tokio",
+ "tokio-util",
  "toml",
  "uuid",
 ]
