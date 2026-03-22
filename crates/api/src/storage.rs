@@ -1,7 +1,7 @@
-//! Object Storage client builder (S3-compatible — MinIO locally, Vultr in prod).
+//! Object Storage client builder (S3-compatible — MinIO locally, Wasabi in prod).
 //!
 //! Required env vars (no defaults — fail fast per 12-factor III):
-//!   OBJECT_STORAGE_ENDPOINT    — e.g. http://localhost:9000 or https://ord1.vultrobjects.com
+//!   OBJECT_STORAGE_ENDPOINT    — e.g. http://localhost:9000 or https://s3.us-east-1.wasabisys.com
 //!   OBJECT_STORAGE_ACCESS_KEY
 //!   OBJECT_STORAGE_SECRET_KEY
 //!

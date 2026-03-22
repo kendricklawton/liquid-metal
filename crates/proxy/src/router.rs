@@ -319,6 +319,7 @@ pub fn start_metal_usage_flusher(counters: MetalCounters, nats: Arc<async_nats::
             .expect("metal usage flusher runtime");
         rt.block_on(async move {
             let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(flush_secs));
+            let mut backlog: Vec<common::events::MetalUsageEvent> = Vec::new();
             loop {
                 ticker.tick().await;
                 let snapshot: Vec<(String, String, String, u64, u64)> = {
@@ -336,6 +337,17 @@ pub fn start_metal_usage_flusher(counters: MetalCounters, nats: Arc<async_nats::
                         .collect()
                 };
 
+                // Drain backlog from previous failed publishes first.
+                let retry = std::mem::take(&mut backlog);
+                for ev in retry {
+                    if let Ok(payload) = serde_json::to_vec(&ev) {
+                        if let Err(e) = nats.publish(common::events::SUBJECT_USAGE_METAL, payload.into()).await {
+                            tracing::warn!(error = %e, service_id = ev.service_id, "retry: failed to publish MetalUsageEvent");
+                            backlog.push(ev);
+                        }
+                    }
+                }
+
                 for (_slug, service_id, workspace_id, invocations, duration_ms) in &snapshot {
                     let ev = common::events::MetalUsageEvent {
                         service_id:   service_id.clone(),
@@ -345,14 +357,21 @@ pub fn start_metal_usage_flusher(counters: MetalCounters, nats: Arc<async_nats::
                     };
                     if let Ok(payload) = serde_json::to_vec(&ev) {
                         if let Err(e) = nats.publish(common::events::SUBJECT_USAGE_METAL, payload.into()).await {
-                            tracing::warn!(error = %e, service_id, "failed to publish MetalUsageEvent");
-                            // TODO: backlog retry (for now, lost invocations on NATS failure)
+                            tracing::warn!(error = %e, service_id, "failed to publish MetalUsageEvent — queued for retry");
+                            backlog.push(ev);
                         }
                     }
                 }
 
+                // Cap backlog to prevent unbounded growth during extended NATS outage.
+                if backlog.len() > 1000 {
+                    let dropped = backlog.len() - 1000;
+                    backlog.drain(..dropped);
+                    tracing::error!(dropped, "metal usage backlog exceeded 1000 — oldest events dropped");
+                }
+
                 if !snapshot.is_empty() {
-                    tracing::debug!(services = snapshot.len(), "flushed metal invocation counters");
+                    tracing::debug!(services = snapshot.len(), backlog = backlog.len(), "flushed metal invocation counters");
                 }
             }
         });

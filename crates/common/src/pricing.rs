@@ -81,7 +81,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn prices_scale_linearly() {
         let one = metal_tier("one").unwrap().price_cents;
         let two = metal_tier("two").unwrap().price_cents;

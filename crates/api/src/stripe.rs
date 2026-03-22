@@ -36,32 +36,6 @@ impl StripeClient {
         parse_response(resp).await.context("Stripe: create customer")
     }
 
-    /// Create a Stripe Checkout Session for subscription (Pro/Team).
-    pub async fn create_checkout_session(
-        &self,
-        customer_id: &str,
-        price_id: &str,
-        success_url: &str,
-        cancel_url: &str,
-    ) -> Result<CheckoutSession> {
-        let resp = self.http
-            .post(format!("{BASE_URL}/checkout/sessions"))
-            .bearer_auth(&self.secret_key)
-            .form(&[
-                ("customer", customer_id),
-                ("mode", "subscription"),
-                ("line_items[0][price]", price_id),
-                ("line_items[0][quantity]", "1"),
-                ("success_url", success_url),
-                ("cancel_url", cancel_url),
-            ])
-            .send()
-            .await
-            .context("Stripe: create checkout session request")?;
-
-        parse_response(resp).await.context("Stripe: create checkout session")
-    }
-
     /// Create a Stripe Checkout Session for a one-time top-up payment.
     pub async fn create_topup_session(
         &self,
@@ -90,30 +64,6 @@ impl StripeClient {
             .context("Stripe: create topup session request")?;
 
         parse_response(resp).await.context("Stripe: create topup session")
-    }
-
-    /// Retrieve a subscription by ID.
-    pub async fn get_subscription(&self, subscription_id: &str) -> Result<Subscription> {
-        let resp = self.http
-            .get(format!("{BASE_URL}/subscriptions/{subscription_id}"))
-            .bearer_auth(&self.secret_key)
-            .send()
-            .await
-            .context("Stripe: get subscription request")?;
-
-        parse_response(resp).await.context("Stripe: get subscription")
-    }
-
-    /// Cancel a subscription immediately.
-    pub async fn cancel_subscription(&self, subscription_id: &str) -> Result<Subscription> {
-        let resp = self.http
-            .delete(format!("{BASE_URL}/subscriptions/{subscription_id}"))
-            .bearer_auth(&self.secret_key)
-            .send()
-            .await
-            .context("Stripe: cancel subscription request")?;
-
-        parse_response(resp).await.context("Stripe: cancel subscription")
     }
 
     /// Construct a Stripe webhook event from the raw body and signature header.
@@ -191,35 +141,6 @@ pub struct Customer {
 pub struct CheckoutSession {
     pub id:  String,
     pub url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Subscription {
-    pub id:     String,
-    pub status: String,
-    #[serde(default)]
-    pub metadata: serde_json::Value,
-    pub current_period_start: Option<i64>,
-    pub current_period_end:   Option<i64>,
-    pub items: Option<SubscriptionItems>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SubscriptionItems {
-    pub data: Vec<SubscriptionItem>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SubscriptionItem {
-    pub id: String,
-    pub price: Option<Price>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Price {
-    pub id: String,
-    #[serde(default)]
-    pub metadata: serde_json::Value,
 }
 
 /// Raw webhook event envelope. The `data.object` is kept as raw JSON
