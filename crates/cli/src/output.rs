@@ -12,7 +12,7 @@ pub enum OutputMode {
 /// Print structured data. JSON mode serializes directly; human mode calls the closure.
 pub fn print_data<T: Serialize>(mode: OutputMode, data: &T, human: impl FnOnce(&T)) {
     match mode {
-        OutputMode::Json => println!("{}", serde_json::to_string(data).unwrap()),
+        OutputMode::Json => println!("{}", serde_json::to_string(data).expect("serializable types must produce valid JSON")),
         OutputMode::Human => human(data),
     }
 }

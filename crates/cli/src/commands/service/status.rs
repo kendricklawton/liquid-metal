@@ -52,12 +52,10 @@ pub async fn run(config: &Config, output: OutputMode) -> Result<()> {
         );
 
         // Show failure reason for any failed services
-        for s in services {
-            if s.status == "failed" {
-                if let Some(reason) = &s.failure_reason {
-                    let short = reason.lines().next().unwrap_or(reason);
-                    println!("\n  {} ({}): {}", s.name, s.slug, short);
-                }
+        for s in services.iter().filter(|s| s.status == "failed") {
+            if let Some(reason) = &s.failure_reason {
+                let short = reason.lines().next().unwrap_or(reason);
+                println!("\n  {} ({}): {}", s.name, s.slug, short);
             }
         }
     });

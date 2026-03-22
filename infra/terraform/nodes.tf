@@ -35,8 +35,51 @@ resource "tailscale_tailnet_key" "node_db" {
 # ── Private VLAN ─────────────────────────────────────────────────────────────
 # All nodes on the same Hivelocity VLAN in DAL1. Internal traffic is unmetered.
 
+data "hivelocity_device_port" "gateway_private" {
+  first     = true
+  device_id = hivelocity_bare_metal_device.gateway.device_id
+  filter {
+    name   = "name"
+    values = ["eth1"]
+  }
+}
+
+data "hivelocity_device_port" "node_metal_private" {
+  first     = true
+  device_id = hivelocity_bare_metal_device.node_metal.device_id
+  filter {
+    name   = "name"
+    values = ["eth1"]
+  }
+}
+
+data "hivelocity_device_port" "node_liquid_private" {
+  first     = true
+  device_id = hivelocity_bare_metal_device.node_liquid.device_id
+  filter {
+    name   = "name"
+    values = ["eth1"]
+  }
+}
+
+data "hivelocity_device_port" "node_db_private" {
+  first     = true
+  device_id = hivelocity_bare_metal_device.node_db.device_id
+  filter {
+    name   = "name"
+    values = ["eth1"]
+  }
+}
+
 resource "hivelocity_vlan" "private" {
-  location = var.hivelocity_location
+  facility_code = var.hivelocity_location
+  type          = "private"
+  port_ids = [
+    data.hivelocity_device_port.gateway_private.port_id,
+    data.hivelocity_device_port.node_metal_private.port_id,
+    data.hivelocity_device_port.node_liquid_private.port_id,
+    data.hivelocity_device_port.node_db_private.port_id,
+  ]
 }
 
 # ── Gateway ──────────────────────────────────────────────────────────────────

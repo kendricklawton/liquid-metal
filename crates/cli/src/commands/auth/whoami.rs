@@ -17,12 +17,10 @@ pub async fn run(config: &Config, output: OutputMode) -> Result<()> {
         Err(e) => return Err(e),
     };
 
-    let workspaces: Vec<WorkspaceResponse> = match ctx.client.get("/workspaces").await {
-        Ok(ws) => ws,
-        Err(_) => {
-            vec![]
-        }
-    };
+    let workspaces: Vec<WorkspaceResponse> = ctx.client
+        .get("/workspaces")
+        .await
+        .unwrap_or_default();
 
     #[derive(serde::Serialize)]
     struct WhoamiOutput {

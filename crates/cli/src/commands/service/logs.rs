@@ -58,10 +58,8 @@ pub async fn run(config: &Config, service_ref: &str, limit: i32, follow: bool, o
             print_log_line_mode(l, ctx.output);
         }
 
-        if let Some(l) = new_lines.last() {
-            if let Some(ts) = &l.ts {
-                last_seen = Some((ts.clone(), l.message.clone()));
-            }
+        if let Some(ts) = new_lines.last().and_then(|l| l.ts.as_ref().map(|t| (t.clone(), l.message.clone()))) {
+            last_seen = Some(ts);
         }
     }
 }
@@ -83,7 +81,7 @@ fn print_log_line(l: &LogLineResponse) {
 /// In JSON mode, emit NDJSON (one JSON object per line). In human mode, use formatted output.
 fn print_log_line_mode(l: &LogLineResponse, mode: OutputMode) {
     match mode {
-        OutputMode::Json => println!("{}", serde_json::to_string(l).unwrap()),
+        OutputMode::Json => println!("{}", serde_json::to_string(l).expect("log line must serialize to JSON")),
         OutputMode::Human => print_log_line(l),
     }
 }

@@ -92,7 +92,7 @@ impl ApiClient {
                 tokio::time::sleep(retry_delay(attempt)).await;
             }
         }
-        bail!("{}", last_err.unwrap())
+        bail!("{}", last_err.expect("loop must set last_err before exhausting retries"))
     }
 
     fn url(&self, path: &str) -> String {

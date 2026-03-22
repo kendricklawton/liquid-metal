@@ -102,11 +102,26 @@ variable "slack_webhook_url" {
 }
 
 # Dead man's switch URLs for backup cron jobs
-variable "heartbeat_url_nomad"           { type = string; default = "" }
-variable "heartbeat_url_postgres"        { type = string; default = "" }
-variable "heartbeat_url_victoriametrics" { type = string; default = "" }
-variable "heartbeat_url_victorialogs"    { type = string; default = "" }
-variable "heartbeat_url_artifacts"       { type = string; default = "" }
+variable "heartbeat_url_nomad" {
+  type    = string
+  default = ""
+}
+variable "heartbeat_url_postgres" {
+  type    = string
+  default = ""
+}
+variable "heartbeat_url_victoriametrics" {
+  type    = string
+  default = ""
+}
+variable "heartbeat_url_victorialogs" {
+  type    = string
+  default = ""
+}
+variable "heartbeat_url_artifacts" {
+  type    = string
+  default = ""
+}
 
 # GCP (backup destination)
 variable "gcp_project" { type = string }
