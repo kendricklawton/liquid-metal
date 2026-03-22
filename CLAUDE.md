@@ -33,7 +33,7 @@ Five binaries. One database. One message bus. If you're about to add a sixth bin
 
 | Crate | Port | Does | Doesn't |
 |-------|------|------|---------|
-| `common` | — | Shared types, contracts, config, feature flags | Execute anything |
+| `common` | — | Shared types, contracts, config, pricing, feature flags | Execute anything |
 | `api` | `:7070` | REST/JSON brain. Postgres writes, NATS publishes, OpenAPI via utoipa | Talk to Firecracker, run Wasm |
 | `web` | `:3000` | Askama + HTMX dashboard. OIDC browser auth. AES-GCM session cookies | Touch Postgres or NATS — it's a BFF that calls the API |
 | `cli` | — | `flux` binary. Reads `liquid-metal.toml`, calls API | Make infrastructure decisions |
@@ -124,8 +124,8 @@ flux deploy          # build → upload to S3 → provision via NATS
 ### Tests
 Integration tests need `DATABASE_URL` and `NATS_URL`. Real database, not mocks.
 ```bash
-cargo test -p api -- --include-ignored   # integration (needs infra)
-cargo test --workspace                   # unit only
+task test                  # unit tests (no infra needed)
+task test:api:integration  # integration (needs task up + task migrate)
 ```
 
 ### Infrastructure
@@ -165,18 +165,16 @@ task nomad:deploy    # Deploy all Nomad jobs
 crates/
 ├── api/           # REST/JSON brain, route handlers, integration tests
 ├── cli/           # flux CLI, command implementations
-├── common/        # contract.rs (canonical schema), events, features, config
+├── common/        # contract.rs (canonical schema), events, features, pricing, config
 ├── daemon/        # NATS consumer, Firecracker + Wasmtime provisioning
 ├── proxy/         # Pingora edge router, slug lookup, TLS
 ├── web/           # Askama + HTMX dashboard, OIDC browser auth
 └── ebpf-programs/ # TC classifiers (excluded from workspace)
 infra/
-├── nomad/         # Job files (api, proxy, daemon-metal, daemon-liquid, migrate)
+├── nomad/         # Job files (api, proxy, vault, daemon-metal, daemon-liquid, migrate)
 └── terraform/     # Hivelocity, Cloudflare, Tailscale, GCP
-migrations/        # 38 SQL migrations, applied via task migrate
+migrations/        # 40 SQL migrations, applied via task migrate
 .env.example       # Every env var, documented
 Taskfile.yml       # All dev/ops commands
-ARCHITECTURE.md    # Infrastructure topology
-RUNBOOK.md         # Operational procedures
-DEV.md             # Local development guide
+RUNBOOK.md         # Dev setup, operations, and incident response
 ```
