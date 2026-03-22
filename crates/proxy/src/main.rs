@@ -32,11 +32,11 @@ fn main() -> Result<()> {
     let route_cache = cache::new();
 
     // Bulk-populate route cache before accepting traffic.
-    cache::warm(&route_cache, &pool);
+    cache::warm(&route_cache, &pool).context("route cache warm")?;
 
     // Warm custom domain → slug cache from DB.
     let domain_cache = cache::new_domain_cache();
-    cache::warm_domains(&domain_cache, &pool);
+    cache::warm_domains(&domain_cache, &pool).context("domain cache warm")?;
 
     // ── TLS cert cache ──────────────────────────────────────────────────────
     // Certs are stored in Vault and served by the API via internal endpoint.
@@ -69,10 +69,16 @@ fn main() -> Result<()> {
         let api_url2    = api_url.clone();
         let secret2     = internal_secret.clone();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+            let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("tokio rt for cert reload");
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!(error = %e, "cert reload: failed to create tokio runtime — TLS hot-reload disabled");
+                    return;
+                }
+            };
             rt.block_on(async move {
                 let mut sub = match nats2.subscribe(common::events::SUBJECT_CERT_PROVISIONED).await {
                     Ok(s) => s,

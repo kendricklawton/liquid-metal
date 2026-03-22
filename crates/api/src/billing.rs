@@ -659,10 +659,11 @@ pub async fn create_topup(
     tracing::info!(
         target: "audit",
         action = "create_topup",
+        user_id = %caller.user_id,
+        ip = ?caller.ip,
         workspace_id = %wid,
         amount_cents = body.amount_cents,
         session_id = session.id,
-        result = "ok",
     );
 
     Ok(Json(contract::CheckoutResponse {

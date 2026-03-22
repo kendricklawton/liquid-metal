@@ -1,7 +1,16 @@
+use askama::Template;
 use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
+
+#[derive(Template)]
+#[template(path = "error.html")]
+struct ErrorTemplate<'a> {
+    status_code: u16,
+    title: &'a str,
+    message: &'a str,
+}
 
 /// Structured error type for the web crate.
 ///
@@ -41,44 +50,13 @@ impl IntoResponse for WebError {
             WebError::ApiError(status, msg) => (*status, "Error", msg.as_str()),
         };
 
-        // Minimal HTML error page — will be replaced with Askama templates
-        let body = format!(
-            r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{status} — {title}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config = {{ darkMode: 'class', theme: {{ extend: {{ borderRadius: {{ DEFAULT: '0', sm: '0', md: '0', lg: '0', xl: '0', '2xl': '0', '3xl': '0', full: '0' }}, colors: {{ zw: {{ bg: '#0b0e14', surface: '#131721', border: '#1c2433', muted: '#636a72', fg: '#bfbdb6' }}, zwl: {{ bg: '#fafafa', surface: '#f0f0f0', border: '#e7e8e9', muted: '#8a9199', fg: '#5c6166' }} }} }} }} }}</script>
-  <script>(function(){{ var t = localStorage.getItem('lm-theme'); if (t === 'dark') document.documentElement.classList.add('dark'); else if (t === 'light') document.documentElement.classList.remove('dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark'); }})()</script>
-</head>
-<body class="bg-zwl-bg dark:bg-zw-bg text-zwl-fg dark:text-zw-fg min-h-screen flex items-center justify-center font-mono antialiased">
-  <div class="text-center max-w-md px-6">
-    <p class="text-6xl font-black font-mono text-zwl-border dark:text-zw-border mb-4">{status}</p>
-    <h1 class="text-2xl font-black tracking-tight mb-2">{title}</h1>
-    <p class="text-zwl-muted dark:text-zw-muted mb-8">{message}</p>
-    <a href="/" class="inline-block bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg px-6 py-3 text-xs font-mono font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
-      Back to Home
-    </a>
-  </div>
-</body>
-</html>"#,
-            status = status.as_u16(),
-            title = title,
-            message = html_escape(message),
-        );
+        let tmpl = ErrorTemplate { status_code: status.as_u16(), title, message };
+        let html = tmpl.render().unwrap_or_else(|_| {
+            format!("{} — {}", status.as_u16(), title)
+        });
 
-        (status, Html(body)).into_response()
+        (status, Html(html)).into_response()
     }
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
-     .replace('\'', "&#x27;")
 }
 
 impl From<anyhow::Error> for WebError {

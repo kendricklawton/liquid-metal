@@ -120,6 +120,15 @@ pub async fn add_domain(
             }
         })?;
 
+    tracing::info!(
+        target: "audit",
+        action = "add_domain",
+        user_id = %caller.user_id,
+        ip = ?caller.ip,
+        service_id = %service_id,
+        domain = %domain,
+    );
+
     Ok(Json(contract::DomainResponse {
         id:                 row.get("id"),
         domain:             row.get("domain"),
@@ -190,6 +199,16 @@ pub async fn verify_domain(
             domain, slug, domain, token
         )
     };
+
+    tracing::info!(
+        target: "audit",
+        action = "verify_domain",
+        user_id = %caller.user_id,
+        ip = ?caller.ip,
+        service_id = %service_id,
+        domain = %domain,
+        verified,
+    );
 
     Ok(Json(contract::VerifyDomainResponse {
         domain,
@@ -276,6 +295,15 @@ pub async fn remove_domain(
     if count == 0 {
         return Err(ApiError::not_found("domain not found"));
     }
+
+    tracing::info!(
+        target: "audit",
+        action = "remove_domain",
+        user_id = %caller.user_id,
+        ip = ?caller.ip,
+        service_id = %service_id,
+        domain = %domain_name,
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }

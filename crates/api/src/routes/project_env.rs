@@ -94,7 +94,7 @@ pub async fn set_project_env_vars(
             ApiError::internal("failed to store project environment variables")
         })?;
 
-    tracing::info!(target: "audit", action = "set_project_env_vars", user_id = %caller.user_id, %project_id);
+    tracing::info!(target: "audit", action = "set_project_env_vars", user_id = %caller.user_id, ip = ?caller.ip, %project_id);
     Ok(Json(contract::EnvVarsResponse { vars }))
 }
 
@@ -135,6 +135,6 @@ pub async fn unset_project_env_vars(
             ApiError::internal("failed to store project environment variables")
         })?;
 
-    tracing::info!(target: "audit", action = "unset_project_env_vars", user_id = %caller.user_id, %project_id);
+    tracing::info!(target: "audit", action = "unset_project_env_vars", user_id = %caller.user_id, ip = ?caller.ip, %project_id);
     Ok(Json(contract::EnvVarsResponse { vars }))
 }

@@ -79,6 +79,7 @@ impl TestHarness {
         let rate_limits = RateLimitConfig {
             auth: api::rate_limit::RateLimit::per_minute(1000),
             protected: api::rate_limit::RateLimit::per_minute(1000),
+            bff: api::rate_limit::UserRateLimit::per_minute(1000),
         };
 
         let app = build_router(state.clone(), rate_limits);

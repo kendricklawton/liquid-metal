@@ -56,6 +56,7 @@ pub struct AppState {
 pub struct RateLimitConfig {
     pub auth:      rate_limit::RateLimit,
     pub protected: rate_limit::RateLimit,
+    pub bff:       rate_limit::UserRateLimit,
 }
 
 #[derive(OpenApi)]
@@ -199,13 +200,15 @@ pub fn build_router(state: Arc<AppState>, rl: RateLimitConfig) -> Router {
         .with_state(state.clone());
 
     // ─── INTERNAL ROUTES (X-Internal-Secret) ─────────────────────────────────
-    // Rate-limited: these are unauthenticated (secret-gated) and brute-forceable.
+    // BFF calls carry X-On-Behalf-Of → per-user bucket (120 RPM default).
+    // Direct calls (no header) → per-IP bucket (10 RPM, brute force protection).
+    let bff_rl = rl.bff.clone();
     let auth_rl = rl.auth.clone();
     let internal = Router::new()
         .route("/auth/provision", post(routes::provision_user))
         .route("/admin/invites",  post(routes::create_invites))
         .route_layer(middleware::from_fn(move |req, next| {
-            rate_limit::rate_limit_middleware(auth_rl.clone(), req, next)
+            rate_limit::rate_limit_by_user_or_ip_middleware(bff_rl.clone(), auth_rl.clone(), req, next)
         }))
         .with_state(state.clone());
 

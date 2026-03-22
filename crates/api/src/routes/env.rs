@@ -105,6 +105,15 @@ pub async fn set_env_vars(
             ApiError::internal("failed to store environment variables")
         })?;
 
+    tracing::info!(
+        target: "audit",
+        action = "set_env_vars",
+        user_id = %caller.user_id,
+        ip = ?caller.ip,
+        service_id = %service_id,
+        keys_count = vars.len(),
+    );
+
     Ok(Json(contract::EnvVarsResponse { vars }))
 }
 
@@ -161,6 +170,15 @@ pub async fn unset_env_vars(
             tracing::error!(error = %e, %service_id, "failed to write env vars to vault");
             ApiError::internal("failed to store environment variables")
         })?;
+
+    tracing::info!(
+        target: "audit",
+        action = "unset_env_vars",
+        user_id = %caller.user_id,
+        ip = ?caller.ip,
+        service_id = %service_id,
+        keys = ?body.keys,
+    );
 
     Ok(Json(contract::EnvVarsResponse { vars }))
 }

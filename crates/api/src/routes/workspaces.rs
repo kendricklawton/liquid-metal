@@ -128,9 +128,9 @@ pub async fn delete_workspace(
         target: "audit",
         action = "delete_workspace",
         user_id = %caller.user_id,
+        ip = ?caller.ip,
         workspace_id = %wid,
         services_deprovisioned = running.len(),
-        result = "ok",
     );
 
     Ok(StatusCode::NO_CONTENT)

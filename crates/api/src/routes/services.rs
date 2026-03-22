@@ -146,7 +146,7 @@ pub async fn stop_service(
 
     txn.commit().await.map_err(|_| ApiError::internal("failed to commit stop transaction"))?;
 
-    tracing::info!(target: "audit", action = "stop_service", user_id = %caller.user_id, service_id = %service_id, slug = event.slug);
+    tracing::info!(target: "audit", action = "stop_service", user_id = %caller.user_id, ip = ?caller.ip, service_id = %service_id, slug = event.slug);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -240,7 +240,7 @@ pub async fn delete_service(
         });
     }
 
-    tracing::info!(target: "audit", action = "delete_service", user_id = %caller.user_id, service_id = %service_id, slug);
+    tracing::info!(target: "audit", action = "delete_service", user_id = %caller.user_id, ip = ?caller.ip, service_id = %service_id, slug);
 
     Ok(Json(contract::DeleteServiceResponse {
         id: service_id.to_string(),
@@ -391,7 +391,7 @@ pub async fn restart_service(
 
     txn.commit().await.map_err(|_| ApiError::internal("failed to commit restart transaction"))?;
 
-    tracing::info!(target: "audit", action = "restart_service", user_id = %caller.user_id, service_id = %service_id, slug, engine = engine_str);
+    tracing::info!(target: "audit", action = "restart_service", user_id = %caller.user_id, ip = ?caller.ip, service_id = %service_id, slug, engine = engine_str);
 
     Ok(Json(contract::DeployResponse {
         service: contract::DeployedService {

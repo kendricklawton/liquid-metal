@@ -107,7 +107,7 @@ pub async fn create_api_key(
 
     let key_id: Uuid = row.get("id");
 
-    tracing::info!(target: "audit", action = "create_api_key", user_id = %caller.user_id, key_id = %key_id, scopes = ?scopes);
+    tracing::info!(target: "audit", action = "create_api_key", user_id = %caller.user_id, ip = ?caller.ip, key_id = %key_id, scopes = ?scopes);
 
     Ok((axum::http::StatusCode::CREATED, Json(contract::CreateApiKeyResponse {
         id: key_id.to_string(),
@@ -148,7 +148,7 @@ pub async fn delete_api_key(
         return Err(ApiError::not_found("API key not found"));
     }
 
-    tracing::info!(target: "audit", action = "delete_api_key", user_id = %caller.user_id, key_id = %key_id);
+    tracing::info!(target: "audit", action = "delete_api_key", user_id = %caller.user_id, ip = ?caller.ip, key_id = %key_id);
 
     Ok(Json(contract::DeleteApiKeyResponse {
         id: key_id.to_string(),

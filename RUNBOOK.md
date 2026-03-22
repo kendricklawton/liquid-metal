@@ -315,6 +315,7 @@ Every tunable is an env var with a safe default.
 | `BILLING_INTERVAL_SECS` | `60` | Liquid usage aggregation |
 | `RATE_LIMIT_AUTH_RPM` | `10` | Per-IP auth rate limit |
 | `RATE_LIMIT_API_RPM` | `60` | Per-IP API rate limit |
+| `RATE_LIMIT_BFF_RPM` | `120` | Per-user BFF rate limit (via X-On-Behalf-Of) |
 
 ### Daemon
 

@@ -213,13 +213,15 @@ async fn main() -> Result<()> {
     // ── Rate limits ──────────────────────────────────────────────────────────
     let auth_rpm: u32 = env_or("RATE_LIMIT_AUTH_RPM", "10").parse().unwrap_or(10);
     let api_rpm: u32  = env_or("RATE_LIMIT_API_RPM", "60").parse().unwrap_or(60);
+    let bff_rpm: u32  = env_or("RATE_LIMIT_BFF_RPM", "120").parse().unwrap_or(120);
 
     let rate_limits = RateLimitConfig {
         auth:      api::rate_limit::RateLimit::per_minute(auth_rpm),
         protected: api::rate_limit::RateLimit::per_minute(api_rpm),
+        bff:       api::rate_limit::UserRateLimit::per_minute(bff_rpm),
     };
 
-    tracing::info!(auth_rpm, api_rpm, "rate limits configured");
+    tracing::info!(auth_rpm, api_rpm, bff_rpm, "rate limits configured");
 
     let app = build_router(state, rate_limits);
 

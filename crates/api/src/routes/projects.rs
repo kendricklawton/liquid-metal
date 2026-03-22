@@ -110,10 +110,10 @@ pub async fn create_project(
         target: "audit",
         action = "create_project",
         user_id = %caller.user_id,
+        ip = ?caller.ip,
         project_id = %project_id,
         workspace_id = %wid,
         slug = body.slug,
-        result = "ok",
     );
 
     Ok(Json(contract::CreateProjectResponse {

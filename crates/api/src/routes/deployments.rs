@@ -96,6 +96,15 @@ pub async fn get_upload_url(
             ApiError::internal("failed to generate upload URL")
         })?;
 
+    tracing::info!(
+        target: "audit",
+        action = "get_upload_url",
+        user_id = %caller.user_id,
+        ip = ?caller.ip,
+        project_id = %body.project_id,
+        engine = %body.engine,
+    );
+
     Ok(Json(contract::UploadUrlResponse {
         upload_url: presigned.uri().to_string(),
         artifact_key,
@@ -455,11 +464,11 @@ pub async fn deploy_service(
         target: "audit",
         action = "deploy_service",
         user_id = %caller.user_id,
+        ip = ?caller.ip,
         service_id = %service_id,
         slug,
         engine = engine_str,
         workspace_id = %wid,
-        result = "ok",
     );
 
     Ok(Json(contract::DeployResponse {
@@ -680,9 +689,9 @@ pub async fn rollback_service(
         target: "audit",
         action = "rollback_service",
         user_id = %caller.user_id,
+        ip = ?caller.ip,
         service_id = %service_id,
         slug,
-        result = "ok",
     );
 
     Ok(Json(contract::DeployResponse {

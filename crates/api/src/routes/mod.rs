@@ -201,6 +201,8 @@ pub struct Caller {
     pub scopes: Vec<String>,
     /// API key ID if authenticated via `lm_` token, for audit logging.
     pub api_key_id: Option<Uuid>,
+    /// Source IP for audit logging.
+    pub ip: Option<std::net::IpAddr>,
 }
 
 /// Check that the caller has the required scope.
@@ -242,6 +244,11 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    let ip = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip());
+
     let caller = if let Some(secret) = req.headers().get("x-internal-secret") {
         // ── Internal service path (web BFF) ──
         let secret_str = secret
@@ -286,6 +293,7 @@ pub async fn auth_middleware(
             user_id,
             scopes: vec!["admin".to_string()],
             api_key_id: None,
+            ip,
         }
     } else {
         // ── Scoped API key path ──
@@ -345,6 +353,7 @@ pub async fn auth_middleware(
             user_id,
             scopes,
             api_key_id: Some(key_id),
+            ip,
         }
     };
 

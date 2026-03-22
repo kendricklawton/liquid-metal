@@ -26,8 +26,8 @@ pub fn new_domain_cache() -> DomainCache {
 /// Prevents a cold-start storm where every slug misses the cache simultaneously
 /// and fires a parallel DB query. Times out after 5s and falls back to
 /// on-demand population if the DB is slow or unreachable.
-pub fn warm(cache: &RouteCache, pool: &deadpool_postgres::Pool) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for cache warm");
+pub fn warm(cache: &RouteCache, pool: &deadpool_postgres::Pool) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(async {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let db = pool.get().await?;
@@ -53,11 +53,12 @@ pub fn warm(cache: &RouteCache, pool: &deadpool_postgres::Pool) {
         Ok(Err(e)) => tracing::warn!(error = %e, "route cache warm failed — falling back to on-demand"),
         Err(_) => tracing::warn!("route cache warm timed out after 5s — falling back to on-demand"),
     }
+    Ok(())
 }
 
 /// Bulk-populate the domain cache from DB on startup.
-pub fn warm_domains(domain_cache: &DomainCache, pool: &deadpool_postgres::Pool) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for domain cache warm");
+pub fn warm_domains(domain_cache: &DomainCache, pool: &deadpool_postgres::Pool) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(async {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let db = pool.get().await?;
@@ -84,6 +85,7 @@ pub fn warm_domains(domain_cache: &DomainCache, pool: &deadpool_postgres::Pool) 
         Ok(Err(e)) => tracing::warn!(error = %e, "domain cache warm failed"),
         Err(_) => tracing::warn!("domain cache warm timed out after 5s"),
     }
+    Ok(())
 }
 
 /// Spawn a background thread that periodically reconciles the route cache
@@ -91,7 +93,13 @@ pub fn warm_domains(domain_cache: &DomainCache, pool: &deadpool_postgres::Pool) 
 /// NATS blip, or proxy restart while NATS was down. Runs every 60s.
 pub fn start_reconciler(cache: RouteCache, pool: std::sync::Arc<deadpool_postgres::Pool>) {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime for cache reconciler");
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!(error = %e, "cache reconciler: failed to create tokio runtime — periodic DB sync disabled");
+                return;
+            }
+        };
         rt.block_on(async move {
             use std::collections::HashMap;
             use tokio::time::{Duration, interval};
@@ -168,7 +176,13 @@ pub fn start_domain_reconciler(
     pool: std::sync::Arc<deadpool_postgres::Pool>,
 ) {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime for domain reconciler");
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!(error = %e, "domain reconciler: failed to create tokio runtime — periodic domain/cert sync disabled");
+                return;
+            }
+        };
         rt.block_on(async move {
             use std::collections::HashSet;
             use tokio::time::{Duration, interval};
@@ -238,7 +252,13 @@ pub fn start_domain_reconciler(
 /// of Pingora's internal thread pool. Reconnects automatically on disconnect.
 pub fn start_subscriber(cache: RouteCache, nats_url: String) {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime for route cache subscriber");
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!(error = %e, "route cache subscriber: failed to create tokio runtime — NATS hot-reload disabled");
+                return;
+            }
+        };
         rt.block_on(async move {
             loop {
                 match subscribe_loop(&cache, &nats_url).await {

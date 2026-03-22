@@ -278,7 +278,14 @@ pub async fn run() -> Result<()> {
                     continue;
                 }
 
-                let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
+                let permit = match sem.clone().acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        // Semaphore closed — shutdown in progress. NAK so NATS retries after restart.
+                        msg.ack_with(AckKind::Nak(None)).await.ok();
+                        continue;
+                    }
+                };
                 let ctx    = ctx.clone();
 
                 let provision_timeout_secs: u64 = env_or("PROVISION_TIMEOUT_SECS", "600")

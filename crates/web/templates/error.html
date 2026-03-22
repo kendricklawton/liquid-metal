@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}{{ status_code }} — {{ title }}{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-center min-h-[60vh]">
+  <div class="text-center max-w-md px-6">
+    <p class="text-6xl font-black font-mono text-zwl-border dark:text-zw-border mb-4">{{ status_code }}</p>
+    <h1 class="text-2xl font-black tracking-tight mb-2">{{ title }}</h1>
+    <p class="text-zwl-muted dark:text-zw-muted mb-8">{{ message }}</p>
+    <a href="/" class="inline-block bg-zwl-fg dark:bg-zw-fg text-zwl-bg dark:text-zw-bg px-6 py-3 text-xs font-mono font-bold uppercase tracking-widest hover:bg-zwl-muted dark:hover:bg-zw-muted transition-colors">
+      Back to Home
+    </a>
+  </div>
+</div>
+{% endblock %}
