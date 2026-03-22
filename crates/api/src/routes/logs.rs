@@ -36,9 +36,8 @@ pub async fn get_service_logs(
     let row = db
         .query_opt(
             "SELECT s.slug FROM services s \
-             JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+               ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )

@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::envelope;
 use common::contract;
-use super::{ApiError, Caller, db_conn, require_scope};
+use super::{ApiError, Caller, db_conn, require_scope, require_workspace_role};
 
 // ── GET /services/:id/env ─────────────────────────────────────────────────────
 
@@ -28,11 +28,10 @@ pub async fn get_env_vars(
 
     let row = db
         .query_opt(
-            "SELECT p.workspace_id \
+            "SELECT s.workspace_id \
              FROM services s \
-             JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+               ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )
@@ -73,17 +72,19 @@ pub async fn set_env_vars(
 
     let row = db
         .query_opt(
-            "SELECT p.workspace_id \
+            "SELECT s.workspace_id, wm.role \
              FROM services s \
-             JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+               ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("env vars lookup failed"))?
         .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let role: String = row.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let workspace_id: Uuid = row.get("workspace_id");
 
@@ -138,17 +139,19 @@ pub async fn unset_env_vars(
 
     let row = db
         .query_opt(
-            "SELECT p.workspace_id \
+            "SELECT s.workspace_id, wm.role \
              FROM services s \
-             JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+               ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("env vars lookup failed"))?
         .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let role: String = row.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let workspace_id: Uuid = row.get("workspace_id");
 

@@ -19,7 +19,7 @@ pub async fn list_workspaces(
 
     let rows = db
         .query(
-            "SELECT w.id, w.name, w.slug \
+            "SELECT w.id, w.name, w.slug, wm.role \
              FROM workspaces w \
              JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1 \
              WHERE w.deleted_at IS NULL \
@@ -37,6 +37,7 @@ pub async fn list_workspaces(
             name: row.get("name"),
             slug: row.get("slug"),
             tier: String::new(),
+            role: row.get("role"),
         })
         .collect();
 
@@ -58,35 +59,44 @@ pub async fn delete_workspace(
     require_scope(&caller, "admin")?;
     let wid: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_workspace_id", "workspace ID must be a valid UUID"))?;
 
-    let db = db_conn(&state.db).await?;
+    let mut db = db_conn(&state.db).await?;
 
-    let owns = db
-        .query_opt(
-            "SELECT 1 FROM workspace_members \
-             WHERE workspace_id = $1 AND user_id = $2 AND role = 'owner'",
+    // Single query: ownership check + running services list via LEFT JOIN.
+    // Returns one row per running service (NULL service cols if none), or
+    // zero rows if the caller is not a workspace member at all.
+    let rows = db
+        .query(
+            "SELECT wm.role, s.id::text AS service_id, s.slug, s.engine \
+             FROM workspace_members wm \
+             LEFT JOIN services s \
+               ON s.workspace_id = wm.workspace_id \
+               AND s.deleted_at IS NULL \
+               AND s.status IN ('running', 'provisioning') \
+             WHERE wm.workspace_id = $1 AND wm.user_id = $2",
             &[&wid, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("ownership check failed"))?;
 
-    if owns.is_none() {
+    if rows.is_empty() {
         return Err(ApiError::not_found("workspace not found"));
     }
 
-    let running = db
-        .query(
-            "SELECT id::text, slug, engine FROM services \
-             WHERE workspace_id = $1 AND deleted_at IS NULL \
-               AND status IN ('running', 'provisioning')",
-            &[&wid],
-        )
-        .await
-        .map_err(|_| ApiError::internal("failed to list running services"))?;
+    let role: String = rows[0].get("role");
+    if role != "owner" {
+        return Err(ApiError::not_found("workspace not found"));
+    }
 
-    for row in &running {
-        let sid: String   = row.get("id");
-        let slug: String  = row.get("slug");
-        let eng: String   = row.get("engine");
+    // Publish deprovision events for any running services (service_id is NULL
+    // if there are none — the LEFT JOIN still returns one row for the member).
+    let running_count = rows.iter().filter(|r| {
+        r.get::<_, Option<String>>("service_id").is_some()
+    }).count();
+
+    for row in &rows {
+        let Some(sid) = row.get::<_, Option<String>>("service_id") else { continue };
+        let slug: String = row.get("slug");
+        let eng: String  = row.get("engine");
 
         let engine: common::Engine = match eng.parse() {
             Ok(e) => e,
@@ -108,21 +118,30 @@ pub async fn delete_workspace(
             .ok();
     }
 
-    db.execute(
+    // Atomic soft-delete: services → projects → workspace in one transaction.
+    let txn = db
+        .build_transaction()
+        .start()
+        .await
+        .map_err(|_| ApiError::internal("failed to start transaction"))?;
+
+    txn.execute(
         "UPDATE services SET status = 'stopped', upstream_addr = NULL, deleted_at = NOW() \
          WHERE workspace_id = $1 AND deleted_at IS NULL",
         &[&wid],
     ).await.map_err(|_| ApiError::internal("failed to delete services"))?;
 
-    db.execute(
+    txn.execute(
         "UPDATE projects SET deleted_at = NOW() WHERE workspace_id = $1 AND deleted_at IS NULL",
         &[&wid],
     ).await.map_err(|_| ApiError::internal("failed to delete projects"))?;
 
-    db.execute(
+    txn.execute(
         "UPDATE workspaces SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
         &[&wid],
     ).await.map_err(|_| ApiError::internal("failed to delete workspace"))?;
+
+    txn.commit().await.map_err(|_| ApiError::internal("failed to commit workspace delete"))?;
 
     tracing::info!(
         target: "audit",
@@ -130,7 +149,7 @@ pub async fn delete_workspace(
         user_id = %caller.user_id,
         ip = ?caller.ip,
         workspace_id = %wid,
-        services_deprovisioned = running.len(),
+        services_deprovisioned = running_count,
     );
 
     Ok(StatusCode::NO_CONTENT)

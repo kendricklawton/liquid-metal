@@ -11,7 +11,7 @@ use futures::StreamExt as _;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
-use super::{ApiError, Caller, db_conn, require_scope};
+use super::{ApiError, Caller, db_conn, require_scope, require_workspace_role};
 use crate::AppState;
 use crate::envelope;
 use common::contract;
@@ -41,26 +41,19 @@ pub async fn get_upload_url(
 
     let row = db
         .query_opt(
-            "SELECT workspace_id FROM projects WHERE id = $1 AND deleted_at IS NULL",
-            &[&pid],
+            "SELECT p.workspace_id, wm.role \
+             FROM projects p \
+             JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             WHERE p.id = $1 AND p.deleted_at IS NULL",
+            &[&pid, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("project lookup failed"))?
         .ok_or_else(|| ApiError::not_found("project not found"))?;
 
     let wid: Uuid = row.get("workspace_id");
-
-    let member = db
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
-            &[&wid, &caller.user_id],
-        )
-        .await
-        .map_err(|_| ApiError::internal("workspace membership check failed"))?;
-
-    if !member.get::<_, bool>(0) {
-        return Err(ApiError::forbidden("not a member of this workspace"));
-    }
+    let role: String = row.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let (engine_prefix, artifact_name) = match body.engine.as_str() {
         "liquid" => ("wasm", "main.wasm"),
@@ -149,26 +142,19 @@ pub async fn deploy_service(
 
     let row = db
         .query_opt(
-            "SELECT workspace_id FROM projects WHERE id = $1 AND deleted_at IS NULL",
-            &[&pid],
+            "SELECT p.workspace_id, wm.role \
+             FROM projects p \
+             JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             WHERE p.id = $1 AND p.deleted_at IS NULL",
+            &[&pid, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("project lookup failed"))?
         .ok_or_else(|| ApiError::not_found("project not found"))?;
 
     let wid: Uuid = row.get("workspace_id");
-
-    let member = db
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
-            &[&wid, &caller.user_id],
-        )
-        .await
-        .map_err(|_| ApiError::internal("workspace membership check failed"))?;
-
-    if !member.get::<_, bool>(0) {
-        return Err(ApiError::forbidden("not a member of this workspace"));
-    }
+    let role: String = row.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let engine: common::Engine = body.engine.parse().map_err(|_| {
         ApiError::bad_request("invalid_engine", "engine must be 'metal' or 'liquid'")
@@ -500,8 +486,7 @@ pub async fn list_deploys(
 
     db.query_opt(
         "SELECT 1 FROM services s \
-         JOIN projects p ON p.id = s.project_id \
-         JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+         JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
          WHERE s.id = $1 AND s.deleted_at IS NULL",
         &[&service_id, &caller.user_id],
     )
@@ -559,16 +544,18 @@ pub async fn rollback_service(
     let svc = db
         .query_opt(
             "SELECT s.id, s.name, s.slug, s.engine, s.workspace_id, s.project_id, \
-                    s.vcpu, s.memory_mb, s.port \
+                    s.vcpu, s.memory_mb, s.port, wm.role \
              FROM services s \
-             JOIN projects p ON p.id = s.project_id \
-             JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("service lookup failed"))?
         .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let role: String = svc.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let slug: String = svc.get("slug");
     let name: String = svc.get("name");
@@ -723,8 +710,7 @@ pub async fn stream_deploy(
         .query_opt(
             "SELECT s.status \
              FROM services s \
-             JOIN projects p ON p.id = s.project_id \
-             JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+             JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )

@@ -6,17 +6,17 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::envelope;
 use common::contract;
-use super::{ApiError, Caller, db_conn, require_scope};
+use super::{ApiError, Caller, db_conn, require_scope, require_workspace_role};
 
-/// Look up project workspace_id and verify caller is a member.
+/// Look up project workspace_id and caller's role. Returns (workspace_id, role).
 async fn resolve_project(
     db: &deadpool_postgres::Object,
     project_id: Uuid,
     user_id: Uuid,
-) -> Result<Uuid, ApiError> {
+) -> Result<(Uuid, String), ApiError> {
     let row = db
         .query_opt(
-            "SELECT p.workspace_id \
+            "SELECT p.workspace_id, wm.role \
              FROM projects p \
              JOIN workspace_members wm \
                ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
@@ -27,7 +27,7 @@ async fn resolve_project(
         .map_err(|_| ApiError::internal("project lookup failed"))?
         .ok_or_else(|| ApiError::not_found("project not found"))?;
 
-    Ok(row.get("workspace_id"))
+    Ok((row.get("workspace_id"), row.get("role")))
 }
 
 // ── GET /projects/:id/env ────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ pub async fn get_project_env_vars(
     require_scope(&caller, "read")?;
     let project_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_project_id", "project ID must be a valid UUID"))?;
     let db = db_conn(&state.db).await?;
-    let workspace_id = resolve_project(&db, project_id, caller.user_id).await?;
+    let (workspace_id, _role) = resolve_project(&db, project_id, caller.user_id).await?;
 
     let vars = envelope::read_project_env_vars(&state.vault, workspace_id, project_id)
         .await
@@ -75,7 +75,8 @@ pub async fn set_project_env_vars(
     require_scope(&caller, "admin")?;
     let project_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_project_id", "project ID must be a valid UUID"))?;
     let db = db_conn(&state.db).await?;
-    let workspace_id = resolve_project(&db, project_id, caller.user_id).await?;
+    let (workspace_id, role) = resolve_project(&db, project_id, caller.user_id).await?;
+    require_workspace_role(&role, "admin")?;
 
     // Read existing, merge new values (new values win).
     let mut vars = envelope::read_project_env_vars(&state.vault, workspace_id, project_id)
@@ -115,7 +116,8 @@ pub async fn unset_project_env_vars(
     require_scope(&caller, "admin")?;
     let project_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_project_id", "project ID must be a valid UUID"))?;
     let db = db_conn(&state.db).await?;
-    let workspace_id = resolve_project(&db, project_id, caller.user_id).await?;
+    let (workspace_id, role) = resolve_project(&db, project_id, caller.user_id).await?;
+    require_workspace_role(&role, "admin")?;
 
     let mut vars = envelope::read_project_env_vars(&state.vault, workspace_id, project_id)
         .await

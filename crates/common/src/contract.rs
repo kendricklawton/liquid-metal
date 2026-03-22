@@ -67,6 +67,8 @@ pub struct WorkspaceResponse {
     pub name: String,
     pub slug: String,
     pub tier: String,
+    /// Caller's role in this workspace: "owner" | "admin" | "viewer"
+    pub role: String,
 }
 
 // ── Projects ────────────────────────────────────────────────────────────────

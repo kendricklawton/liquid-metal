@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use common::contract;
-use super::{ApiError, Caller, db_conn, require_scope};
+use super::{ApiError, Caller, db_conn, require_scope, require_workspace_role};
 
 #[derive(Deserialize)]
 pub struct ListProjectsParams {
@@ -76,16 +76,15 @@ pub async fn create_project(
     let db = db_conn(&state.db).await?;
 
     let member = db
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
+        .query_opt(
+            "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
             &[&wid, &caller.user_id],
         )
         .await
-        .map_err(|_| ApiError::internal("workspace membership check failed"))?;
-
-    if !member.get::<_, bool>(0) {
-        return Err(ApiError::forbidden("not a member of this workspace"));
-    }
+        .map_err(|_| ApiError::internal("workspace membership check failed"))?
+        .ok_or_else(|| ApiError::forbidden("not a member of this workspace"))?;
+    let role: String = member.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let project_id = Uuid::now_v7();
 

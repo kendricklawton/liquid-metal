@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::envelope;
 use common::contract;
-use super::{ApiError, Caller, db_conn, require_scope};
+use super::{ApiError, Caller, db_conn, require_scope, require_workspace_role};
 
 #[utoipa::path(get, path = "/services", responses(
     (status = 200, description = "List of services the caller has access to", body = Vec<contract::ServiceResponse>),
@@ -23,9 +23,8 @@ pub async fn list_services(
             "SELECT s.id, s.name, s.slug, s.engine, s.status, s.upstream_addr, \
                     s.failure_reason, s.created_at::text, s.metal_tier, s.monthly_price_cents \
              FROM services s \
-             JOIN projects p ON p.id = s.project_id \
              JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $1 \
+               ON wm.workspace_id = s.workspace_id AND wm.user_id = $1 \
              WHERE s.deleted_at IS NULL \
              ORDER BY s.created_at DESC \
              LIMIT 500",
@@ -72,16 +71,18 @@ pub async fn stop_service(
 
     let existing = db
         .query_opt(
-            "SELECT s.status FROM services s \
-             JOIN projects p ON p.id = s.project_id \
+            "SELECT s.status, wm.role FROM services s \
              JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+               ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("service lookup failed"))?
         .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let role: String = existing.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let current_status: String = existing.get("status");
     if current_status == "stopped" {
@@ -96,17 +97,13 @@ pub async fn stop_service(
 
     let row = txn
         .query_opt(
-            "UPDATE services s \
+            "UPDATE services \
              SET status = 'stopped', upstream_addr = NULL \
-             FROM projects p, workspace_members wm \
-             WHERE s.id = $1 \
-               AND s.deleted_at IS NULL \
-               AND s.status != 'stopped' \
-               AND s.project_id = p.id \
-               AND wm.workspace_id = p.workspace_id \
-               AND wm.user_id = $2 \
-             RETURNING s.engine, s.slug",
-            &[&service_id, &caller.user_id],
+             WHERE id = $1 \
+               AND deleted_at IS NULL \
+               AND status != 'stopped' \
+             RETURNING engine, slug",
+            &[&service_id],
         )
         .await
         .map_err(|_| ApiError::internal("failed to stop service"))?
@@ -169,16 +166,18 @@ pub async fn delete_service(
 
     let existing = db
         .query_opt(
-            "SELECT s.status, s.slug, s.engine, s.artifact_key FROM services s \
-             JOIN projects p ON p.id = s.project_id \
+            "SELECT s.status, s.slug, s.engine, s.artifact_key, wm.role FROM services s \
              JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+               ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("service lookup failed"))?
         .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let role: String = existing.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let current_status: String = existing.get("status");
     let slug: String = existing.get("slug");
@@ -268,16 +267,18 @@ pub async fn restart_service(
 
     let existing = db
         .query_opt(
-            "SELECT s.status FROM services s \
-             JOIN projects p ON p.id = s.project_id \
+            "SELECT s.status, wm.role FROM services s \
              JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+               ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("service lookup failed"))?
         .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let role: String = existing.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let current_status: String = existing.get("status");
     if current_status != "stopped" && current_status != "failed" {
@@ -286,16 +287,13 @@ pub async fn restart_service(
 
     let row = db
         .query_opt(
-            "SELECT s.id, s.name, s.slug, s.engine, s.workspace_id, s.project_id, \
-                    s.vcpu, s.memory_mb, s.port, s.artifact_key, s.commit_sha \
-             FROM services s \
-             JOIN projects p ON p.id = s.project_id \
-             JOIN workspace_members wm \
-               ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
-             WHERE s.id = $1 \
-               AND s.deleted_at IS NULL \
-               AND s.status IN ('stopped', 'failed')",
-            &[&service_id, &caller.user_id],
+            "SELECT id, name, slug, engine, workspace_id, project_id, \
+                    vcpu, memory_mb, port, artifact_key, commit_sha \
+             FROM services \
+             WHERE id = $1 \
+               AND deleted_at IS NULL \
+               AND status IN ('stopped', 'failed')",
+            &[&service_id],
         )
         .await
         .map_err(|_| ApiError::internal("service lookup failed"))?

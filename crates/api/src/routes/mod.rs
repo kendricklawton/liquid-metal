@@ -225,6 +225,29 @@ pub(crate) fn require_scope(caller: &Caller, required: &str) -> Result<(), ApiEr
     Ok(())
 }
 
+/// Maps workspace role to a numeric rank for hierarchy comparison.
+/// owner (3) > admin (2) > viewer (1)
+pub(crate) fn workspace_role_rank(role: &str) -> u8 {
+    match role {
+        "owner"  => 3,
+        "admin"  => 2,
+        "viewer" => 1,
+        _        => 0,
+    }
+}
+
+/// Return 403 if the caller's workspace role is below the required minimum.
+pub(crate) fn require_workspace_role(role: &str, min_role: &str) -> Result<(), ApiError> {
+    if workspace_role_rank(role) >= workspace_role_rank(min_role) {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(format!(
+            "requires '{}' workspace role or higher (your role: '{}')",
+            min_role, role
+        )))
+    }
+}
+
 /// Hash an `lm_` token to its SHA-256 hex digest for DB lookup.
 pub(crate) fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
@@ -308,12 +331,18 @@ pub async fn auth_middleware(
         let token_hash = hash_token(raw);
         let db = db_conn(&state.db).await?;
 
+        // Auth check + last_used_at update in a single statement.
+        // UPDATE...RETURNING eliminates the fire-and-forget spawn and its
+        // extra pool connection.
         let row = db
             .query_opt(
-                "SELECT ak.id, ak.user_id, ak.scopes, ak.expires_at \
-                 FROM api_keys ak \
-                 JOIN users u ON u.id = ak.user_id AND u.deleted_at IS NULL \
-                 WHERE ak.token_hash = $1 AND ak.deleted_at IS NULL",
+                "UPDATE api_keys SET last_used_at = NOW() \
+                 FROM users u \
+                 WHERE api_keys.token_hash = $1 \
+                   AND api_keys.deleted_at IS NULL \
+                   AND u.id = api_keys.user_id \
+                   AND u.deleted_at IS NULL \
+                 RETURNING api_keys.id, api_keys.user_id, api_keys.scopes, api_keys.expires_at",
                 &[&token_hash],
             )
             .await
@@ -333,21 +362,6 @@ pub async fn auth_middleware(
                 return Err(ApiError::unauthorized("API key has expired"));
             }
         }
-
-        // Update last_used_at (fire-and-forget, don't block the request)
-        let pool = state.db.clone();
-        tokio::spawn(async move {
-            let fut = async {
-                let db = pool.get().await.ok()?;
-                db.execute(
-                    "UPDATE api_keys SET last_used_at = NOW() WHERE id = $1",
-                    &[&key_id],
-                ).await.ok()
-            };
-            if tokio::time::timeout(std::time::Duration::from_secs(5), fut).await.is_err() {
-                tracing::warn!(%key_id, "last_used_at update timed out");
-            }
-        });
 
         Caller {
             user_id,

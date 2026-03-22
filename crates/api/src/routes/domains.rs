@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use common::contract;
-use super::{ApiError, Caller, db_conn, require_scope};
+use super::{ApiError, Caller, db_conn, require_scope, require_workspace_role};
 
 // ── GET /services/:id/domains ────────────────────────────────────────────────
 
@@ -27,8 +27,7 @@ pub async fn list_domains(
     // Verify ownership.
     db.query_opt(
         "SELECT 1 FROM services s \
-         JOIN projects p ON p.id = s.project_id \
-         JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+         JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
          WHERE s.id = $1 AND s.deleted_at IS NULL",
         &[&service_id, &caller.user_id],
     )
@@ -84,15 +83,17 @@ pub async fn add_domain(
     // Verify ownership and get project_id.
     let svc = db
         .query_opt(
-            "SELECT s.project_id FROM services s \
-             JOIN projects p ON p.id = s.project_id \
-             JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $2 \
+            "SELECT s.project_id, wm.role FROM services s \
+             JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
              WHERE s.id = $1 AND s.deleted_at IS NULL",
             &[&service_id, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("service lookup failed"))?
         .ok_or_else(|| ApiError::not_found("service not found"))?;
+
+    let role: String = svc.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let project_id: Uuid = svc.get("project_id");
 
@@ -161,17 +162,19 @@ pub async fn verify_domain(
     // Get the domain record + service slug (for CNAME verification target).
     let row = db
         .query_opt(
-            "SELECT d.id, d.domain, d.verification_type, d.verification_token, s.slug \
+            "SELECT d.id, d.domain, d.verification_type, d.verification_token, s.slug, wm.role \
              FROM domains d \
              JOIN services s ON s.id = d.service_id \
-             JOIN projects p ON p.id = s.project_id \
-             JOIN workspace_members wm ON wm.workspace_id = p.workspace_id AND wm.user_id = $3 \
+             JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = $3 \
              WHERE d.service_id = $1 AND d.domain = $2 AND s.deleted_at IS NULL",
             &[&service_id, &domain_name, &caller.user_id],
         )
         .await
         .map_err(|_| ApiError::internal("domain lookup failed"))?
         .ok_or_else(|| ApiError::not_found("domain not found"))?;
+
+    let role: String = row.get("role");
+    require_workspace_role(&role, "admin")?;
 
     let domain_id: Uuid = row.get("id");
     let token: String = row.get("verification_token");
@@ -281,13 +284,23 @@ pub async fn remove_domain(
     let service_id: Uuid = id.parse().map_err(|_| ApiError::bad_request("invalid_service_id", "service ID must be a valid UUID"))?;
     let db = db_conn(&state.db).await?;
 
+    let svc = db
+        .query_opt(
+            "SELECT wm.role FROM services s \
+             JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = $2 \
+             WHERE s.id = $1 AND s.deleted_at IS NULL",
+            &[&service_id, &caller.user_id],
+        )
+        .await
+        .map_err(|_| ApiError::internal("service lookup failed"))?
+        .ok_or_else(|| ApiError::not_found("service not found"))?;
+    let role: String = svc.get("role");
+    require_workspace_role(&role, "admin")?;
+
     let count = db
         .execute(
-            "DELETE FROM domains d USING services s, projects p, workspace_members wm \
-             WHERE d.service_id = s.id AND s.project_id = p.id \
-               AND wm.workspace_id = p.workspace_id AND wm.user_id = $3 \
-               AND d.service_id = $1 AND d.domain = $2 AND s.deleted_at IS NULL",
-            &[&service_id, &domain_name, &caller.user_id],
+            "DELETE FROM domains WHERE service_id = $1 AND domain = $2",
+            &[&service_id, &domain_name],
         )
         .await
         .map_err(|_| ApiError::internal("domain delete failed"))?;
