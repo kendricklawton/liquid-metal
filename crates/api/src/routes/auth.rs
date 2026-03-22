@@ -252,32 +252,28 @@ async fn do_provision(
     let ws_slug = format!("{}-{}", workspace_slug(&full_name), uid_hex);
     let workspace_id = Uuid::now_v7();
 
-    txn.execute(
-        "INSERT INTO workspaces (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+    // Upsert workspace — RETURNING gives us the actual ID whether inserted or existing.
+    let ws_row = txn.query_one(
+        "INSERT INTO workspaces (id, name, slug) VALUES ($1, $2, $3) \
+         ON CONFLICT (slug) DO UPDATE SET name = workspaces.name \
+         RETURNING id, slug",
         &[&workspace_id, &"My Workspace".to_string(), &ws_slug],
     ).await.map_err(|e| {
-        tracing::error!(error = %e, "insert workspace");
+        tracing::error!(error = %e, "upsert workspace");
         ApiError::internal("failed to create workspace")
-    })?;
-
-    // Use the workspace that was actually inserted (may differ if slug existed
-    // from a previous provision of the same user).
-    let ws_row = txn.query_one(
-        "SELECT id, slug FROM workspaces WHERE slug = $1 AND deleted_at IS NULL",
-        &[&ws_slug],
-    ).await.map_err(|e| {
-        tracing::error!(error = %e, "lookup workspace");
-        ApiError::internal("failed to find workspace")
     })?;
     let workspace_id: Uuid = ws_row.get("id");
     let ws_slug: String = ws_row.get("slug");
 
-    txn.execute(
+    // Upsert membership — ensures the row exists and we know it succeeded.
+    txn.query_one(
         "INSERT INTO workspace_members (workspace_id, user_id, role) \
-         VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING",
+         VALUES ($1, $2, 'owner') \
+         ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = workspace_members.role \
+         RETURNING workspace_id",
         &[&workspace_id, &user_id],
     ).await.map_err(|e| {
-        tracing::error!(error = %e, "insert workspace member");
+        tracing::error!(error = %e, workspace_id = %workspace_id, user_id = %user_id, "upsert workspace member");
         ApiError::internal("failed to create workspace membership")
     })?;
 
